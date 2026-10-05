@@ -1,0 +1,37 @@
+SYNTHETIC FIXTURE, NOT A REAL LISTED COMPANY
+Company: Sample Manufacturing, 603999, SSE, non-financial
+Consolidated year 2025, CNY ten thousand yuan, opening parent equity 90
+cash: 30
+receivables: 20
+inventory: 10
+current_assets: 80
+total_assets: 200
+current_liabilities: 40
+total_liabilities: 80
+total_equity: 120
+parent_equity: 100
+opening_parent_equity: 90
+revenue: 100
+cost: 60
+tax_surcharges: 2
+selling_expense: 5
+admin_expense: 4
+rd_expense: 3
+finance_expense: 1
+other_operating_net: 1
+operating_profit: 26
+non_operating_net: 2
+pretax_profit: 28
+income_tax: 7
+net_profit: 21
+parent_net_profit: 20
+minority_profit: 1
+adjusted_parent_profit: 18
+operating_cashflow: 25
+investing_cashflow: -10
+financing_cashflow: -8
+fx_cash_effect: 1
+net_cash_change: 8
+Shares: 1000000
+Restated: no
+Notes: non-recurring profit 2; receivables 20; inventory 10; impairment and related transactions disclosed.

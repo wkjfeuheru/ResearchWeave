@@ -1,0 +1,12 @@
+{
+  "name": "company-event-monitor",
+  "version": "0.1.0",
+  "display_name": "舆情与公告监控",
+  "category": "事件研究",
+  "example": "/company-event-monitor 600519 最近7天",
+  "description": "调用时检索A股非金融公司的近期新闻、公告与研报摘要，分类事件并分别评估文本情绪和基本面影响。",
+  "author": {
+    "name": "OpenHarness"
+  },
+  "enabled_by_default": true
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "company": {
+    "name": "样例制造",
+    "code": "603999",
+    "market": "SSE",
+    "industry": "制造业（测试虚构）",
+    "identity_sources": [
+      {
+        "locator": "fixture:annual-report.pdf#page=1",
+        "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+        "page": 1
+      }
+    ]
+  },
+  "inputs": [
+    {
+      "locator": "fixture:annual-report.pdf#page=1",
+      "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+      "page": 1
+    }
+  ],
+  "as_of": "2026-10-05T12:00:00+08:00",
+  "kind": "monitor",
+  "events": [
+    {
+      "event_key": "603999:contract:sample",
+      "title": "新增合同",
+      "category": "operating_contract",
+      "published_at": "2026-10-01T12:00:00+08:00",
+      "summary": "公司披露合同但履行仍有不确定性",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=1",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 1
+        }
+      ],
+      "sentiment": {
+        "value": 1,
+        "reason": "合同文本表达正面",
+        "confidence": "medium"
+      },
+      "impact": {
+        "value": 1,
+        "reason": "订单可能增加收入，尚未履行",
+        "confidence": "medium"
+      }
+    }
+  ],
+  "channels": [
+    {
+      "name": "固定公告原文",
+      "state": "ok",
+      "detail": "测试材料查询成功"
+    }
+  ]
+}

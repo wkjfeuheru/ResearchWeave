@@ -1,0 +1,12 @@
+{
+  "name": "skill-authoring",
+  "version": "0.2.0",
+  "description": "创建和维护采用正文、参考资料、脚本、模板分层结构的 OpenHarness 技能插件。",
+  "author": {
+    "name": "OpenHarness"
+  },
+  "enabled_by_default": true,
+  "display_name": "技能创建与维护",
+  "category": "技能管理",
+  "example": "请把这个研究流程整理为技能插件。"
+}

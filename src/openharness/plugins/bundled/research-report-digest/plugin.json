@@ -1,0 +1,12 @@
+{
+  "name": "research-report-digest",
+  "version": "0.1.0",
+  "display_name": "研报精读与摘要",
+  "category": "研报阅读",
+  "example": "/research-report-digest 请精读本次上传的研报",
+  "description": "精读单篇或多篇券商研报PDF、链接或长文本，提取观点、预测、目标价、评级和风险，生成可比较的简报。",
+  "author": {
+    "name": "OpenHarness"
+  },
+  "enabled_by_default": true
+}

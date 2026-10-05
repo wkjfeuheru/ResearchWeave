@@ -1,0 +1,375 @@
+"""Investment research runtime, independent of its Web transport."""
+
+from __future__ import annotations
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Iterable
+import sys
+from openharness.api.client import AnthropicApiClient, SupportsStreamingMessages
+from openharness.api.codex_client import CodexApiClient
+from openharness.api.copilot_client import CopilotClient
+from openharness.api.openai_client import OpenAICompatibleClient
+from openharness.config import load_settings
+from openharness.engine import QueryEngine
+from openharness.engine.messages import ConversationMessage, sanitize_conversation_messages
+from openharness.engine.stream_events import StreamEvent
+from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor, load_hook_registry
+from openharness.mcp.client import McpClientManager
+from openharness.mcp.config import load_mcp_server_configs
+from openharness.permissions import PermissionChecker
+from openharness.plugins import load_plugins
+from openharness.prompts import build_runtime_prompt
+from openharness.services.session_storage import _persistable_tool_metadata
+from openharness.tools import ToolRegistry, create_research_tool_registry
+
+PermissionPrompt = Callable[[str, str], Awaitable[bool]]
+AskUserPrompt = Callable[[str], Awaitable[str]]
+EditApprovalPrompt = Callable[[str, str, int, int], Awaitable[str]]
+StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
+
+
+def _resolve_image_generation_config(settings) -> dict[str, str]:
+    """Resolve image generation configuration from settings, environment, and Codex auth."""
+    from openharness.config.settings import ImageGenerationConfig, ProviderProfile
+
+    cfg = settings.image_generation
+    env_cfg = ImageGenerationConfig.from_env()
+    resolved = {
+        "provider": cfg.provider or env_cfg.provider,
+        "model": cfg.model or env_cfg.model,
+        "api_key": cfg.api_key or env_cfg.api_key,
+        "base_url": cfg.base_url or env_cfg.base_url,
+        "codex_model": cfg.codex_model or env_cfg.codex_model,
+        "codex_base_url": cfg.codex_base_url or env_cfg.codex_base_url,
+    }
+
+    try:
+        codex_profile = settings.merged_profiles().get("codex") or ProviderProfile(
+            label="Codex Subscription",
+            provider="openai_codex",
+            api_format="openai",
+            auth_source="codex_subscription",
+            default_model="gpt-5.4",
+        )
+        codex_settings = settings.model_copy(
+            update={
+                "active_profile": "codex",
+                "profiles": {**settings.profiles, "codex": codex_profile},
+            }
+        ).materialize_active_profile()
+        codex_auth = codex_settings.resolve_auth()
+        resolved["codex_auth_token"] = codex_auth.value
+        resolved["codex_base_url"] = resolved["codex_base_url"] or (codex_settings.base_url or "")
+        resolved["codex_model"] = resolved["codex_model"] or codex_settings.model
+    except Exception:
+        pass
+
+    return resolved
+
+
+def _resolve_vision_config(settings) -> dict[str, str]:
+    """Resolve the vision model configuration from settings or environment.
+
+    Priority: settings.vision fields > environment variables > empty.
+    """
+    from openharness.config.settings import VisionModelConfig
+
+    cfg = settings.vision
+    if cfg.is_configured:
+        return {
+            "model": cfg.model,
+            "api_key": cfg.api_key,
+            "base_url": cfg.base_url,
+        }
+
+    # Fall back to environment variables
+    env_cfg = VisionModelConfig.from_env()
+    if env_cfg.is_configured:
+        return {
+            "model": env_cfg.model,
+            "api_key": env_cfg.api_key,
+            "base_url": env_cfg.base_url,
+        }
+
+    return {}
+
+
+@dataclass
+class RuntimeBundle:
+    api_client: SupportsStreamingMessages
+    cwd: str
+    mcp_manager: McpClientManager
+    tool_registry: ToolRegistry
+    hook_executor: HookExecutor
+    engine: QueryEngine
+    session_id: str
+    settings_overrides: dict[str, Any] = field(default_factory=dict)
+    extra_skill_dirs: tuple[str, ...] = ()
+    extra_plugin_roots: tuple[str, ...] = ()
+
+    def current_settings(self):
+        return load_settings().merge_cli_overrides(**self.settings_overrides)
+
+    def current_plugins(self):
+        return load_plugins(self.current_settings(), self.cwd, extra_roots=self.extra_plugin_roots)
+
+
+def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
+    """Build the appropriate API client for the resolved settings."""
+    # Ensure profile fields (base_url, model, api_format) are projected to settings
+    settings = settings.materialize_active_profile()
+
+    def _safe_resolve_auth():
+        try:
+            return settings.resolve_auth()
+        except Exception as exc:
+            _print_auth_resolution_error(settings, exc)
+            raise SystemExit(1)
+
+    if settings.api_format == "copilot":
+        from openharness.api.copilot_client import COPILOT_DEFAULT_MODEL
+
+        copilot_model = (
+            COPILOT_DEFAULT_MODEL
+            if settings.model
+            in {"claude-sonnet-4-20250514", "claude-sonnet-4-6", "sonnet", "default"}
+            else settings.model
+        )
+        return CopilotClient(model=copilot_model)
+    if settings.provider == "openai_codex":
+        auth = _safe_resolve_auth()
+        return CodexApiClient(
+            auth_token=auth.value,
+            base_url=settings.base_url,
+        )
+    if settings.provider == "anthropic_claude":
+        return AnthropicApiClient(
+            auth_token=_safe_resolve_auth().value,
+            base_url=settings.base_url,
+            claude_oauth=True,
+            auth_token_resolver=lambda: settings.resolve_auth().value,
+        )
+    if settings.api_format in ("openai", "openai_compat"):
+        auth = _safe_resolve_auth()
+        return OpenAICompatibleClient(
+            api_key=auth.value,
+            base_url=settings.base_url,
+            timeout=settings.timeout,
+        )
+    auth = _safe_resolve_auth()
+    return AnthropicApiClient(
+        api_key=auth.value,
+        base_url=settings.base_url,
+    )
+
+
+def _print_auth_resolution_error(settings, exc: Exception) -> None:
+    """Render auth failures without collapsing subscription errors into API-key advice."""
+    try:
+        profile_name, profile = settings.resolve_profile()
+        auth_source = (getattr(profile, "auth_source", "") or "").strip()
+    except Exception:
+        profile_name = ""
+        auth_source = ""
+
+    message = str(exc).strip() or exc.__class__.__name__
+    if auth_source in {"claude_subscription", "codex_subscription"}:
+        login_command = "claude-login" if auth_source == "claude_subscription" else "codex-login"
+        provider_name = profile_name or (
+            "claude-subscription" if auth_source == "claude_subscription" else "codex"
+        )
+        print(
+            f"Error: {message}\n"
+            f"  This profile uses subscription auth, not an API key.\n"
+            f"  Run `oh auth {login_command}` to bind the local CLI session, then\n"
+            f"  run `oh provider use {provider_name}` to activate it.",
+            file=sys.stderr,
+        )
+        return
+
+    print(
+        "Error: No API key configured.\n"
+        f"  {message}\n"
+        "  Run `oh auth login` to set up authentication, or set the\n"
+        "  ANTHROPIC_API_KEY (or OPENAI_API_KEY) environment variable.",
+        file=sys.stderr,
+    )
+
+
+async def build_runtime(
+    *,
+    prompt: str | None = None,
+    cwd: str | None = None,
+    model: str | None = None,
+    max_turns: int | None = None,
+    effort: str | None = None,
+    base_url: str | None = None,
+    system_prompt: str | None = None,
+    api_key: str | None = None,
+    api_format: str | None = None,
+    active_profile: str | None = None,
+    api_client: SupportsStreamingMessages | None = None,
+    permission_prompt: PermissionPrompt | None = None,
+    ask_user_prompt: AskUserPrompt | None = None,
+    edit_approval_prompt: EditApprovalPrompt | None = None,
+    restore_usage: dict | None = None,
+    restore_messages: list[dict] | None = None,
+    restore_tool_metadata: dict[str, object] | None = None,
+    enforce_max_turns: bool = True,
+    permission_mode: str | None = None,
+    extra_skill_dirs: Iterable[str | Path] | None = None,
+    extra_plugin_roots: Iterable[str | Path] | None = None,
+    session_id: str | None = None,
+) -> RuntimeBundle:
+    """Build the shared runtime for an OpenHarness session."""
+    settings_overrides: dict[str, Any] = {
+        "model": model,
+        "max_turns": max_turns,
+        "effort": effort,
+        "base_url": base_url,
+        "system_prompt": system_prompt,
+        "api_key": api_key,
+        "api_format": api_format,
+        "active_profile": active_profile,
+        "permission_mode": permission_mode,
+    }
+    settings = load_settings().merge_cli_overrides(**settings_overrides)
+    cwd = str(Path(cwd).expanduser().resolve()) if cwd else str(Path.cwd())
+    normalized_skill_dirs = tuple(
+        str(Path(path).expanduser().resolve()) for path in (extra_skill_dirs or ())
+    )
+    normalized_plugin_roots = tuple(
+        str(Path(path).expanduser().resolve()) for path in (extra_plugin_roots or ())
+    )
+    plugins = load_plugins(settings, cwd, extra_roots=normalized_plugin_roots)
+    if api_client:
+        resolved_api_client = api_client
+    else:
+        resolved_api_client = _resolve_api_client_from_settings(settings)
+    mcp_manager = McpClientManager(load_mcp_server_configs(settings, plugins))
+    await mcp_manager.connect_all()
+    tool_registry = create_research_tool_registry(mcp_manager)
+    # Register plugin-provided tools
+    for plugin in plugins:
+        if plugin.enabled and plugin.tools:
+            for tool in plugin.tools:
+                tool_registry.register(tool)
+    hook_executor = HookExecutor(
+        load_hook_registry(settings, plugins),
+        HookExecutionContext(
+            cwd=Path(cwd).resolve(),
+            api_client=resolved_api_client,
+            default_model=settings.model,
+        ),
+    )
+    engine_max_turns = settings.max_turns if (enforce_max_turns or max_turns is not None) else None
+    system_prompt_text = build_runtime_prompt(
+        settings,
+        cwd=cwd,
+        latest_user_prompt=prompt,
+        extra_skill_dirs=normalized_skill_dirs,
+        extra_plugin_roots=normalized_plugin_roots,
+    )
+    if not session_id:
+        raise ValueError("Research runtime requires the existing Web session ID")
+    restored_metadata = _persistable_tool_metadata(restore_tool_metadata)
+    restored_metadata["permission_mode"] = settings.permission.mode.value
+    if settings.research_memory.enabled:
+        from openharness.research.store import ResearchStore
+
+        store = ResearchStore(cwd, session_id)
+        store.load()  # Corruption must be reported, never silently reset.
+        restored_metadata["research_store"] = store
+        restored_metadata["research_injection_budget"] = (
+            settings.research_memory.injection_budget_tokens
+        )
+    else:
+        tool_registry.unregister("research_memory")
+
+    engine = QueryEngine(
+        api_client=resolved_api_client,
+        tool_registry=tool_registry,
+        permission_checker=PermissionChecker(settings.permission),
+        cwd=cwd,
+        model=settings.model,
+        system_prompt=system_prompt_text,
+        max_tokens=settings.max_tokens,
+        context_window_tokens=settings.context_window_tokens,
+        auto_compact_threshold_tokens=settings.auto_compact_threshold_tokens,
+        max_turns=engine_max_turns,
+        permission_prompt=permission_prompt,
+        ask_user_prompt=ask_user_prompt,
+        hook_executor=hook_executor,
+        settings=settings,
+        tool_metadata={
+            "mcp_manager": mcp_manager,
+            "extra_skill_dirs": normalized_skill_dirs,
+            "extra_plugin_roots": normalized_plugin_roots,
+            "session_id": session_id,
+            "edit_approval_prompt": edit_approval_prompt,
+            "vision_model_config": _resolve_vision_config(settings),
+            "image_generation_config": _resolve_image_generation_config(settings),
+            **restored_metadata,
+        },
+    )
+    engine.restore_usage(restore_usage)
+    # Restore messages from a saved session if provided
+    if restore_messages:
+        restored = sanitize_conversation_messages(
+            [ConversationMessage.model_validate(m) for m in restore_messages]
+        )
+        engine.load_messages(restored)
+
+    # Start Docker sandbox if configured
+    if settings.sandbox.enabled and settings.sandbox.backend == "docker":
+        from openharness.sandbox.session import start_docker_sandbox
+
+        await start_docker_sandbox(settings, session_id, Path(cwd))
+
+    return RuntimeBundle(
+        api_client=resolved_api_client,
+        cwd=cwd,
+        mcp_manager=mcp_manager,
+        tool_registry=tool_registry,
+        hook_executor=hook_executor,
+        engine=engine,
+        session_id=session_id,
+        settings_overrides=settings_overrides,
+        extra_skill_dirs=normalized_skill_dirs,
+        extra_plugin_roots=normalized_plugin_roots,
+    )
+
+
+async def start_runtime(bundle: RuntimeBundle) -> None:
+    """Run session start hooks."""
+    await bundle.hook_executor.execute(
+        HookEvent.SESSION_START,
+        {"cwd": bundle.cwd, "event": HookEvent.SESSION_START.value},
+    )
+
+
+async def close_runtime(bundle: RuntimeBundle) -> None:
+    """Close runtime-owned resources."""
+    from openharness.sandbox.session import stop_docker_sandbox
+
+    await stop_docker_sandbox()
+    await bundle.mcp_manager.close()
+    await bundle.hook_executor.execute(
+        HookEvent.SESSION_END,
+        {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
+    )
+    close_api_client = getattr(bundle.api_client, "close", None)
+    if close_api_client is not None:
+        await close_api_client()
+
+
+async def handle_line(
+    bundle: RuntimeBundle,
+    line: str,
+    *,
+    render_event: StreamRenderer,
+) -> bool:
+    """Submit Web text directly to the research engine."""
+    async for event in bundle.engine.submit_message(line):
+        await render_event(event)
+    return True

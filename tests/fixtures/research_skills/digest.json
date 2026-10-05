@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "company": {
+    "name": "样例制造",
+    "code": "603999",
+    "market": "SSE",
+    "industry": "制造业（测试虚构）",
+    "identity_sources": [
+      {
+        "locator": "fixture:annual-report.pdf#page=1",
+        "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+        "page": 1
+      }
+    ]
+  },
+  "inputs": [
+    {
+      "locator": "fixture:annual-report.pdf#page=1",
+      "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+      "page": 1
+    }
+  ],
+  "as_of": "2026-10-05T12:00:00+08:00",
+  "kind": "digest",
+  "reports": [
+    {
+      "title": "样例制造深度研究",
+      "institution": "样例证券A",
+      "authors": [
+        "测试作者"
+      ],
+      "published_at": "2026-09-30",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=1",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 1
+        }
+      ],
+      "views": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ],
+      "arguments": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ],
+      "assumptions": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ],
+      "predictions": [
+        {
+          "year": 2026,
+          "metric": "归母净利润",
+          "basis": "合并归母",
+          "amount": {
+            "value": "2",
+            "unit": "亿元",
+            "references": [
+              {
+                "locator": "fixture:annual-report.pdf#page=1",
+                "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                "page": 1
+              }
+            ]
+          },
+          "currency": "CNY"
+        }
+      ],
+      "target_price": {
+        "value": "20",
+        "unit": "元",
+        "references": [
+          {
+            "locator": "fixture:annual-report.pdf#page=1",
+            "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+            "page": 1
+          }
+        ]
+      },
+      "target_currency": "CNY",
+      "rating": {
+        "current": "增持",
+        "references": [
+          {
+            "locator": "fixture:annual-report.pdf#page=1",
+            "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+            "page": 1
+          }
+        ]
+      },
+      "risks": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUp, BookOpen, Building2, Check, ChevronDown, Copy, Download, Paperclip, Trash2, Layers, MessageSquare, Square } from 'lucide-react';
+import type { ModelProfile, Prompt, ResearchProgress, Session, SessionFile, Skill, Usage } from './api';
+import { Markdown, Modal } from './components';
+import ConversationTurn from './ConversationTurn';
+
+const suggestions = [
+  { icon: Building2, title: '开展公司研究', text: '我想研究一家上市公司，请先帮我梳理需要准备的资料。' },
+  { icon: Layers, title: '比较行业机会', text: '我想比较两个行业，请先帮我明确研究问题和资料范围。' },
+  { icon: BookOpen, title: '解读研究资料', text: '我有一份研究资料，希望你帮我区分事实、推断和待验证事项。' },
+];
+
+export function UsageLine({ usage }: { usage: Usage }) {
+  const read = usage.cache_read_input_tokens;
+  const observed = usage.cache_observed_input_tokens || 0;
+  const rate = read != null && observed > 0 ? `${(100 * read / observed).toFixed(1)}%` : '未知';
+  const partial = read != null && observed < (usage.input_tokens || 0);
+  return <div className="usage-line" aria-label="会话用量" role="status">
+    <span>输入 {(usage.input_tokens || 0).toLocaleString()}</span>
+    <span>输出 {(usage.output_tokens || 0).toLocaleString()}</span>
+    <span>缓存读取 {read?.toLocaleString() ?? '未提供'}</span>
+    <span>缓存写入 {usage.cache_creation_input_tokens?.toLocaleString() ?? '未提供'}</span>
+    <span>命中率 {rate}{partial ? '（统计不完整）' : ''}</span>
+  </div>;
+}
+
+function ResearchTasks({ progress }: { progress: ResearchProgress }) {
+  if (!progress.plan_id && !progress.replan_required) return null;
+  const labels = { pending: '待执行', in_progress: '进行中', completed: '已完成', blocked: '受阻', cancelled: '已取消' };
+  return <div className="research-progress" aria-label="研究任务进度" aria-live="polite">
+    <div className="research-progress-heading"><strong>{progress.replan_required ? '正在重新规划' : progress.title}</strong>
+      {!progress.replan_required && <span>{progress.completed}/{progress.total} 项任务完成</span>}</div>
+    <ol>{progress.tasks.map(task => <li key={task.id} className={task.status}>
+      <span className="task-status-symbol">{task.status === 'completed' ? <Check size={13} /> : '·'}</span>
+      <span>{task.title}</span><small>{labels[task.status]}</small>
+    </li>)}</ol>
+  </div>;
+}
+
+function Approval({ prompt, onRespond }: { prompt: Prompt; onRespond: (answer: string) => void }) {
+  const [answer, setAnswer] = useState('');
+  return <Modal title={prompt.kind === 'question' ? '补充研究信息' : '操作确认'} onClose={() => onRespond(prompt.kind === 'question' ? '用户取消了本次回答' : 'deny')} wide>
+    <div className="modal-body">
+      {prompt.tool_name && <span className="tag">{prompt.tool_label || '工具操作'}</span>}
+      <p>{prompt.message || (prompt.kind === 'edit' ? `请求编辑：${prompt.path}` : '请确认是否允许此次操作。')}</p>
+      {prompt.diff && <pre className="diff">{prompt.diff}</pre>}
+      {prompt.kind === 'question' && <textarea autoFocus aria-label="补充信息" rows={5} value={answer} onChange={e => setAnswer(e.target.value)} placeholder="输入你的回复…" />}
+    </div>
+    <footer className="modal-footer">
+      <button className="button secondary" onClick={() => onRespond(prompt.kind === 'question' ? '用户取消了本次回答' : 'deny')}>取消</button>
+      <button className="button primary" disabled={prompt.kind === 'question' && !answer.trim()} onClick={() => onRespond(prompt.kind === 'question' ? answer : 'allow')}>
+        {prompt.kind === 'question' ? '回复并继续' : '允许此次操作'}
+      </button>
+    </footer>
+  </Modal>;
+}
+
+export default function ChatPage({ session, models, skills, selectedProfile, onProfile, draft, setDraft,
+  busy, status, connected, hasSession, onSubmit, onCancel, onSteer, onSettings, onSkills, prompt, onRespond, attachments, artifacts, selectedFiles, uploading, onUpload, onRemoveFile, onSelectFile }: {
+  attachments: SessionFile[]; artifacts: SessionFile[]; selectedFiles: string[]; uploading: boolean;
+  onUpload: (files: File[]) => void; onRemoveFile: (id: string) => void; onSelectFile: (id: string) => void;
+  session: Session | null; models: ModelProfile[]; skills: Skill[];
+  selectedProfile: string; onProfile: (id: string) => void; draft: string; setDraft: (value: string) => void;
+  busy: boolean; status: string; connected: boolean; hasSession: boolean; onSubmit: () => void;
+  onCancel: () => void; onSettings: () => void; onSkills: () => void;
+  onSteer: () => void;
+  prompt: Prompt | null; onRespond: (answer: string) => void;
+}) {
+  const bottom = useRef<HTMLDivElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const [copied, setCopied] = useState('');
+  const model = models.find(m => m.id === selectedProfile);
+  const enabled = skills.filter(s => s.enabled);
+  const messages = session?.messages || [];
+  useEffect(() => { follow.current = true; }, [session?.session_id]);
+  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: 'instant' }); }, [messages]);
+  const renderedTurns = new Set<string>();
+
+  return <div className="chat-page">
+    <div className="chat-toolbar">
+      <div className="model-select"><span className="status-dot" />
+        <select aria-label="当前对话模型" value={selectedProfile} disabled={busy} onChange={e => onProfile(e.target.value)}>
+          {models.filter(m => m.supported).map(m => <option value={m.id} key={m.id}>{m.label} · {m.model}{m.configured ? '' : '（未配置）'}</option>)}
+        </select><ChevronDown size={15} />
+      </div>
+      <button className="skill-summary" onClick={onSkills}><Layers size={15} />{enabled.length ? `${enabled.length} 个技能已启用` : '选择研究技能'}</button>
+    </div>
+    <div className="conversation-scroll" ref={scroll} onScroll={() => {
+      const element = scroll.current;
+      if (element) follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100;
+    }}>
+      {!messages.length ? <div className="chat-welcome">
+        <div className="welcome-symbol"><MessageSquare size={28} strokeWidth={1.5} /></div>
+        <span className="eyebrow">YOUR RESEARCH WORKSPACE</span>
+        <h2>让研究，从一个好问题开始</h2>
+        <p>整理资料，梳理观点，探索研究思路。<br />与你的投研助手一起，把问题逐步展开。</p>
+        <div className="suggestion-grid">{suggestions.map(({ icon: Icon, title, text }) => <button className="suggestion" key={title} onClick={() => setDraft(text)}>
+          <Icon size={21} strokeWidth={1.5} /><strong>{title}</strong><span>{text}</span><span className="suggestion-arrow">↗</span>
+        </button>)}</div>
+        {!model?.configured && <div className="setup-callout"><span>先连接一个模型，开启你的第一轮研究。</span><button className="text-button" onClick={onSettings}>配置模型 →</button></div>}
+      </div> : <div className="message-list">{messages.map(message => {
+        if (message.role === 'tool' || message.role === 'tool_result') return null;
+        if (message.turn_id && (message.role === 'assistant' || message.role === 'activity')) {
+          if (renderedTurns.has(message.turn_id)) return null;
+          renderedTurns.add(message.turn_id);
+          return <ConversationTurn key={`turn:${message.turn_id}`} rows={messages.filter(row => row.turn_id === message.turn_id && (row.role === 'assistant' || row.role === 'activity'))} />;
+        }
+        if (message.role === 'system') return <div className="system-row" key={message.id}>{message.text}</div>;
+        return <article className={`message ${message.role}`} key={message.id}>
+          <div className="message-avatar">{message.role === 'user' ? '你' : <BookOpen size={18} />}</div>
+          <div className="message-body"><div className="message-label">{message.role === 'user' ? '你' : 'OpenHarness'}{message.role === 'assistant' && <span>投研助手</span>}</div>
+            <Markdown text={message.text} />
+            {message.role === 'assistant' && <button className="copy-button" aria-label="复制回复" onClick={async () => {
+              try { await navigator.clipboard.writeText(message.text); setCopied(message.id); }
+              catch { setCopied(''); }
+            }}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}{copied === message.id ? '已复制' : '复制'}</button>}
+          </div>
+        </article>;
+      })}<div ref={bottom} /></div>}
+    </div>
+    <div className="composer-container">
+      {session?.research_progress && <ResearchTasks progress={session.research_progress} />}
+      {enabled.length > 0 && <div className="active-skills">{enabled.map(skill => <span key={skill.id}><Layers size={12} />{skill.label}</span>)}</div>}
+      {artifacts.length > 0 && <div className="session-artifacts" aria-label="研究产物">{artifacts.map(file => <a key={file.id} href={`/api/sessions/${session?.session_id}/artifacts/${file.id}/download`} download>
+        <Download size={14} />{file.name}<small>{file.status}{file.task_id ? ` · ${file.task_id}` : ''}</small></a>)}</div>}
+      {attachments.length > 0 && <div className="session-attachments" aria-label="会话附件">{attachments.map(file => <div className="attachment" key={file.id} title={file.gaps?.join('；')}>
+        <label><input type="checkbox" disabled={busy || uploading} checked={selectedFiles.includes(file.id)} onChange={() => onSelectFile(file.id)} />{file.name}<small>{file.status === 'ready' ? '可读取' : file.status === 'partial' ? '部分可读取' : file.status === 'failed' ? '解析失败' : '不支持'}{file.gaps?.length ? ` · ${file.gaps.join('；')}` : ''}</small></label>
+        <button type="button" className="icon-button" aria-label={`删除附件 ${file.name}`} disabled={busy || uploading} onClick={() => onRemoveFile(file.id)}><Trash2 size={13} /></button></div>)}</div>}
+      <form className="composer" onSubmit={e => { e.preventDefault(); if (busy) onSteer(); else onSubmit(); }}>
+        <textarea aria-label="对话输入" placeholder={busy ? '输入修改要求，可打断当前研究并重新规划…' : '输入研究问题，或粘贴需要分析的资料…'} rows={3} value={draft}
+          onChange={e => setDraft(e.target.value)} onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (draft.trim() || selectedFiles.length) { if (busy) onSteer(); else onSubmit(); } }
+          }} />
+        <div className="composer-footer"><label className={`upload-button ${busy || uploading ? 'disabled' : ''}`}><Paperclip size={16} />{uploading ? '正在上传…' : '添加资料'}
+          <input aria-label="上传研究资料" type="file" accept=".pdf,.txt,.md" multiple disabled={busy || uploading} onChange={e => { const files = Array.from(e.target.files || []); if (files.length) onUpload(files); e.target.value = ''; }} /></label><span>{status || 'Enter 发送 · Shift + Enter 换行'}</span>
+          {busy ? <div className="composer-actions"><button type="button" className="button secondary steer-button" disabled={!draft.trim() || !connected} onClick={onSteer}>打断并修改</button>
+            <button type="button" className="send-button stop" aria-label="停止生成" onClick={onCancel}><Square size={15} fill="currentColor" /></button></div> :
+            <button className="send-button" aria-label="发送消息" disabled={uploading || (!draft.trim() && !selectedFiles.length) || !model?.configured || (hasSession && !connected)}><ArrowUp size={20} /></button>}
+        </div>
+      </form>
+      {session && <UsageLine usage={session.usage} />}
+      <p className="composer-note">研究结论请结合原始资料核验 · PDF / TXT / MD，每个文件最多30 MB，每次最多10个；扫描件不支持OCR</p>
+    </div>
+    {prompt && <Approval key={prompt.prompt_id} prompt={prompt} onRespond={onRespond} />}
+  </div>;
+}

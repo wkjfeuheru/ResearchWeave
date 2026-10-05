@@ -1,0 +1,587 @@
+"""Atomic per-session research storage, provenance, and bounded prompt views."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from pydantic import TypeAdapter
+
+from openharness.config.paths import get_data_dir
+from openharness.research.models import (
+    AddConclusion,
+    AddEvidence,
+    AddReasoning,
+    Conclusion,
+    CreatePlan,
+    Evidence,
+    ReadMemory,
+    ReasoningStep,
+    ResearchMemory,
+    ResearchOperation,
+    ResearchPlan,
+    ResearchTask,
+    SetContext,
+    SourceRecord,
+    TaskContext,
+    UpdateTask,
+    now,
+)
+from openharness.services.token_estimation import estimate_tokens
+from openharness.utils.file_lock import exclusive_file_lock
+from openharness.utils.fs import atomic_write_text
+
+OPERATION_ADAPTER = TypeAdapter(ResearchOperation)
+CITATION_PATTERN = re.compile(r"\[E:([^\]\s]+)\]")
+
+
+class ResearchError(ValueError):
+    """A research record cannot be read or committed safely."""
+
+
+class ResearchStore:
+    def __init__(self, cwd: str | Path, session_id: str, *, root: Path | None = None):
+        if not re.fullmatch(r"[a-f0-9]{12}", session_id):
+            raise ResearchError("无效的研究会话 ID")
+        digest = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
+        self.session_id = session_id
+        self.directory = (root or get_data_dir() / "research" / digest) / session_id
+        self.path = self.directory / "state.json"
+        self.lock = self.directory / ".lock"
+
+    def _load(self) -> ResearchMemory:
+        if not self.path.exists():
+            return ResearchMemory(session_id=self.session_id)
+        try:
+            memory = ResearchMemory.model_validate_json(self.path.read_text(encoding="utf-8"))
+            if memory.session_id != self.session_id:
+                raise ValueError("session mismatch")
+            self._validate(memory)
+            return memory
+        except (ValueError, OSError, KeyError) as exc:
+            raise ResearchError("研究状态损坏或资料快照缺失；原文件已保留，请修复后继续") from exc
+
+    def load(self) -> ResearchMemory:
+        with exclusive_file_lock(self.lock):
+            return self._load()
+
+    def _save(self, memory: ResearchMemory, action: str, data: dict) -> None:
+        self._validate(memory)
+        memory.revision += 1
+        memory.history.append({"revision": memory.revision, "action": action, "data": data, "at": now()})
+        atomic_write_text(self.path, memory.model_dump_json(indent=2) + "\n", mode=0o600)
+
+    @staticmethod
+    def _require(ids: list[str], records: dict, label: str) -> None:
+        missing = [key for key in ids if key not in records]
+        if missing:
+            raise ResearchError(f"Unknown {label} IDs in this session: {', '.join(missing)}")
+
+    def _validate(self, memory: ResearchMemory) -> None:
+        contexts = {item.id: item for item in memory.task_context}
+        if len(contexts) != len(memory.task_context):
+            raise ResearchError("Duplicate context IDs")
+        if memory.current_context_id:
+            self._require([memory.current_context_id], contexts, "context")
+        buckets = (contexts, memory.sources, memory.plans, memory.evidence_pool, memory.reasoning_chain, memory.conclusions)
+        if sum(len(records) for records in buckets) != len({key for records in buckets for key in records}):
+            raise ResearchError("Record IDs must be unique within the session")
+        for records in buckets:
+            if any(key != record.id for key, record in records.items()):
+                raise ResearchError("Record ID mismatch")
+        for records in (contexts, memory.plans, memory.evidence_pool, memory.conclusions):
+            for record in records.values():
+                visited = {record.id}
+                previous = record.supersedes
+                while previous:
+                    self._require([previous], records, "superseded record")
+                    if previous in visited:
+                        raise ResearchError("Record history cannot contain a cycle")
+                    visited.add(previous)
+                    previous = records[previous].supersedes
+        for source in memory.sources.values():
+            if source.plan_id:
+                self._require([source.plan_id], memory.plans, "source plan")
+            if source.snapshot != f"content/{source.content_hash}.txt" or not re.fullmatch(r"[a-f0-9]{64}", source.content_hash):
+                raise ResearchError("Invalid snapshot reference")
+            if not (self.directory / source.snapshot).is_file():
+                raise ResearchError("Missing source snapshot")
+        for context in contexts.values():
+            self._require(context.user_source_ids, memory.sources, "user source")
+            if any(memory.sources[key].kind != "user" for key in context.user_source_ids):
+                raise ResearchError("Task context must refer to user messages")
+        for plan in memory.plans.values():
+            self._require([plan.context_id], contexts, "context")
+            self._require(plan.reused_evidence_ids, memory.evidence_pool, "evidence")
+            if len({task.id for task in plan.tasks}) != len(plan.tasks):
+                raise ResearchError("Duplicate task IDs")
+        state = memory.research_state
+        if state.current_plan_id:
+            self._require([state.current_plan_id], memory.plans, "plan")
+            plan = memory.plans[state.current_plan_id]
+            if plan.archived:
+                raise ResearchError("Current plan is archived")
+            if state.current_task_id and state.current_task_id not in {task.id for task in plan.tasks}:
+                raise ResearchError("Current task does not belong to current plan")
+        for evidence in memory.evidence_pool.values():
+            if evidence.plan_id:
+                self._require([evidence.plan_id], memory.plans, "evidence plan")
+            self._require([evidence.source_id], memory.sources, "source")
+            source = memory.sources[evidence.source_id]
+            if source.is_error:
+                raise ResearchError("Failed tool output cannot become evidence")
+            if evidence.collected_at != source.collected_at or evidence.published_at != source.published_at:
+                raise ResearchError("Evidence timestamps must come from its source")
+            self._require(evidence.input_evidence_ids, memory.evidence_pool, "input evidence")
+            if source.kind == "calculation":
+                if not evidence.input_evidence_ids or not evidence.calculation_step_id:
+                    raise ResearchError("Calculation evidence needs inputs and a calculation step")
+                self._require([evidence.calculation_step_id], memory.reasoning_chain, "calculation step")
+                inputs = self._step_evidence(memory, [evidence.calculation_step_id])
+                if not set(evidence.input_evidence_ids) <= inputs:
+                    raise ResearchError("Calculation step must reference its input evidence")
+            if evidence.status == "verified":
+                if not evidence.verification_step_id or not evidence.verification_note.strip():
+                    raise ResearchError("Verified evidence needs an explicit verification record")
+                self._require([evidence.verification_step_id], memory.reasoning_chain, "verification step")
+                step = memory.reasoning_chain[evidence.verification_step_id]
+                inputs = self._step_evidence(memory, [step.id])
+                if not step.verification or not any(memory.evidence_pool[key].source_id == source.id for key in inputs):
+                    raise ResearchError("Verification must examine the evidence source")
+            if evidence.supersedes:
+                self._require([evidence.supersedes], memory.evidence_pool, "superseded evidence")
+        for step in memory.reasoning_chain.values():
+            if step.plan_id:
+                self._require([step.plan_id], memory.plans, "reasoning plan")
+            self._require(step.evidence_ids, memory.evidence_pool, "evidence")
+            self._require(step.prior_step_ids, memory.reasoning_chain, "reasoning step")
+            self._step_evidence(memory, [step.id])
+        for claim in memory.conclusions.values():
+            if claim.plan_id:
+                self._require([claim.plan_id], memory.plans, "conclusion plan")
+            self._require(claim.evidence_ids, memory.evidence_pool, "evidence")
+            self._require(claim.step_ids, memory.reasoning_chain, "reasoning step")
+            if not set(claim.evidence_ids) <= self._step_evidence(memory, claim.step_ids):
+                raise ResearchError("Conclusion evidence must be used by its reasoning steps")
+            if claim.status == "verified" and not claim.needs_review:
+                if any(memory.evidence_pool[key].status != "verified" or memory.evidence_pool[key].needs_review for key in claim.evidence_ids):
+                    raise ResearchError("Verified conclusion needs verified evidence")
+                if not any(memory.reasoning_chain[key].verification for key in claim.step_ids):
+                    raise ResearchError("Verified conclusion needs a verification step")
+            if claim.supersedes:
+                self._require([claim.supersedes], memory.conclusions, "superseded conclusion")
+
+    @staticmethod
+    def _step_evidence(memory: ResearchMemory, ids: list[str]) -> set[str]:
+        result: set[str] = set()
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def walk(key: str) -> None:
+            if key in visiting:
+                raise ResearchError("Reasoning steps cannot contain a cycle")
+            if key in visited:
+                return
+            step = memory.reasoning_chain[key]
+            visiting.add(key)
+            result.update(step.evidence_ids)
+            for previous in step.prior_step_ids:
+                walk(previous)
+            visiting.remove(key)
+            visited.add(key)
+
+        for key in ids:
+            walk(key)
+        return result
+
+    def capture(self, *, origin_id: str, content: str, kind: str = "tool", title: str = "",
+                locator: str = "", fragment: bool = False, is_error: bool = False,
+                published_at: str | None = None, index: int = 0) -> SourceRecord:
+        """Program-only provenance entrypoint; write immutable content before its reference."""
+        source_id = "src_" + hashlib.sha256(f"{origin_id}:{index}".encode()).hexdigest()[:20]
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        with exclusive_file_lock(self.lock):
+            memory = self._load()
+            if source_id in memory.sources:
+                if memory.sources[source_id].content_hash != content_hash:
+                    raise ResearchError("Source origin ID already used for different content")
+                self.read_source(memory.sources[source_id])
+                return memory.sources[source_id]
+            snapshot = f"content/{content_hash}.txt"
+            path = self.directory / snapshot
+            if not path.exists():
+                atomic_write_text(path, content, mode=0o600)
+            elif hashlib.sha256(path.read_bytes()).hexdigest() != content_hash:
+                raise ResearchError("资料快照校验失败；原文件已保留")
+            source = SourceRecord(
+                id=source_id, plan_id=memory.research_state.current_plan_id, kind=kind,
+                title=title or kind, locator=locator or f"{kind}:{origin_id}", origin_id=origin_id,
+                collected_at=now(), published_at=published_at, content_hash=content_hash,
+                snapshot=snapshot, fragment=fragment, is_error=is_error,
+            )
+            memory.sources[source.id] = source
+            self._save(memory, "capture_source", {"source_id": source.id})
+            return source
+
+    def read_source(self, source: SourceRecord) -> str:
+        content = (self.directory / source.snapshot).read_text(encoding="utf-8")
+        if hashlib.sha256(content.encode("utf-8")).hexdigest() != source.content_hash:
+            raise ResearchError("资料快照校验失败；原文件已保留")
+        return content
+
+    def apply(self, data: dict[str, Any], *, budget: int | None = None) -> dict:
+        operation = OPERATION_ADAPTER.validate_python(data)
+        if isinstance(operation, ReadMemory):
+            memory = self.load()
+            if not operation.ids:
+                return self.view(memory)
+            records = {item.id: item for item in memory.task_context}
+            for bucket in (memory.plans, memory.sources, memory.evidence_pool, memory.reasoning_chain, memory.conclusions):
+                records.update(bucket)
+            self._require(operation.ids, records, "record")
+            result = []
+            for key in operation.ids:
+                record = records[key]
+                item = record.model_dump(mode="json")
+                if isinstance(record, SourceRecord) and operation.include_content:
+                    item["content"] = self.read_source(record)
+                result.append(item)
+            return {"revision": memory.revision, "records": result}
+        fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        with exclusive_file_lock(self.lock):
+            memory = self._load()
+            previous = memory.operations.get(operation.operation_id)
+            if previous:
+                if previous["fingerprint"] != fingerprint:
+                    raise ResearchError("operation_id already used with different content")
+                return previous["receipt"] | {"current_revision": memory.revision}
+            if operation.expected_revision != memory.revision:
+                raise ResearchError(f"Revision conflict: expected {operation.expected_revision}, current {memory.revision}; read and retry with a new operation_id")
+            result = self._apply(memory, operation)
+            if budget is not None:
+                self._prompt(memory, budget)
+            receipt = {"revision": memory.revision + 1, **result}
+            memory.operations[operation.operation_id] = {"fingerprint": fingerprint, "receipt": receipt}
+            self._save(memory, operation.action, operation.model_dump(mode="json") | {"result": result})
+            return receipt | {"progress": self.progress(memory)}
+
+    @staticmethod
+    def _archive_plan(memory: ResearchMemory) -> str | None:
+        state = memory.research_state
+        old_id = state.current_plan_id
+        if old_id:
+            plan = memory.plans[old_id]
+            plan.archived = True
+            for task in plan.tasks:
+                if task.status in {"pending", "in_progress", "blocked"}:
+                    task.status = "cancelled"
+                    task.updated_at = now()
+        state.current_plan_id = None
+        state.current_task_id = None
+        state.next_step = ""
+        state.unresolved = []
+        return old_id
+
+    def _invalidate(self, memory: ResearchMemory, evidence_id: str) -> None:
+        affected = {evidence_id}
+        while True:
+            expanded = affected | {
+                item.id for item in memory.evidence_pool.values()
+                if set(item.input_evidence_ids) & affected
+                or (item.calculation_step_id and self._step_evidence(memory, [item.calculation_step_id]) & affected)
+            }
+            if expanded == affected:
+                break
+            affected = expanded
+        for key in affected:
+            memory.evidence_pool[key].needs_review = True
+        for claim in memory.conclusions.values():
+            if (set(claim.evidence_ids) | self._step_evidence(memory, claim.step_ids)) & affected:
+                claim.needs_review = True
+
+    def _apply(self, memory: ResearchMemory, operation) -> dict:
+        state = memory.research_state
+        if isinstance(operation, SetContext):
+            self._require(operation.user_source_ids, memory.sources, "user source")
+            context = TaskContext(**operation.model_dump(exclude={"action", "operation_id", "expected_revision"}), supersedes=memory.current_context_id)
+            memory.task_context.append(context)
+            memory.current_context_id = context.id
+            if state.current_plan_id:
+                self._archive_plan(memory)
+                state.replan_required = True
+            return {"context_id": context.id}
+        if isinstance(operation, CreatePlan):
+            if not memory.current_context_id:
+                raise ResearchError("Set task context before creating a plan")
+            self._require(operation.reused_evidence_ids, memory.evidence_pool, "reused evidence")
+            replaced = {item.supersedes for item in memory.evidence_pool.values()}
+            if any(memory.evidence_pool[key].status == "retracted" or key in replaced for key in operation.reused_evidence_ids):
+                raise ResearchError("Reuse only current, non-retracted evidence versions")
+            old_id = self._archive_plan(memory)
+            if old_id is None and memory.plans:
+                old_id = next(reversed(memory.plans))
+            plan = ResearchPlan(context_id=memory.current_context_id, title=operation.title,
+                                tasks=[ResearchTask(title=title) for title in operation.tasks],
+                                supersedes=old_id, reused_evidence_ids=operation.reused_evidence_ids)
+            memory.plans[plan.id] = plan
+            state.current_plan_id = plan.id
+            state.replan_required = False
+            return {"plan_id": plan.id, "tasks": [task.model_dump(mode="json") for task in plan.tasks]}
+        if isinstance(operation, UpdateTask):
+            if state.replan_required or not state.current_plan_id:
+                raise ResearchError("Create a current plan before updating tasks")
+            plan = memory.plans[state.current_plan_id]
+            task = next((task for task in plan.tasks if task.id == operation.task_id), None)
+            if task is None:
+                raise ResearchError("Task does not belong to the current plan")
+            task.status, task.blocker, task.updated_at = operation.status, operation.blocker, now()
+            state.current_task_id = task.id if operation.status == "in_progress" else (
+                None if state.current_task_id == task.id else state.current_task_id)
+            state.next_step = operation.next_step
+            if operation.unresolved is not None:
+                state.unresolved = operation.unresolved
+            return {"task_id": task.id}
+        if isinstance(operation, AddEvidence):
+            self._require([operation.source_id], memory.sources, "source")
+            source = memory.sources[operation.source_id]
+            if source.plan_id and source.plan_id != state.current_plan_id:
+                plan = memory.plans.get(state.current_plan_id or "")
+                reused_sources = {memory.evidence_pool[key].source_id for key in plan.reused_evidence_ids} if plan else set()
+                context = next((item for item in memory.task_context if item.id == memory.current_context_id), None)
+                user_sources = set(context.user_source_ids if context else [])
+                if source.id not in reused_sources | user_sources:
+                    raise ResearchError("Explicitly reuse archived evidence in the current plan before registering it again")
+            fields = operation.model_dump(exclude={"action", "operation_id", "expected_revision"})
+            evidence = Evidence(**fields, plan_id=state.current_plan_id,
+                                collected_at=source.collected_at, published_at=source.published_at)
+            if evidence.supersedes:
+                self._require([evidence.supersedes], memory.evidence_pool, "superseded evidence")
+                if any(item.supersedes == evidence.supersedes for item in memory.evidence_pool.values()):
+                    raise ResearchError("Revise the latest evidence version")
+                self._invalidate(memory, evidence.supersedes)
+            memory.evidence_pool[evidence.id] = evidence
+            return {"evidence_id": evidence.id}
+        if isinstance(operation, AddReasoning):
+            if state.replan_required:
+                raise ResearchError("Replan before continuing research")
+            self._ensure_scope(memory, operation.evidence_ids, operation.prior_step_ids)
+            step = ReasoningStep(**operation.model_dump(exclude={"action", "operation_id", "expected_revision"}), plan_id=state.current_plan_id)
+            memory.reasoning_chain[step.id] = step
+            return {"step_id": step.id}
+        if isinstance(operation, AddConclusion):
+            if state.replan_required:
+                raise ResearchError("Replan before drawing conclusions")
+            self._ensure_scope(memory, operation.evidence_ids, operation.step_ids)
+            replaced = {item.supersedes for item in memory.evidence_pool.values()}
+            if operation.status != "retracted" and any(key in replaced or memory.evidence_pool[key].status == "retracted" for key in operation.evidence_ids):
+                raise ResearchError("Conclusions must use current, non-retracted evidence")
+            claim = Conclusion(**operation.model_dump(exclude={"action", "operation_id", "expected_revision"}), plan_id=state.current_plan_id)
+            if any(memory.evidence_pool[key].needs_review for key in claim.evidence_ids):
+                if claim.status == "verified":
+                    raise ResearchError("Evidence awaiting review cannot support a verified conclusion")
+                claim.needs_review = True
+            if claim.supersedes and any(item.supersedes == claim.supersedes for item in memory.conclusions.values()):
+                raise ResearchError("Revise the latest conclusion version")
+            memory.conclusions[claim.id] = claim
+            return {"conclusion_id": claim.id}
+        raise ResearchError("Unsupported research operation")
+
+    def _ensure_scope(self, memory: ResearchMemory, evidence_ids: list[str], step_ids: list[str]) -> None:
+        self._require(evidence_ids, memory.evidence_pool, "evidence")
+        self._require(step_ids, memory.reasoning_chain, "reasoning step")
+        plan_id = memory.research_state.current_plan_id
+        plan = memory.plans.get(plan_id or "")
+        allowed = set(plan.reused_evidence_ids if plan else [])
+        inputs = set(evidence_ids) | self._step_evidence(memory, step_ids)
+        # A prior verification may reference earlier versions of the same explicitly reused source.
+        allowed_sources = {memory.evidence_pool[key].source_id for key in allowed}
+        if any(memory.evidence_pool[key].plan_id != plan_id and key not in allowed
+               and memory.evidence_pool[key].source_id not in allowed_sources for key in inputs):
+            raise ResearchError("Explicitly reuse archived evidence in the current plan before analyzing it")
+
+    def progress(self, memory: ResearchMemory | None = None) -> dict:
+        memory = memory or self.load()
+        state = memory.research_state
+        plan = memory.plans.get(state.current_plan_id or "")
+        tasks = [{"id": task.id, "title": task.title, "status": task.status} for task in plan.tasks] if plan else []
+        return {"revision": memory.revision, "plan_id": plan.id if plan else None,
+                "title": plan.title if plan else "", "tasks": tasks,
+                "completed": sum(task["status"] == "completed" for task in tasks),
+                "total": len(tasks), "replan_required": state.replan_required}
+
+    @staticmethod
+    def view(memory: ResearchMemory) -> dict:
+        state = memory.research_state
+        context = next((item for item in memory.task_context if item.id == memory.current_context_id), None)
+        plan = memory.plans.get(state.current_plan_id or "")
+        superseded_claims = {item.supersedes for item in memory.conclusions.values()}
+        superseded_evidence = {item.supersedes for item in memory.evidence_pool.values()}
+        claims = [item for item in memory.conclusions.values()
+                  if item.plan_id == state.current_plan_id and item.id not in superseded_claims and item.status != "retracted"]
+        evidence_ids = set(plan.reused_evidence_ids if plan else [])
+        for claim in claims:
+            evidence_ids.update(claim.evidence_ids)
+        evidence = [item for item in memory.evidence_pool.values()
+                    if (item.plan_id == state.current_plan_id or item.id in evidence_ids)
+                    and item.id not in superseded_evidence and item.status != "retracted"]
+        steps = [item for item in memory.reasoning_chain.values() if item.plan_id == state.current_plan_id]
+        source_ids = {item.source_id for item in evidence}
+        recent_sources = [item for item in memory.sources.values()
+                          if item.plan_id == state.current_plan_id][-8:]
+        source_ids.update(item.id for item in recent_sources)
+        if context:
+            source_ids.update(context.user_source_ids)
+        return {"session_id": memory.session_id, "revision": memory.revision,
+                "task_context": context.model_dump(mode="json") if context else None,
+                "research_state": state.model_dump(mode="json"),
+                "plan": plan.model_dump(mode="json") if plan else None,
+                "conclusions": [item.model_dump(mode="json") for item in claims],
+                "evidence_pool": [item.model_dump(mode="json") for item in evidence],
+                "reasoning_chain": [item.model_dump(mode="json") for item in steps],
+                "sources": [item.model_dump(mode="json", exclude={"snapshot"}) for item in memory.sources.values() if item.id in source_ids]}
+
+    def prompt(self, budget: int = 6000) -> str:
+        return self._prompt(self.load(), budget)
+
+    def _prompt(self, memory: ResearchMemory, budget: int) -> str:
+        view = self.view(memory)
+        required = {key: view[key] for key in ("session_id", "revision", "task_context", "research_state", "plan")}
+        required["omitted"] = "Other records remain available through research_memory(read, ids)."
+        for bucket in ("conclusions", "evidence_pool", "sources", "reasoning_chain"):
+            required[bucket] = []
+
+        def render(value: dict) -> str:
+            return "<research_memory>\n" + json.dumps(value, ensure_ascii=False) + "\n</research_memory>"
+
+        if estimate_tokens(render(required)) > budget:
+            raise ResearchError("研究目标、约束或计划超过注入预算；请精简后继续")
+        for bucket in ("conclusions", "evidence_pool", "sources", "reasoning_chain"):
+            for item in reversed(view[bucket]):
+                required[bucket].append(item)
+                if estimate_tokens(render(required)) > budget:
+                    required[bucket].pop()
+        return render(required)
+
+    def interrupt(self, *, request_id: str, target_request_id: str, text: str) -> None:
+        """Persist steering before cancellation. Replanning starts only after old work settles."""
+        with exclusive_file_lock(self.lock):
+            memory = self._load()
+            existing = memory.pending_steers.get(request_id)
+            data = {"target_request_id": target_request_id, "text": text, "accepted_at": now()}
+            if existing:
+                if existing["target_request_id"] != target_request_id or existing["text"] != text:
+                    raise ResearchError("Steering request ID already used")
+                return
+            memory.pending_steers[request_id] = data
+            self._save(memory, "accept_steer", {"request_id": request_id, **data})
+
+    def require_replan(self, request_id: str) -> None:
+        with exclusive_file_lock(self.lock):
+            memory = self._load()
+            if request_id not in memory.pending_steers:
+                raise ResearchError("Steering request was not persisted")
+            if memory.pending_steers[request_id].get("ready"):
+                return
+            self._archive_plan(memory)
+            memory.research_state.replan_required = True
+            memory.pending_steers[request_id]["ready"] = True
+            self._save(memory, "require_replan", {"request_id": request_id})
+
+    def recover_pending_steers(self) -> None:
+        """Called only when the Web host has no live execution for this session."""
+        memory = self.load()
+        for request_id, item in memory.pending_steers.items():
+            if not item.get("ready"):
+                self.require_replan(request_id)
+
+    def stopped(self) -> None:
+        with exclusive_file_lock(self.lock):
+            memory = self._load()
+            plan = memory.plans.get(memory.research_state.current_plan_id or "")
+            if plan:
+                changed = False
+                for task in plan.tasks:
+                    if task.status == "in_progress":
+                        task.status, task.blocker, task.updated_at = "blocked", "执行已停止", now()
+                        changed = True
+                if changed:
+                    memory.research_state.current_task_id = None
+                    self._save(memory, "stop", {})
+
+    def invalid_citations(self, text: str) -> list[str]:
+        """Validate exact IDs before publishing; never infer an intended source."""
+        memory = self.load()
+        invalid = [match.group(1) for match in CITATION_PATTERN.finditer(text)
+                   if match.group(1) not in memory.evidence_pool]
+        if memory.evidence_pool:
+            invalid.extend(match.group(0) for match in re.finditer(r"\[(\d{1,3})\](?!\()", text))
+        return list(dict.fromkeys(invalid))
+
+    def render_answer(self, text: str, answer_id: str) -> tuple[str, dict]:
+        with exclusive_file_lock(self.lock):
+            memory = self._load()
+            if answer_id in memory.answers:
+                answer = memory.answers[answer_id]
+                return answer["rendered"], answer
+            cited: dict[str, dict] = {}
+            invalid: list[str] = []
+
+            # Display numbers are local to one frozen answer. The model must
+            # supply stable evidence IDs; bare numbers have no proven target.
+            if memory.evidence_pool:
+                def reject_number(match):
+                    invalid.append(match.group(0))
+                    return "[来源不可核验]"
+                numbered = re.compile(r"\[(\d{1,3})\](?!\()")
+                text = numbered.sub(reject_number, text)
+
+            def replace(match) -> str:
+                key = match.group(1)
+                if key not in memory.evidence_pool:
+                    invalid.append(key)
+                    return "[来源不可核验]"
+                if key not in cited:
+                    evidence = memory.evidence_pool[key]
+                    source = memory.sources[evidence.source_id]
+                    cited[key] = {"number": len(cited) + 1, "evidence": evidence.model_dump(mode="json"),
+                                  "source": source.model_dump(mode="json", exclude={"snapshot"})}
+                return f"[{cited[key]['number']}]"
+
+            rendered = CITATION_PATTERN.sub(replace, text)
+            if cited:
+                lines = ["", "", "来源："]
+                for item in cited.values():
+                    evidence, source = item["evidence"], item["source"]
+                    title = re.sub(r"[\[\]\n\r<>]", " ", source["title"]).strip()[:160]
+                    locator = source["locator"]
+                    parsed = urlsplit(locator)
+                    if parsed.scheme in {"http", "https"} and parsed.netloc:
+                        reference = f"[{title}]({locator.replace(')', '%29').replace('(', '%28')})"
+                    else:
+                        clean_locator = re.sub(r"[\n\r<>]", " ", locator)
+                        reference = f"{title}（{clean_locator}）"
+                    date = source["published_at"] or f"采集 {source['collected_at'][:10]}；发布日期未知"
+                    mark = "已撤回" if evidence["status"] == "retracted" else "待复核" if evidence["needs_review"] else "待核验" if evidence["status"] != "verified" else ""
+                    replacement = next((item for item in memory.evidence_pool.values() if item.supersedes == evidence["id"]), None)
+                    if replacement is not None:
+                        mark = "已撤回" if replacement.status == "retracted" else "已更正，待复核"
+                    lines.append(f"[{item['number']}] {reference} · {date}" + (f" · {mark}" if mark else ""))
+                rendered += "\n".join(lines)
+            answer = {"rendered": rendered, "model_text": text, "memory_revision": memory.revision,
+                      "citations": cited, "invalid": invalid, "created_at": now()}
+            memory.answers[answer_id] = answer
+            self._save(memory, "answer", {"answer_id": answer_id, "evidence_ids": list(cited)})
+            return rendered, answer
+
+    def completion_warning(self) -> str | None:
+        memory = self.load()
+        if memory.research_state.replan_required:
+            return "研究计划尚未重新生成，研究未完成。"
+        plan = memory.plans.get(memory.research_state.current_plan_id or "")
+        if plan and any(task.status != "completed" for task in plan.tasks):
+            return "研究任务尚未全部完成，当前回复仅代表阶段性结果。"
+        return None

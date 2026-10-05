@@ -1,0 +1,12 @@
+{
+  "name": "deep-investment-report",
+  "version": "0.1.0",
+  "display_name": "深度投研报告撰写",
+  "category": "公司研究",
+  "example": "/deep-investment-report 请整合本会话结果生成深度报告",
+  "description": "整合已有财务、事件及研报分析，补齐已启用的前置技能，生成有出处的深度报告和三年情景盈利预测。",
+  "author": {
+    "name": "OpenHarness"
+  },
+  "enabled_by_default": true
+}

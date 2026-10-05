@@ -1,0 +1,439 @@
+{
+  "schema_version": 1,
+  "company": {
+    "name": "样例制造",
+    "code": "603999",
+    "market": "SSE",
+    "industry": "制造业（测试虚构）",
+    "identity_sources": [
+      {
+        "locator": "fixture:annual-report.pdf#page=1",
+        "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+        "page": 1
+      }
+    ]
+  },
+  "inputs": [
+    {
+      "locator": "fixture:annual-report.pdf#page=1",
+      "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+      "page": 1
+    }
+  ],
+  "as_of": "2026-10-05T12:00:00+08:00",
+  "kind": "financial",
+  "periods": [
+    {
+      "label": "2025年度",
+      "start": "2025-01-01",
+      "end": "2025-12-31",
+      "rounding_unit": "10000",
+      "items": {
+        "cash": {
+          "value": "30",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "receivables": {
+          "value": "20",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "inventory": {
+          "value": "10",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "current_assets": {
+          "value": "80",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "total_assets": {
+          "value": "200",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "current_liabilities": {
+          "value": "40",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "total_liabilities": {
+          "value": "80",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "total_equity": {
+          "value": "120",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "parent_equity": {
+          "value": "100",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "opening_parent_equity": {
+          "value": "90",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "revenue": {
+          "value": "100",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "cost": {
+          "value": "60",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "tax_surcharges": {
+          "value": "2",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "selling_expense": {
+          "value": "5",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "admin_expense": {
+          "value": "4",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "rd_expense": {
+          "value": "3",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "finance_expense": {
+          "value": "1",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "other_operating_net": {
+          "value": "1",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "operating_profit": {
+          "value": "26",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        },
+        "non_operating_net": {
+          "value": "2",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "pretax_profit": {
+          "value": "28",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "income_tax": {
+          "value": "7",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "net_profit": {
+          "value": "21",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "parent_net_profit": {
+          "value": "20",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "minority_profit": {
+          "value": "1",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "adjusted_parent_profit": {
+          "value": "18",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "operating_cashflow": {
+          "value": "25",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "investing_cashflow": {
+          "value": "-10",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "financing_cashflow": {
+          "value": "-8",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "fx_cash_effect": {
+          "value": "1",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        },
+        "net_cash_change": {
+          "value": "8",
+          "unit": "万元",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=2",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 2
+            }
+          ]
+        }
+      },
+      "currency": "CNY"
+    }
+  ],
+  "notes": [
+    {
+      "topic": "关联交易",
+      "fact": "原文说明本期该附注已披露，详见固定材料。",
+      "interpretation": "测试仅检查资料定位，不代表真实公司结论。",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=2",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 2
+        }
+      ]
+    },
+    {
+      "topic": "减值",
+      "fact": "原文说明本期该附注已披露，详见固定材料。",
+      "interpretation": "测试仅检查资料定位，不代表真实公司结论。",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=2",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 2
+        }
+      ]
+    },
+    {
+      "topic": "存货",
+      "fact": "原文说明本期该附注已披露，详见固定材料。",
+      "interpretation": "测试仅检查资料定位，不代表真实公司结论。",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=2",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 2
+        }
+      ]
+    },
+    {
+      "topic": "应收账款",
+      "fact": "原文说明本期该附注已披露，详见固定材料。",
+      "interpretation": "测试仅检查资料定位，不代表真实公司结论。",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=2",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 2
+        }
+      ]
+    },
+    {
+      "topic": "非经常损益",
+      "fact": "原文说明本期该附注已披露，详见固定材料。",
+      "interpretation": "测试仅检查资料定位，不代表真实公司结论。",
+      "references": [
+        {
+          "locator": "fixture:annual-report.pdf#page=2",
+          "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+          "page": 2
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "replace-with-plugin-name",
+  "version": "0.1.0",
+  "description": "待填：插件能力与适用范围",
+  "enabled_by_default": false,
+  "skills_dir": "skills"
+}

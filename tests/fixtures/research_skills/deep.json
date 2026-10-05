@@ -1,0 +1,840 @@
+{
+  "schema_version": 1,
+  "company": {
+    "name": "样例制造",
+    "code": "603999",
+    "market": "SSE",
+    "industry": "制造业（测试虚构）",
+    "identity_sources": [
+      {
+        "locator": "fixture:annual-report.pdf#page=1",
+        "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+        "page": 1
+      }
+    ]
+  },
+  "inputs": [
+    {
+      "locator": "fixture:annual-report.pdf#page=1",
+      "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+      "page": 1
+    }
+  ],
+  "as_of": "2026-10-05T12:00:00+08:00",
+  "kind": "deep",
+  "base_year": 2025,
+  "base_revenue": {
+    "value": "100",
+    "unit": "万元",
+    "references": [
+      {
+        "locator": "fixture:annual-report.pdf#page=1",
+        "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+        "page": 1
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "base",
+      "years": [
+        {
+          "year": 2026,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "year": 2027,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "year": 2028,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "optimistic",
+      "years": [
+        {
+          "year": 2026,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "year": 2027,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "year": 2028,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cautious",
+      "years": [
+        {
+          "year": 2026,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "year": 2027,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "year": 2028,
+          "assumptions": {
+            "admin_rate": {
+              "value": ".04",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "finance_rate": {
+              "value": ".01",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "gross_margin": {
+              "value": ".4",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "growth": {
+              "value": ".1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "non_operating_net": {
+              "value": "20000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "other_operating_net": {
+              "value": "10000",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "parent_share": {
+              "value": "1",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "rd_rate": {
+              "value": ".03",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "selling_rate": {
+              "value": ".05",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_rate": {
+              "value": ".25",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "tax_surcharge_rate": {
+              "value": ".02",
+              "origin": "analyst",
+              "rationale": "固定测试显式假设，无现实投资判断"
+            },
+            "shares": {
+              "value": "1000000",
+              "origin": "historical",
+              "rationale": "固定材料提供股本",
+              "references": [
+                {
+                  "locator": "fixture:annual-report.pdf#page=1",
+                  "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+                  "page": 1
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "key": "business",
+      "title": "business",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "events",
+      "title": "events",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "financial_quality",
+      "title": "financial_quality",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "forecast",
+      "title": "forecast",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "industry",
+      "title": "industry",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "risks",
+      "title": "risks",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "sources",
+      "title": "sources",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "summary",
+      "title": "summary",
+      "paragraphs": [
+        {
+          "text": "原文认为收入增长受订单影响，并提示履行风险。",
+          "references": [
+            {
+              "locator": "fixture:annual-report.pdf#page=1",
+              "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+              "page": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "prior_results": [
+    {
+      "locator": "fixture:annual-report.pdf#page=1",
+      "title": "人工核对的样例制造2025年报（固定测试材料，非真实公司）",
+      "page": 1
+    }
+  ],
+  "base_currency": "CNY"
+}
