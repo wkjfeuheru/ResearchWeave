@@ -4,6 +4,8 @@ OpenHarness is a local investment research Web workspace. Each conversation owns
 
 [中文说明](README.zh-CN.md) · [Web workspace](docs/web-workspace.md) · [Contributing](CONTRIBUTING.md)
 
+`oh eval` runs a versioned 200-case research benchmark with real runtime traces, independent judging and four-dimensional reports. Langfuse is an optional evaluation dependency; regular conversations are not uploaded. See [evaluation setup and workflow](docs/agent-evaluation.md).
+
 ## Install and start
 
 Python 3.10 or newer is required.

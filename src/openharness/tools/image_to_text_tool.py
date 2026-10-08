@@ -115,6 +115,7 @@ class ImageToTextTool(BaseTool):
                 api_key=api_key,
                 base_url=base_url,
                 max_tokens=arguments.max_tokens,
+                context_window_tokens=vision_config.get("context_window_tokens"),
             )
         except Exception as exc:
             log.exception("image_to_text: vision model call failed")
@@ -189,6 +190,7 @@ class ImageToTextTool(BaseTool):
         api_key: str,
         base_url: str,
         max_tokens: int,
+        context_window_tokens: int | None = None,
     ) -> str:
         """Call the vision model via OpenAI-compatible API."""
         client = OpenAICompatibleClient(
@@ -222,6 +224,7 @@ class ImageToTextTool(BaseTool):
                 system_prompt="",
                 max_tokens=max_tokens,
                 tools=[],
+                context_window_tokens=context_window_tokens,
             )
         ):
             from openharness.api.client import ApiTextDeltaEvent, ApiMessageCompleteEvent

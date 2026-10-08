@@ -25,10 +25,21 @@ from openharness.config import Settings, save_settings
 from openharness.research.store import ResearchStore
 from openharness.web.app import create_app
 from openharness.web.catalog import profile_settings
-from openharness.utils.research_workflows.models import RESULT_TYPES
-from openharness.utils.research_workflows.financial import calculate_financial
-from openharness.utils.research_workflows.events import normalize_monitor
-from openharness.utils.research_workflows.reports import calculate_deep, normalize_digest
+from importlib import import_module
+
+SKILL_FUNCTIONS = {
+    "financial": ("financial-statement-analysis", "analyze_statements", "calculate_financial", "FinancialResult"),
+    "monitor": ("company-event-monitor", "normalize_events", "normalize_monitor", "MonitorResult"),
+    "digest": ("research-report-digest", "digest_reports", "normalize_digest", "DigestResult"),
+    "deep": ("deep-investment-report", "forecast", "calculate_deep", "DeepResult"),
+}
+RESULT_TYPES = {}
+FUNCTIONS = {}
+for kind, (plugin, script, function, result_type) in SKILL_FUNCTIONS.items():
+    module = import_module(f"openharness.plugins.bundled.{plugin}.skills.{plugin}.scripts.{script}")
+    RESULT_TYPES[kind] = getattr(module, result_type)
+    FUNCTIONS[kind] = getattr(module, function)
+
 
 
 async def run(args):
@@ -117,7 +128,7 @@ async def run(args):
                         "这是用户明确指定的合成固定材料验收，样例制造603999/SSE是测试标识，不要求现实证券身份。"
                         "所有输入均为制造业非金融虚构公司，仅计算测试。无需联网、不澄清现实公司。"
                         "资料截止固定2026-10-05T12:00:00+08:00，缺失信息记录null与原因；登记来源、计算证据和结论。"
-                        "可读写本会话目录，使用skill返回的Python解释器和run.py，不只解释方法。"
+                        "可读写本会话目录，使用skill返回的Python解释器，执行技能自己的业务脚本，再执行export_report.py导出，不只解释方法。"
                     )
                     events = []
                     async with asyncio.timeout(args.turn_timeout):
@@ -202,12 +213,7 @@ async def run(args):
                             json.dumps(payload, ensure_ascii=False, indent=2)
                         )
                         model = RESULT_TYPES[kind].model_validate(payload)
-                        recalc = {
-                            "financial": calculate_financial,
-                            "monitor": normalize_monitor,
-                            "digest": normalize_digest,
-                            "deep": calculate_deep,
-                        }[kind](model.model_copy(deep=True))
+                        recalc = FUNCTIONS[kind](model.model_copy(deep=True))
                         item["checks"]["schema_and_status"] = not event.get(
                             "failed"
                         ) and recalc.status in {"complete", "partial"}

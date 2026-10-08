@@ -74,7 +74,7 @@ async def test_stream_usage_final_or_repeated_counts_once(usage_only):
     client._client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
         events = [event async for event in client.stream_message(ApiMessageRequest(
-            model='deepseek-flash', messages=[ConversationMessage.from_user_text('hi')],
+            model='deepseek-flash', context_window_tokens=128_000, messages=[ConversationMessage.from_user_text('hi')],
             tools=[{'name': 'read', 'description': 'read', 'input_schema': {'type': 'object'}}],
         ))]
         completed = [event for event in events if isinstance(event, ApiMessageCompleteEvent)]
@@ -115,7 +115,7 @@ class RecordingClient:
 
 
 def make_engine(tmp_path, client, prompt=None):
-    return QueryEngine(api_client=client, cwd=tmp_path, model='test',
+    return QueryEngine(api_client=client, cwd=tmp_path, model='claude-sonnet-4-6',
                        system_prompt=prompt or RuntimePrompt('Stable instructions', 'State A'),
                        settings=Settings(memory={'enabled': False}),
                        tool_registry=create_research_tool_registry(),
@@ -240,7 +240,7 @@ def test_persisted_context_not_in_transcript_or_title(tmp_path, monkeypatch):
     from openharness.services.session_storage import save_session_snapshot, load_session_snapshot, export_session_markdown
     monkeypatch.setenv('OPENHARNESS_DATA_DIR', str(tmp_path / 'data'))
     message = ConversationMessage(role='user', content=[TextBlock(text='Research')], runtime_context='PRIVATE_REFERENCE')
-    save_session_snapshot(cwd=tmp_path, model='test', system_prompt='stable',
+    save_session_snapshot(cwd=tmp_path, model='claude-sonnet-4-6', system_prompt='stable',
                           messages=[message], usage=UsageSnapshot(input_tokens=10))
     saved = load_session_snapshot(tmp_path)
     assert saved['summary'] == 'Research'

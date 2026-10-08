@@ -11,6 +11,8 @@ is required.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import logging
 from typing import AsyncIterator
 
@@ -118,16 +120,13 @@ class CopilotClient:
         If a *model* was provided at construction time it overrides the
         model in *request*; otherwise the request model is passed through.
         """
-        effective_model = self._model or request.model
-        patched = ApiMessageRequest(
-            model=effective_model,
-            messages=request.messages,
-            system_prompt=request.system_prompt,
-            max_tokens=request.max_tokens,
-            tools=request.tools,
-        )
+        patched = request if request.prepared_payload is not None else self.prepare_request(request)
         async for event in self._inner.stream_message(patched):
             yield event
+
+    def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
+        from openharness.services.context_budget import prepare_request
+        return prepare_request(self._inner, replace(request, model=self._model or request.model))
 
     async def close(self) -> None:
         """Close the underlying OpenAI-compatible client."""

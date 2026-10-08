@@ -24,7 +24,8 @@ function ToolGroup({ rows }: { rows: Message[] }) {
     </button>
     {open && <ul className="activity-details">{rows.map(row => <li key={row.id}>
       <span className="activity-label">{row.label}</span>{row.target && <code>{row.target}</code>}
-      <span className={`activity-status ${row.status}`}>{states[row.status || 'completed']}</span>
+      <span className={`activity-status ${row.status}`}>{row.outcome === 'empty' ? '未找到结果' : row.outcome === 'partial' ? '结果不完整' : states[row.status || 'completed']}</span>
+      {row.detail && <span className="activity-detail">{row.detail}</span>}
     </li>)}</ul>}
   </div>;
 }

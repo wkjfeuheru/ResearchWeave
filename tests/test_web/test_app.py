@@ -115,6 +115,7 @@ def add_model(client, key=SECRET, label="Test model"):
             "label": label,
             "api_format": "openai",
             "model": "test-model",
+            "context_window_tokens": 200_000,
             "base_url": "https://example.com/v1",
             "api_key": key,
         },
@@ -403,6 +404,7 @@ def test_unconfigured_model_and_api_failures_are_recoverable(workspace):
                 "label": "Test",
                 "api_format": "openai",
                 "model": "test-model",
+            "context_window_tokens": 200_000,
                 "api_key": SECRET,
             },
         )
@@ -605,3 +607,31 @@ def test_attachment_failures_limits_and_server_id_validation(workspace, monkeypa
     monkeypatch.setattr("openharness.web.app.MAX_DOCUMENT_BYTES", 10)
     assert client.post(endpoint, files={"files": ("large.txt", b"x" * 11)}).status_code == 413
     assert client.get(f"/api/sessions/{sid}/artifacts/arbitrary-path/download").status_code == 404
+
+
+def test_model_context_budget_round_trip_and_omitted_edit_preserves_it(workspace):
+    client, _, _, _, _ = workspace
+    profile = add_model(client)
+    row = next(item for item in client.get("/api/models").json()["items"] if item["id"] == profile)
+    assert row["context_window_tokens"] == 200_000
+    payload = {"label": "Budgeted model", "api_format": "openai", "model": "test-model",
+               "auto_compact_threshold_tokens": 12345}
+    assert client.put(f"/api/models/{profile}", json=payload).status_code == 200
+    from openharness.web.catalog import profile_settings
+    settings = profile_settings(profile)
+    assert settings.context_window_tokens == 200_000
+    assert settings.auto_compact_threshold_tokens == 12345
+    assert settings.resolve_auth().value == SECRET
+    payload.update(context_window_tokens=None, auto_compact_threshold_tokens=None)
+    assert client.put(f"/api/models/{profile}", json=payload).status_code == 200
+    assert profile_settings(profile).context_window_tokens is None
+    tested = client.post(f"/api/models/{profile}/test").json()
+    assert not tested["ok"] and "context_window_tokens" in tested["message"]
+
+
+@pytest.mark.parametrize("field", ["context_window_tokens", "auto_compact_threshold_tokens"])
+def test_model_rejects_nonpositive_budget_fields(workspace, field):
+    client, _, _, _, _ = workspace
+    response = client.post("/api/models", json={"label": "Invalid budget", "api_format": "openai",
+        "model": "test-model", field: 0})
+    assert response.status_code == 422

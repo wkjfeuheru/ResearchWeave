@@ -220,6 +220,11 @@ async def build_runtime(
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
     session_id: str | None = None,
+    observer=None,
+    settings_override=None,
+    research_store_override=None,
+    connect_mcp: bool = True,
+    context_window_tokens: int | None = None,
 ) -> RuntimeBundle:
     """Build the shared runtime for an OpenHarness session."""
     settings_overrides: dict[str, Any] = {
@@ -232,8 +237,9 @@ async def build_runtime(
         "api_format": api_format,
         "active_profile": active_profile,
         "permission_mode": permission_mode,
+        "context_window_tokens": context_window_tokens,
     }
-    settings = load_settings().merge_cli_overrides(**settings_overrides)
+    settings = (settings_override or load_settings()).merge_cli_overrides(**settings_overrides)
     cwd = str(Path(cwd).expanduser().resolve()) if cwd else str(Path.cwd())
     normalized_skill_dirs = tuple(
         str(Path(path).expanduser().resolve()) for path in (extra_skill_dirs or ())
@@ -246,8 +252,20 @@ async def build_runtime(
         resolved_api_client = api_client
     else:
         resolved_api_client = _resolve_api_client_from_settings(settings)
+    if observer is not None:
+        from openharness.evaluation.observer import ObservedClient
+
+        resolved_api_client = ObservedClient(resolved_api_client, observer)
     mcp_manager = McpClientManager(load_mcp_server_configs(settings, plugins))
-    await mcp_manager.connect_all()
+    if connect_mcp:
+        try:
+            await mcp_manager.connect_all()
+        except BaseException:
+            await mcp_manager.close()
+            close = getattr(resolved_api_client, "close", None)
+            if close:
+                await close()
+            raise
     tool_registry = create_research_tool_registry(mcp_manager)
     # Register plugin-provided tools
     for plugin in plugins:
@@ -260,6 +278,7 @@ async def build_runtime(
             cwd=Path(cwd).resolve(),
             api_client=resolved_api_client,
             default_model=settings.model,
+            context_window_tokens=settings.context_window_tokens,
         ),
     )
     engine_max_turns = settings.max_turns if (enforce_max_turns or max_turns is not None) else None
@@ -273,18 +292,23 @@ async def build_runtime(
     if not session_id:
         raise ValueError("Research runtime requires the existing Web session ID")
     restored_metadata = _persistable_tool_metadata(restore_tool_metadata)
+    if observer is not None:
+        restored_metadata["observer"] = observer
     restored_metadata["permission_mode"] = settings.permission.mode.value
     if settings.research_memory.enabled:
         from openharness.research.store import ResearchStore
 
-        store = ResearchStore(cwd, session_id)
+        store = research_store_override or ResearchStore(cwd, session_id)
         store.load()  # Corruption must be reported, never silently reset.
         restored_metadata["research_store"] = store
         restored_metadata["research_injection_budget"] = (
             settings.research_memory.injection_budget_tokens
         )
+        restored_metadata["conflict_max_turns"] = settings.research_memory.conflict_max_turns
+        restored_metadata["conflict_timeout_seconds"] = settings.research_memory.conflict_timeout_seconds
     else:
         tool_registry.unregister("research_memory")
+        tool_registry.unregister("investigate_conflict")
 
     engine = QueryEngine(
         api_client=resolved_api_client,
@@ -352,15 +376,21 @@ async def close_runtime(bundle: RuntimeBundle) -> None:
     """Close runtime-owned resources."""
     from openharness.sandbox.session import stop_docker_sandbox
 
-    await stop_docker_sandbox()
-    await bundle.mcp_manager.close()
-    await bundle.hook_executor.execute(
-        HookEvent.SESSION_END,
-        {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
-    )
-    close_api_client = getattr(bundle.api_client, "close", None)
-    if close_api_client is not None:
-        await close_api_client()
+    try:
+        await stop_docker_sandbox()
+    finally:
+        try:
+            await bundle.mcp_manager.close()
+        finally:
+            try:
+                await bundle.hook_executor.execute(
+                    HookEvent.SESSION_END,
+                    {"cwd": bundle.cwd, "event": HookEvent.SESSION_END.value},
+                )
+            finally:
+                close_api_client = getattr(bundle.api_client, "close", None)
+                if close_api_client is not None:
+                    await close_api_client()
 
 
 async def handle_line(

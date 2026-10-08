@@ -8,7 +8,8 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
-  const [prompt, setPrompt] = useState<Prompt | null>(null);
+  const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const prompt = prompts[0] || null;
   const [epoch, setEpoch] = useState(0);
   const socket = useRef<WebSocket | null>(null);
   const activeId = useRef('');
@@ -32,7 +33,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
   }
 
   useEffect(() => {
-    setSession(null); setConnected(false); setPrompt(null); setStatus(''); setError('');
+    setSession(null); setConnected(false); setPrompts([]); setStatus(''); setError('');
     activeId.current = ''; draftId.current = null;
     if (!sessionId) { setBusy(false); return; }
     let disposed = false;
@@ -50,12 +51,12 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
         }
         return;
       }
-      if (data.type === 'session_deleted') { disposed = true; setSession(null); setBusy(false); setConnected(false); setPrompt(null); callbacks.current.onDeleted(); return; }
+      if (data.type === 'session_deleted') { disposed = true; setSession(null); setBusy(false); setConnected(false); setPrompts([]); callbacks.current.onDeleted(); return; }
       if (data.request_id && data.request_id !== activeId.current && data.request_id !== steering.current?.id) return;
       const pendingSteer = steering.current;
       if (data.type === 'steer_accepted' && pendingSteer && pendingSteer.id === data.next_request_id) {
         // Keep consuming the old run through its final snapshot.
-        setPrompt(null); setStatus('正在停止当前执行并重新规划…');
+        setPrompts([]); setStatus('正在停止当前执行并重新规划…');
         return;
       }
       switch (data.type) {
@@ -94,7 +95,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
             ? { ...current, research_progress: data.progress } : current); break;
         case 'system': append({ id: crypto.randomUUID(), role: 'system', text: data.text }); break;
         case 'status': setStatus(data.message); break;
-        case 'prompt': setPrompt(data); setStatus('等待你的回复'); break;
+        case 'prompt': setPrompts(current => current.some(item => item.prompt_id === data.prompt_id) ? current : [...current, data]); break;
         case 'error': setError(data.message); break;
         case 'rejected': steering.current = null; setError(data.message); break;
         case 'clear': setSession(current => current ? { ...current, messages: [] } : current); break;
@@ -103,7 +104,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
             activeId.current = pendingSteer.id; lastText.current = pendingSteer.text;
             steering.current = null;
           }
-          setSession(data.session); setBusy(!!steering.current); setPrompt(null);
+          setSession(data.session); setBusy(!!steering.current); setPrompts([]);
           setStatus(data.cancelled ? '已停止生成' : '');
           draftId.current = null;
           if (data.failed) callbacks.current.onFailed(lastText.current);
@@ -113,7 +114,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
     ws.onerror = () => { if (!disposed) setError('无法连接对话服务，请检查后端是否已启动'); };
     ws.onclose = () => {
       if (!disposed) {
-        setConnected(false); setBusy(false); setPrompt(null); pending.current = null; steering.current = null;
+        setConnected(false); setBusy(false); setPrompts([]); pending.current = null; steering.current = null;
         setSession(current => current ? { ...current, messages: current.messages.map(row => row.turn_status === 'running'
           ? { ...row, turn_status: 'stopped', phase: row.phase === 'pending' ? 'progress' : row.phase,
             status: row.status === 'running' ? 'interrupted' : row.status } : row) } : current);
@@ -124,7 +125,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
   }, [sessionId, epoch]);
 
   return {
-    session, setSession, busy, connected, error, setError, status, prompt,
+    session, setSession, busy, connected, error, setError, status: prompt ? (prompt.kind === 'question' ? '等待你的回复' : '等待操作确认') : status, prompt,
     reconnect() { setEpoch(value => value + 1); },
     send(id: string, text: string, profileId: string, attachmentIds: string[] = []) {
       setBusy(true);
@@ -142,7 +143,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
     respond(answer: string) {
       if (!prompt) return;
       socket.current?.send(JSON.stringify({ type: 'response', request_id: activeId.current, prompt_id: prompt.prompt_id, answer }));
-      setPrompt(null); setStatus('正在继续…');
+      setPrompts(current => current.filter(item => item.prompt_id !== prompt.prompt_id)); setStatus('正在继续…');
     },
   };
 }

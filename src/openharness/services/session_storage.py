@@ -17,6 +17,7 @@ from openharness.utils.fs import atomic_write_text
 
 _PERSISTED_TOOL_METADATA_KEYS = (
     "permission_mode", "invoked_skills", "compact_checkpoints", "compact_last",
+    "session_approvals", "context_budget",
 )
 
 
@@ -38,7 +39,16 @@ def _persistable_tool_metadata(tool_metadata: dict[str, object] | None) -> dict[
     payload: dict[str, Any] = {}
     for key in _PERSISTED_TOOL_METADATA_KEYS:
         if key in tool_metadata:
-            payload[key] = _sanitize_metadata(tool_metadata[key])
+            if key == "session_approvals":
+                approvals = tool_metadata[key]
+                if isinstance(approvals, dict):
+                    payload[key] = {
+                        scope: list(dict.fromkeys(item for item in items if isinstance(item, str) and item))
+                        for scope in ("tools", "edit_paths")
+                        if isinstance(items := approvals.get(scope), list)
+                    }
+            else:
+                payload[key] = _sanitize_metadata(tool_metadata[key])
     return payload
 
 

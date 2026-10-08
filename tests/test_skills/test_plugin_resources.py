@@ -1,6 +1,7 @@
 """Packaged plugin lifecycle and progressive skill resource loading."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,19 @@ def test_metadata_hash_stable_resources_change_and_hash_field_excluded(isolated_
     (base / "references" / "__pycache__" / "ignore.pyc").write_bytes(b"cache")
     assert content_hash(entry) == first
     resource.write_text("New rules")
+    assert content_hash(entry) != first
+
+
+def test_skill_hash_covers_its_relocated_business_implementation(isolated_home):
+    from openharness.skills.metadata import content_hash
+
+    source = BUNDLED_PLUGINS_DIR / "financial-statement-analysis" / "skills" / "financial-statement-analysis"
+    base = isolated_home / "financial-skill-copy"
+    shutil.copytree(source, base, ignore=shutil.ignore_patterns("__pycache__"))
+    entry = base / "SKILL.md"
+    first = content_hash(entry)
+    script = base / "scripts" / "analyze_statements.py"
+    script.write_text(script.read_text().replace("denominator == 0", "denominator <= 0"))
     assert content_hash(entry) != first
 
 

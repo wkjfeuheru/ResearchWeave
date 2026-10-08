@@ -229,7 +229,7 @@ async def test_query_engine_plain_text_reply(tmp_path: Path, monkeypatch):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -253,6 +253,7 @@ async def test_query_engine_clamps_oversized_max_tokens_before_request(tmp_path:
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
         model="openai-compatible-model",
+        context_window_tokens=200_000,
         system_prompt="system",
         max_tokens=400_000,
     )
@@ -274,6 +275,7 @@ async def test_query_engine_retries_with_provider_completion_token_limit(tmp_pat
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
         model="openai-compatible-model",
+        context_window_tokens=200_000,
         system_prompt="system",
         max_tokens=120_000,
         max_turns=1,
@@ -321,7 +323,7 @@ async def test_query_engine_executes_tool_calls(tmp_path: Path, monkeypatch):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -372,7 +374,7 @@ async def test_query_engine_allows_unbounded_turns_when_max_turns_is_none(tmp_pa
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         max_turns=None,
     )
@@ -391,7 +393,7 @@ async def test_query_engine_surfaces_retry_status_events(tmp_path: Path):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -403,8 +405,7 @@ async def test_query_engine_surfaces_retry_status_events(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, monkeypatch):
-    long_text = "alpha " * 50000
-    monkeypatch.setattr("openharness.services.compact.should_autocompact", lambda *args, **kwargs: True)
+    long_text = "alpha " * 12_000
     engine = QueryEngine(
         api_client=FakeApiClient(
             [
@@ -423,6 +424,7 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
         cwd=tmp_path,
         model="claude-sonnet-4-6",
         system_prompt="system",
+        auto_compact_threshold_tokens=45_000,
     )
     engine.load_messages(
         [
@@ -437,6 +439,8 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
         ]
     )
 
+    for message in engine._messages[3:]:
+        message.content = [TextBlock(text="recent detail")]
     events = [event async for event in engine.submit_message("hello")]
 
     hooks_start_index = next(i for i, event in enumerate(events) if isinstance(event, CompactProgressEvent) and event.phase == "hooks_start")
@@ -449,18 +453,17 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
 
 @pytest.mark.asyncio
 async def test_query_engine_reactive_compacts_after_prompt_too_long(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("openharness.services.compact.should_autocompact", lambda *args, **kwargs: False)
     engine = QueryEngine(
         api_client=PromptTooLongThenSuccessApiClient(),
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
     engine.load_messages(
         [
-            ConversationMessage(role="user", content=[TextBlock(text="one")]),
+            ConversationMessage(role="user", content=[TextBlock(text="one " * 2000)]),
             ConversationMessage(role="assistant", content=[TextBlock(text="two")]),
             ConversationMessage(role="user", content=[TextBlock(text="three")]),
             ConversationMessage(role="assistant", content=[TextBlock(text="four")]),
@@ -520,7 +523,7 @@ async def test_query_engine_tracks_skills_without_coding_work_logs(tmp_path: Pat
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         tool_metadata={},
     )
@@ -574,14 +577,14 @@ async def test_query_engine_respects_pre_tool_hook_blocks(tmp_path: Path):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         hook_executor=HookExecutor(
             registry,
             HookExecutionContext(
                 cwd=tmp_path,
                 api_client=StaticApiClient('{"ok": false, "reason": "no reading"}'),
-                default_model="claude-test",
+                default_model="claude-sonnet-4-6",
             ),
         ),
     )
@@ -616,7 +619,7 @@ async def test_user_prompt_submit_hook_fires(tmp_path: Path, monkeypatch):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         hook_executor=recorder,  # type: ignore[arg-type]
     )
@@ -638,7 +641,7 @@ async def test_stop_hook_fires_on_clean_turn(tmp_path: Path, monkeypatch):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         hook_executor=recorder,  # type: ignore[arg-type]
     )
@@ -685,7 +688,7 @@ async def test_stop_hook_does_not_fire_when_tool_uses_present(tmp_path: Path, mo
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         hook_executor=recorder,  # type: ignore[arg-type]
     )
@@ -739,7 +742,7 @@ async def test_notification_hook_fires_on_permission_prompt(tmp_path: Path, monk
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.DEFAULT)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         permission_prompt=_permission_prompt,
         hook_executor=recorder,  # type: ignore[arg-type]
@@ -766,7 +769,7 @@ def _tool_context(tmp_path: Path, registry: ToolRegistry, settings: PermissionSe
         tool_registry=registry,
         permission_checker=PermissionChecker(settings),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         max_tokens=1,
         max_turns=1,
@@ -831,7 +834,7 @@ async def test_execute_tool_call_returns_actionable_reason_when_user_denies_conf
             tool_registry=create_research_tool_registry(),
             permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.DEFAULT)),
             cwd=tmp_path,
-            model="claude-test",
+            model="claude-sonnet-4-6",
             system_prompt="system",
             max_tokens=1,
             max_turns=1,
@@ -881,7 +884,7 @@ async def test_query_engine_executes_ask_user_tool(tmp_path: Path):
         tool_registry=create_research_tool_registry(),
         permission_checker=PermissionChecker(PermissionSettings()),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         ask_user_prompt=_answer,
     )
@@ -935,7 +938,7 @@ async def test_query_engine_applies_path_rules_to_relative_read_file_targets(tmp
             )
         ),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -986,7 +989,7 @@ async def test_query_engine_applies_path_rules_to_write_file_targets_in_full_aut
             )
         ),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -1059,7 +1062,7 @@ async def test_query_engine_synthesizes_tool_result_when_single_tool_raises(tmp_
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -1105,15 +1108,6 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
     """Compaction must not make a completed tool turn disappear from engine history."""
 
     monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
-    should_calls = {"count": 0}
-
-    def _should_compact_once(*args, **kwargs):
-        del args, kwargs
-        should_calls["count"] += 1
-        return should_calls["count"] == 1
-
-    monkeypatch.setattr("openharness.services.compact.should_autocompact", _should_compact_once)
-
     registry = ToolRegistry()
     registry.register(_OkTool())
     engine = QueryEngine(
@@ -1148,8 +1142,9 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
+        auto_compact_threshold_tokens=5_000,
     )
     engine.load_messages(
         [
@@ -1160,6 +1155,7 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
         ]
     )
 
+    engine._messages[0].content = [TextBlock(text="historical detail " * 2000)]
     events = [event async for event in engine.submit_message("new request after compact")]
 
     assert any(isinstance(event, CompactProgressEvent) and event.phase == "compact_end" for event in events)
@@ -1217,7 +1213,7 @@ async def test_query_engine_synthesizes_tool_result_when_parallel_tool_raises(tm
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -1276,7 +1272,7 @@ async def test_parallel_fast_result_is_emitted_before_slow_tool_settles(tmp_path
         ]),
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
-        cwd=tmp_path, model="claude-test", system_prompt="system",
+        cwd=tmp_path, model="claude-sonnet-4-6", system_prompt="system",
     )
     fast_received = asyncio.Event()
 
@@ -1316,7 +1312,7 @@ async def test_query_engine_sanitizes_dangling_tool_use_before_new_prompt(tmp_pa
         tool_registry=ToolRegistry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
     engine.load_messages([
@@ -1345,7 +1341,7 @@ async def test_query_engine_continue_pending_sanitizes_dangling_tool_use(tmp_pat
         tool_registry=ToolRegistry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
     engine.load_messages([
@@ -1400,7 +1396,7 @@ async def test_query_engine_offloads_large_tool_result_outputs(tmp_path: Path, m
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
         tool_metadata={},
     )
@@ -1434,7 +1430,7 @@ async def test_query_engine_drops_empty_assistant_messages(tmp_path: Path):
         tool_registry=ToolRegistry(),
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
         cwd=tmp_path,
-        model="claude-test",
+        model="claude-sonnet-4-6",
         system_prompt="system",
     )
 
@@ -1473,7 +1469,7 @@ async def test_same_name_parallel_tools_keep_ids_when_completion_order_reverses(
         ]),
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
-        cwd=tmp_path, model='claude-test', system_prompt='system',
+        cwd=tmp_path, model='claude-sonnet-4-6', system_prompt='system',
     )
     events = []
     async def consume():

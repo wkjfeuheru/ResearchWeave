@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import base64
 import json
 import platform
@@ -224,6 +226,8 @@ class CodexApiClient:
         self._url = _resolve_codex_url(base_url)
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+        from openharness.services.context_budget import checked_request
+        request = checked_request(self, request)
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -247,7 +251,7 @@ class CodexApiClient:
         if last_error is not None:
             raise self._translate_error(last_error) from last_error
 
-    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+    def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
         body: dict[str, Any] = {
             "model": request.model,
             "store": False,
@@ -265,6 +269,10 @@ class CodexApiClient:
         if effort:
             body["reasoning"] = {"effort": effort}
 
+        return replace(request, prepared_payload=body)
+
+    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+        body = (request if request.prepared_payload is not None else self.prepare_request(request)).prepared_payload
         content: list[TextBlock | ToolUseBlock] = []
         current_text_parts: list[str] = []
         completed_response: dict[str, Any] | None = None

@@ -33,8 +33,8 @@ from openharness.services.compact import (
 
 def test_token_estimation_helpers():
     assert estimate_tokens("") == 0
-    assert estimate_tokens("abcd") == 1
-    assert estimate_message_tokens(["abcd", "abcdefgh"]) == 3
+    assert estimate_tokens("abcd") == 2
+    assert estimate_message_tokens(["abcd", "abcdefgh"]) == 5
 
 
 def test_compact_and_summarize_messages():
@@ -222,8 +222,8 @@ def test_microcompact_compacts_mcp_results_while_preserving_recent():
         for block in message.content
         if isinstance(block, ToolResultBlock)
     ]
-    assert results[0].content == "[Old tool result content cleared]"
-    assert results[1].content == "[Old tool result content cleared]"
+    assert results[0].content.startswith("[Archived tool result]")
+    assert results[1].content.startswith("[Archived tool result]")
     assert results[2].content.startswith("snapshot 2")
 
 
@@ -236,7 +236,7 @@ def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
         ),
         ConversationMessage(
             role="user",
-            content=[ToolResultBlock(tool_use_id="toolu_custom_0", content="A" * 512, is_error=False)],
+            content=[ToolResultBlock(tool_use_id="toolu_custom_0", content="A" * 4096, is_error=False)],
         ),
         ConversationMessage(
             role="assistant",
@@ -257,7 +257,7 @@ def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
         for block in message.content
         if isinstance(block, ToolResultBlock)
     ]
-    assert results[0].content == "[Old tool result content cleared]"
+    assert results[0].content.startswith("[Archived tool result]")
     assert results[1].content == "B" * 512
 
 
@@ -293,13 +293,14 @@ def test_should_autocompact_counts_image_tokens(monkeypatch):
         "local-vision",
         AutoCompactState(),
         auto_compact_threshold_tokens=7000,
+        context_window_tokens=200_000,
     ) is True
 
 
 @pytest.mark.asyncio
 async def test_compact_conversation_retries_after_incomplete_response():
     messages = [
-        ConversationMessage(role="user", content=[TextBlock(text="alpha")]),
+        ConversationMessage(role="user", content=[TextBlock(text="alpha " * 2000)]),
         ConversationMessage(role="assistant", content=[TextBlock(text="beta")]),
         ConversationMessage(role="user", content=[TextBlock(text="gamma")]),
         ConversationMessage(role="assistant", content=[TextBlock(text="delta")]),
@@ -311,7 +312,7 @@ async def test_compact_conversation_retries_after_incomplete_response():
     compacted = await compact_conversation(
         messages,
         api_client=_CompactApiClient(["", "<summary>condensed</summary>"]),
-        model="claude-test",
+        model="claude-sonnet-4-6",
     )
 
     rebuilt = build_post_compact_messages(compacted)
@@ -334,6 +335,7 @@ async def test_compact_conversation_replaces_images_in_summary_request():
         messages,
         api_client=client,
         model="local-vision",
+        context_window_tokens=200_000,
         preserve_recent=1,
     )
 
@@ -364,9 +366,9 @@ async def test_compact_conversation_runs_hooks_and_preserves_carryover_state(tmp
         ConversationMessage(role="assistant", content=[TextBlock(text="Looking at the attachment")]),
         ConversationMessage(
             role="assistant",
-            content=[ToolUseBlock(name="read_file", input={"path": str(image_path)})],
+            content=[ToolUseBlock(id="image_read", name="read_file", input={"path": str(image_path)})],
         ),
-        ConversationMessage(role="user", content=[TextBlock(text="Please keep going")]),
+        ConversationMessage(role="user", content=[ToolResultBlock(tool_use_id="image_read", content="image read"), TextBlock(text="Please keep going")]),
         ConversationMessage(role="assistant", content=[TextBlock(text="Working through it")]),
         ConversationMessage(role="user", content=[TextBlock(text="And preserve context")]),
         ConversationMessage(role="assistant", content=[TextBlock(text="Sure")]),
@@ -375,7 +377,7 @@ async def test_compact_conversation_runs_hooks_and_preserves_carryover_state(tmp
     compacted = await compact_conversation(
         messages,
         api_client=_CompactApiClient(["<summary>condensed</summary>"]),
-        model="claude-test",
+        model="claude-sonnet-4-6",
         preserve_recent=2,
         hook_executor=hook_executor,
         carryover_metadata={
@@ -400,7 +402,7 @@ async def test_compact_conversation_runs_hooks_and_preserves_carryover_state(tmp
 @pytest.mark.asyncio
 async def test_compact_conversation_keeps_tool_pair_when_boundary_would_split_it():
     messages = [
-        ConversationMessage.from_user_text("alpha"),
+        ConversationMessage.from_user_text("alpha " * 2000),
         ConversationMessage(role="assistant", content=[TextBlock(text="beta")]),
         ConversationMessage(role="user", content=[TextBlock(text="gamma")]),
         ConversationMessage(
@@ -418,7 +420,7 @@ async def test_compact_conversation_keeps_tool_pair_when_boundary_would_split_it
     compacted = await compact_conversation(
         messages,
         api_client=_CompactApiClient(["<summary>condensed</summary>"]),
-        model="claude-test",
+        model="claude-sonnet-4-6",
         preserve_recent=3,
     )
 
@@ -435,36 +437,24 @@ async def test_compact_conversation_keeps_tool_pair_when_boundary_would_split_it
 
 
 @pytest.mark.asyncio
-async def test_compact_conversation_drops_orphan_preserved_tool_use():
-    messages = [
-        ConversationMessage.from_user_text("alpha"),
-        ConversationMessage(role="assistant", content=[TextBlock(text="beta")]),
-        ConversationMessage(role="user", content=[TextBlock(text="gamma")]),
-        ConversationMessage(
-            role="assistant",
-            content=[ToolUseBlock(id="toolu_orphan", name="edit_file", input={"path": "demo.txt"})],
-        ),
-    ]
-
-    compacted = await compact_conversation(
-        messages,
-        api_client=_CompactApiClient(["<summary>condensed</summary>"]),
-        model="claude-test",
-        preserve_recent=1,
-    )
-
-    rebuilt = build_post_compact_messages(compacted)
-    assert not any(
-        isinstance(block, ToolUseBlock) and block.id == "toolu_orphan"
-        for message in rebuilt
-        for block in message.content
-    )
+async def test_compact_conversation_rejects_orphan_without_discarding_it():
+    from openharness.services.context_budget import ContextBudgetError
+    messages = [ConversationMessage.from_user_text("alpha " * 2000),
+                ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                ConversationMessage.from_user_text("gamma"),
+                ConversationMessage(role="assistant", content=[
+                    ToolUseBlock(id="toolu_orphan", name="edit_file", input={"path": "demo.txt"})])]
+    original = [m.model_dump() for m in messages]
+    with pytest.raises(ContextBudgetError, match="Unfinished"):
+        await compact_conversation(messages, api_client=_CompactApiClient(["<summary>condensed</summary>"]),
+                                   model="claude-sonnet-4-6", preserve_recent=1)
+    assert [m.model_dump() for m in messages] == original
 
 
 @pytest.mark.asyncio
 async def test_compact_post_messages_keep_boundary_summary_recent_then_attachments():
     messages = [
-        ConversationMessage(role="user", content=[TextBlock(text="first")]),
+        ConversationMessage(role="user", content=[TextBlock(text="first " * 2000)]),
         ConversationMessage(role="assistant", content=[TextBlock(text="second")]),
         ConversationMessage(role="user", content=[TextBlock(text="third")]),
         ConversationMessage(role="assistant", content=[TextBlock(text="fourth")]),
@@ -476,7 +466,7 @@ async def test_compact_post_messages_keep_boundary_summary_recent_then_attachmen
     compacted = await compact_conversation(
         messages,
         api_client=_CompactApiClient(["<summary>condensed</summary>"]),
-        model="claude-test",
+        model="claude-sonnet-4-6",
         preserve_recent=2,
         carryover_metadata={
             "invoked_skills": ["research-skill"],
@@ -495,8 +485,7 @@ async def test_compact_post_messages_keep_boundary_summary_recent_then_attachmen
 
 @pytest.mark.asyncio
 async def test_auto_compact_records_richer_checkpoint_metadata(monkeypatch):
-    monkeypatch.setattr("openharness.services.compact.should_autocompact", lambda *args, **kwargs: True)
-    long_text = "alpha " * 50000
+    long_text = "alpha " * 5000
     messages = [
         ConversationMessage(role="user", content=[TextBlock(text=long_text)]),
         ConversationMessage(role="assistant", content=[TextBlock(text=long_text)]),
@@ -514,6 +503,8 @@ async def test_auto_compact_records_richer_checkpoint_metadata(monkeypatch):
         model="claude-sonnet-4-6",
         state=AutoCompactState(),
         carryover_metadata=metadata,
+        preserve_recent=1,
+        auto_compact_threshold_tokens=60_000,
     )
 
     assert was_compacted is True
@@ -534,7 +525,6 @@ async def test_auto_compact_if_needed_returns_original_messages_after_timeout(mo
         await asyncio.sleep(0.05)
 
     monkeypatch.setattr("openharness.services.compact.COMPACT_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("openharness.services.compact.should_autocompact", lambda *args, **kwargs: True)
     long_text = "alpha " * 50000
     messages = [
         ConversationMessage(role="user", content=[TextBlock(text=long_text)]),
@@ -573,4 +563,5 @@ def test_should_autocompact_uses_custom_context_window():
         "claude-sonnet-4-6",
         AutoCompactState(),
         context_window_tokens=4000,
+        max_tokens=512,
     ) is True

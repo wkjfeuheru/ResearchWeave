@@ -25,6 +25,7 @@ class PromptHookDefinition(BaseModel):
     type: Literal["prompt"] = "prompt"
     prompt: str
     model: str | None = None
+    context_window_tokens: int | None = Field(default=None, gt=0)
     timeout_seconds: int = Field(default=30, ge=1, le=600)
     matcher: str | None = None
     block_on_failure: bool = True
@@ -51,6 +52,7 @@ class AgentHookDefinition(BaseModel):
     type: Literal["agent"] = "agent"
     prompt: str
     model: str | None = None
+    context_window_tokens: int | None = Field(default=None, gt=0)
     timeout_seconds: int = Field(default=60, ge=1, le=1200)
     matcher: str | None = None
     block_on_failure: bool = True

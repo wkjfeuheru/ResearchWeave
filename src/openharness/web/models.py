@@ -16,6 +16,8 @@ class ModelInput(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     base_url: str | None = Field(default=None, max_length=2000)
     api_key: SecretStr | None = None
+    context_window_tokens: int | None = Field(default=None, gt=0)
+    auto_compact_threshold_tokens: int | None = Field(default=None, gt=0)
 
     @field_validator("base_url")
     @classmethod

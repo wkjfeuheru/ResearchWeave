@@ -15,6 +15,7 @@ from openharness.engine.messages import ConversationMessage, sanitize_conversati
 from openharness.research.store import ResearchStore
 from openharness.services.session_storage import _persistable_tool_metadata
 from openharness.utils.fs import atomic_write_text
+from openharness.web.citations import project_answer_rows
 
 
 class WebSessionBackend:
@@ -106,8 +107,13 @@ class WebSessionBackend:
         )
         record["messages"] = [m.model_dump(mode="json") for m in messages]
         record["tool_metadata"] = _persistable_tool_metadata(record.get("tool_metadata"))
-        if include_research_progress:
-            record["research_progress"] = ResearchStore(self.cwd, session_id).progress()
+        if include_research_progress or record.get("display_messages"):
+            research = ResearchStore(self.cwd, session_id)
+            memory = research.load()
+            if record.get("display_messages"):
+                record["display_messages"] = project_answer_rows(record["display_messages"], memory.answers)
+            if include_research_progress:
+                record["research_progress"] = research.progress(memory)
         return record
 
     def list_snapshots(self, cwd, limit=100) -> list[dict]:

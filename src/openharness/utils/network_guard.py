@@ -136,8 +136,14 @@ async def fetch_public_http_response(
     max_redirects: int = 5,
     max_bytes: int | None = None,
     proxy: str | None = None,
+    method: str = "GET",
+    json: dict | None = None,
 ) -> httpx.Response:
     """Fetch one HTTP resource while validating every redirect hop."""
+    if method not in {"GET", "POST"}:
+        raise ValueError("only GET and POST requests are supported")
+    if method == "POST" and max_redirects != 0:
+        raise ValueError("POST requests must disable redirects")
     current_url = url
     current_params = params
 
@@ -168,10 +174,13 @@ async def fetch_public_http_response(
                 synthetic_cidrs=synthetic_cidrs,
             )
             if max_bytes is None:
-                response = await client.get(current_url, params=current_params, headers=headers)
+                response = (await client.get(current_url, params=current_params, headers=headers)
+                            if method == "GET" else
+                            await client.post(current_url, params=current_params, headers=headers, json=json))
             else:
                 # Stream decoded bytes so compressed/chunked responses cannot bypass the limit.
-                async with client.stream("GET", current_url, params=current_params, headers=headers) as streamed:
+                async with client.stream(method, current_url, params=current_params, headers=headers,
+                                         **({"json": json} if method == "POST" else {})) as streamed:
                     chunks = bytearray()
                     async for chunk in streamed.aiter_bytes():
                         chunks.extend(chunk)

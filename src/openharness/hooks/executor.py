@@ -36,6 +36,7 @@ class HookExecutionContext:
     cwd: Path
     api_client: SupportsStreamingMessages
     default_model: str
+    context_window_tokens: int | None = None
 
 
 class HookExecutor:
@@ -48,6 +49,15 @@ class HookExecutor:
     def update_registry(self, registry: HookRegistry) -> None:
         """Replace the active hook registry."""
         self._registry = registry
+
+    def with_api_client(self, api_client: SupportsStreamingMessages, default_model: str,
+                        *, context_window_tokens: int | None = None) -> HookExecutor:
+        """Reuse hook policy with a separate model transport and execution context."""
+        return HookExecutor(self._registry, HookExecutionContext(
+            cwd=self._context.cwd, api_client=api_client, default_model=default_model,
+            context_window_tokens=context_window_tokens if context_window_tokens is not None else (
+                self._context.context_window_tokens if default_model == self._context.default_model else None),
+        ))
 
     def update_context(
         self,
@@ -186,8 +196,13 @@ class HookExecutor:
             messages=[ConversationMessage.from_user_text(prompt)],
             system_prompt=prefix,
             max_tokens=512,
+            context_window_tokens=(hook.context_window_tokens if hook.context_window_tokens is not None else (
+                self._context.context_window_tokens
+                if not hook.model or hook.model == self._context.default_model else None)),
         )
 
+        from openharness.services.context_budget import checked_request
+        request = checked_request(self._context.api_client, request)
         text_chunks: list[str] = []
         final_event: ApiMessageCompleteEvent | None = None
         async for event_item in self._context.api_client.stream_message(request):

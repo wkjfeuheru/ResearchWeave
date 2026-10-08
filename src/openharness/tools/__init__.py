@@ -18,6 +18,7 @@ from openharness.tools.tool_search_tool import ToolSearchTool
 from openharness.tools.web_fetch_tool import WebFetchTool
 from openharness.tools.web_search_tool import WebSearchTool
 from openharness.tools.research_memory_tool import ResearchMemoryTool
+from openharness.tools.investigate_conflict_tool import InvestigateConflictTool
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
 from openharness.tools.list_mcp_resources_tool import ListMcpResourcesTool
 from openharness.tools.read_mcp_resource_tool import ReadMcpResourceTool
@@ -41,6 +42,7 @@ def create_research_tool_registry(mcp_manager=None) -> ToolRegistry:
         McpAuthTool(),
         NotebookEditTool(),
         ResearchMemoryTool(),
+        InvestigateConflictTool(),
         SkillTool(),
         SleepTool(),
         ToolSearchTool(),

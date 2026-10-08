@@ -49,6 +49,8 @@ def models_list() -> dict:
                 "api_format": profile.api_format,
                 "model": profile.resolved_model,
                 "base_url": profile.base_url,
+                "context_window_tokens": profile.context_window_tokens,
+                "auto_compact_threshold_tokens": profile.auto_compact_threshold_tokens,
                 "configured": configured,
                 "active": name == active,
                 "supported": supported,
@@ -80,6 +82,11 @@ def save_model(data: ModelInput, profile_id: str | None = None) -> str:
         last_model=data.model,
         base_url=data.base_url,
         credential_slot=old.credential_slot if old else profile_id,
+        context_window_tokens=(data.context_window_tokens if "context_window_tokens" in data.model_fields_set
+            else old.context_window_tokens if old and old.resolved_model == data.model else None),
+        auto_compact_threshold_tokens=(data.auto_compact_threshold_tokens
+            if "auto_compact_threshold_tokens" in data.model_fields_set
+            else old.auto_compact_threshold_tokens if old else None),
     )
     manager.upsert_profile(profile_id, profile)
     if data.api_key and data.api_key.get_secret_value().strip():

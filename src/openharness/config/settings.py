@@ -64,6 +64,8 @@ class ResearchMemorySettings(BaseModel):
 
     enabled: bool = True
     injection_budget_tokens: int = Field(default=6000, ge=256)
+    conflict_max_turns: int = Field(default=12, ge=1, le=100)
+    conflict_timeout_seconds: float = Field(default=180, gt=0, le=3600)
 
 
 class SandboxNetworkSettings(BaseModel):
@@ -137,6 +139,7 @@ class ResearchSiteConfig(BaseModel):
 class WebSettings(BaseModel):
     """Outbound web tool configuration."""
 
+    search_provider: Literal["tavily", "html"] = "tavily"
     proxy: str | None = None
     resolution_mode: str = "auto"
     synthetic_dns_cidrs: list[str] = Field(default_factory=list)
@@ -569,6 +572,7 @@ class VisionModelConfig(BaseModel):
     model: str = ""
     api_key: str = ""
     base_url: str = ""
+    context_window_tokens: int | None = None
 
     @classmethod
     def from_env(cls) -> "VisionModelConfig":
@@ -577,6 +581,8 @@ class VisionModelConfig(BaseModel):
             model=os.environ.get("OPENHARNESS_VISION_MODEL", "").strip(),
             api_key=os.environ.get("OPENHARNESS_VISION_API_KEY", "").strip(),
             base_url=os.environ.get("OPENHARNESS_VISION_BASE_URL", "").strip(),
+            context_window_tokens=(int(os.environ["OPENHARNESS_VISION_CONTEXT_WINDOW_TOKENS"])
+                if os.environ.get("OPENHARNESS_VISION_CONTEXT_WINDOW_TOKENS") else None),
         )
 
     @property

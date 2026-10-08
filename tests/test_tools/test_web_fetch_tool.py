@@ -147,6 +147,7 @@ def test_html_to_text_handles_large_html_quickly():
 
 @pytest.mark.asyncio
 async def test_web_search_reports_empty_timeout_exception(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_WEB_SEARCH_URL", DEFAULT_SEARCH_URL)
     async def timeout(*args, **kwargs):
         raise httpx.ConnectTimeout("")
 
@@ -294,7 +295,10 @@ def test_parse_bing_results_extracts_title_url_snippet():
 
 
 @pytest.mark.asyncio
-async def test_web_search_tool_defaults_to_bing_endpoint(tmp_path, monkeypatch):
+async def test_web_search_tool_html_provider_defaults_to_bing_endpoint(tmp_path, monkeypatch):
+    from openharness.config import Settings, save_settings
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    save_settings(Settings(web={"search_provider": "html"}))
     calls = []
 
     async def fake_fetch(url: str, **kwargs: object) -> httpx.Response:

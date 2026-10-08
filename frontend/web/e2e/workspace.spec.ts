@@ -1,5 +1,132 @@
 import { expect, test } from '@playwright/test';
 
+for (const outcome of ['unresolved', 'compatible']) {
+  test(`conflict outcomes remain visible after tasks complete and history restores: ${outcome}`, async ({ page }) => {
+    const created = await page.request.post('/api/models', { data: {
+      label: '冲突进度模型', api_format: 'openai', model: 'conflict-test', api_key: 'conflict-test-secret',
+    } });
+    const { id } = await created.json();
+    const response = await page.request.post(`/__test/conflict-progress?profile_id=${id}&outcome=${outcome}`);
+    expect(response.ok()).toBe(true);
+    const { session_id } = await response.json();
+    await page.addInitScript(sid => sessionStorage.setItem('openharness.web.session', sid), session_id);
+    await page.goto('/');
+    const progress = page.getByLabel('研究任务进度');
+    const toggle = progress.getByRole('button');
+    await expect(progress).toContainText('1/1 项任务完成');
+    await expect(toggle).toHaveAttribute('aria-expanded', outcome === 'unresolved' ? 'true' : 'false');
+    if (outcome === 'compatible') await toggle.click();
+    const conflicts = page.getByLabel('争议处理进度');
+    await expect(conflicts).toContainText('两份公告的营收数字为何不同？');
+    await expect(conflicts).toContainText(outcome === 'unresolved' ? '仍未决' : '裁决完成');
+    await expect(conflicts).not.toContainText('assessments');
+    await page.reload();
+    await expect(conflicts).toContainText(outcome === 'unresolved' ? '仍未决' : '裁决完成');
+  });
+}
+
+test('long collapsed progress and website-only source rows survive refresh and copy', async ({ page }) => {
+  const created = await page.request.post('/api/models', { data: {
+    label: '来源布局模型', api_format: 'openai', model: 'layout-test', api_key: 'layout-test-secret',
+  } });
+  const { id } = await created.json();
+  const response = await page.request.post(`/__test/citation-layout?profile_id=${id}`);
+  expect(response.ok()).toBe(true);
+  const { session_id } = await response.json();
+  await page.addInitScript(sid => {
+    sessionStorage.setItem('openharness.web.session', sid);
+    Object.defineProperty(navigator, 'clipboard', { value: {
+      writeText: async (text: string) => { (window as any).copiedAnswer = text; },
+    }, configurable: true });
+  }, session_id);
+  await page.goto('/');
+  const toggle = page.getByLabel('研究任务进度').getByRole('button');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(toggle).not.toContainText('收集国内新增装机');
+    const bounds = await toggle.evaluate(element => {
+      const title = element.querySelector('strong')!;
+      const count = element.querySelector('.research-progress-count')!;
+      return { titleRight: title.getBoundingClientRect().right, countLeft: count.getBoundingClientRect().left,
+        clipped: title.scrollWidth > title.clientWidth, tooltip: title.getAttribute('title'),
+        overflow: document.documentElement.scrollWidth > window.innerWidth };
+    });
+    expect(bounds.titleRight).toBeLessThanOrEqual(bounds.countLeft);
+    expect(bounds.clipped).toBe(true);
+    expect(bounds.tooltip).toContain('光伏行业景气度');
+    expect(bounds.overflow).toBe(false);
+    const answer = page.locator('.answer-content');
+    await expect(answer).toContainText('结论0；结论1[1]；结论2；结论3[2]；重复[1]');
+    await expect(answer.locator('ol > li')).toHaveCount(2);
+    await expect(answer).not.toContainText('内部数据');
+    const items = await answer.locator('ol > li').evaluateAll(elements => elements.map(e => ({ top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom })));
+    expect(items[1].top).toBeGreaterThanOrEqual(items[0].bottom);
+  }
+  const text = await page.locator('.answer-content').innerText();
+  await page.getByRole('button', { name: '复制回复', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).copiedAnswer)).toContain('\n\n来源：\n\n1. ');
+  expect(await page.evaluate(() => (window as any).copiedAnswer)).not.toContain('内部数据');
+  await page.reload();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.answer-content')).toHaveText(text);
+  await toggle.click();
+  await expect(page.getByLabel('研究任务进度')).toContainText('收集国内新增装机');
+});
+
+test('session approvals skip repeated confirmations and remain isolated after refresh', async ({ page }) => {
+  const prompts: { kind: string; tool_name?: string }[] = [];
+  page.on('websocket', socket => socket.on('framereceived', event => {
+    const data = JSON.parse(String(event.payload));
+    if (data.type === 'prompt') prompts.push(data);
+  }));
+  const created = await page.request.post('/api/models', { data: {
+    label: '会话授权测试模型', api_format: 'openai', model: 'session-approval-test', api_key: 'session-approval-secret',
+  } });
+  expect(created.ok()).toBe(true);
+  const { id } = await created.json();
+  await page.goto('/');
+  await page.getByLabel('当前对话模型').selectOption(id);
+  const approval = page.getByRole('dialog', { name: '操作确认' });
+  const sendWrite = async () => {
+    await page.getByLabel('对话输入').fill('请写入测试文件');
+    await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  };
+  await sendWrite();
+  await expect(approval).toContainText('同一工具');
+  await expect(approval.getByRole('button', { name: '允许此次操作', exact: true })).toBeVisible();
+  await approval.getByRole('button', { name: '本会话始终允许', exact: true }).click();
+  await expect(approval.locator('.diff')).toBeVisible();
+  await expect(approval).toContainText('此文件');
+  await approval.getByRole('button', { name: '本会话始终允许', exact: true }).click();
+  await expect(approval).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+  expect(prompts.map(prompt => prompt.kind)).toEqual(['permission', 'edit']);
+  for (const refresh of [false, true]) {
+    if (refresh) await page.reload();
+    await sendWrite();
+    await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+    await expect(approval).toHaveCount(0);
+    expect(prompts).toHaveLength(2);
+  }
+  await page.getByLabel('对话输入').fill('请提问');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  const question = page.getByRole('dialog', { name: '补充研究信息' });
+  await expect(question).toBeVisible();
+  await expect(question.getByRole('button', { name: '本会话始终允许', exact: true })).toHaveCount(0);
+  await question.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
+  await page.getByLabel('当前对话模型').selectOption(id);
+  await sendWrite();
+  await expect(approval.locator('.tag')).toHaveText('写入文件');
+  expect(prompts.at(-1)?.kind).toBe('permission');
+  await approval.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+});
+
 test('model configuration, skills, streaming, approvals, stop and recovery', async ({ page }) => {
   const browserErrors: string[] = [];
   page.on('pageerror', error => browserErrors.push(error.message));
@@ -48,6 +175,15 @@ test('model configuration, skills, streaming, approvals, stop and recovery', asy
   await approval.getByRole('button', { name: '取消', exact: true }).click();
   await expect(approval).toHaveCount(0);
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+  await page.getByLabel('对话输入').fill('并行确认测试');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  for (let index = 0; index < 4; index++) {
+    await expect(approval).toBeVisible();
+    await expect(page.getByText('等待操作确认', { exact: true })).toBeVisible();
+    await approval.getByRole('button', { name: '取消', exact: true }).click();
+  }
+  await expect(approval).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
   await page.getByLabel('对话输入').fill('请提问');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('你希望研究哪个时间范围');
@@ -94,6 +230,13 @@ test('responsive navigation and empty skill search', async ({ page }) => {
 });
 
 test('research progress, source footnotes and interrupt to replan', async ({ page }) => {
+  const progressFrames: any[] = [];
+  page.on('websocket', socket => socket.on('framereceived', event => {
+    try {
+      const data = JSON.parse(String(event.payload));
+      if (data.type === 'research_progress') progressFrames.push(data.progress);
+    } catch { /* Ignore non-JSON transport frames. */ }
+  }));
   const created = await page.request.post('/api/models', { data: {
     label: '研究记忆测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret',
   } });
@@ -103,18 +246,38 @@ test('research progress, source footnotes and interrupt to replan', async ({ pag
   await page.getByLabel('当前对话模型').selectOption(id);
   await page.getByLabel('对话输入').fill('开展测试研究');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  const progress = page.getByLabel('研究任务进度');
+  const progressToggle = progress.getByRole('button');
+  await expect(progressToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(progress).toContainText('0/2 项任务完成');
+  await expect(progress.locator('li').filter({ hasText: '收集年报' })).toContainText('进行中');
+  await expect(progress).toContainText('1/2 项任务完成');
+  await expect(progress.locator('li').filter({ hasText: '核验与分析' })).toContainText('进行中');
   await expect(page.getByLabel('研究任务进度')).toContainText('2/2 项任务完成');
-  await expect(page.getByLabel('研究任务进度')).toContainText('收集年报');
-  await expect(page.locator('.message.assistant').last()).toContainText('来源：');
-  await expect(page.locator('.message.assistant').last()).toContainText('report.txt');
-  await expect(page.locator('.message.assistant').last()).toContainText('待核验');
+  await expect(progressToggle).toHaveAttribute('aria-expanded', 'false');
+  expect(progressFrames.some(item => item.tasks?.[0]?.status === 'completed'
+    && ['pending', 'in_progress'].includes(item.tasks?.[1]?.status))).toBe(true);
+  expect(progressFrames.some(item => item.current_task_id === item.tasks?.[1]?.id
+    && item.tasks?.[1]?.status === 'in_progress')).toBe(true);
+  await progressToggle.click();
+  await expect(progressToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(progress).toContainText('收集年报');
+  await expect(page.locator('.message.assistant').last().locator('.answer-content')).not.toContainText('来源：');
+  await expect(page.locator('.message.assistant').last().locator('.answer-content')).not.toContainText('report.txt');
+  await expect(page.locator('.message.assistant').last()).toContainText('已核对原文');
   await expect(page.locator('.tool-row')).toHaveCount(0);
   await expect(page.locator('.message-list')).not.toContainText('research_memory');
   await page.reload();
   await expect(page.getByLabel('研究任务进度')).toContainText('2/2 项任务完成');
+  await expect(page.getByLabel('研究任务进度').getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+  await page.getByLabel('研究任务进度').getByRole('button').click();
+  await expect(page.getByLabel('研究任务进度').getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+  await page.reload();
+  await expect(page.getByLabel('研究任务进度').getByRole('button')).toHaveAttribute('aria-expanded', 'false');
   await page.getByLabel('对话输入').fill('慢速研究公司 A');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.locator('.message.assistant').last()).toContainText('旧研究执行中');
+  await expect(page.getByLabel('研究任务进度').getByRole('button')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByLabel('对话输入')).toBeEnabled();
   await page.getByLabel('对话输入').fill('改为研究公司 B');
   await page.getByRole('button', { name: '打断并修改', exact: true }).click();
@@ -127,6 +290,24 @@ test('research progress, source footnotes and interrupt to replan', async ({ pag
   await expect(page.locator('.message.user').filter({ hasText: '改为研究公司 B' })).toHaveCount(1);
   await expect(page.locator('.message-list')).not.toContainText('method');
   await page.screenshot({ path: 'test-results/research-memory.png', fullPage: true });
+});
+
+test('blocked research task stays expanded with its blocker', async ({ page }) => {
+  const created = await page.request.post('/api/models', { data: {
+    label: '受阻任务测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret',
+  } });
+  expect(created.ok()).toBe(true);
+  const { id } = await created.json();
+  await page.goto('/');
+  await page.getByLabel('当前对话模型').selectOption(id);
+  await page.getByLabel('对话输入').fill('慢速研究公司 A');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await expect(page.locator('.message.assistant').last()).toContainText('旧研究执行中');
+  await page.getByRole('button', { name: '停止生成' }).click();
+  const progress = page.getByLabel('研究任务进度');
+  await expect(progress.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+  await expect(progress.getByRole('button')).toHaveAttribute('aria-disabled', 'true');
+  await expect(progress).toContainText('受阻 · 执行已停止');
 });
 
 async function prepareProcessChat(page: import('@playwright/test').Page) {

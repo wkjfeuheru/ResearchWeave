@@ -1,0 +1,107 @@
+{
+  "synthetic": true,
+  "case": "digest-syn-01",
+  "company": {
+    "name": "样例精工",
+    "code": "603999",
+    "market": "SSE",
+    "industry": "制造业",
+    "financial_sector": false
+  },
+  "period": "2025",
+  "currency": "CNY",
+  "unit": "万元",
+  "scope": "合并",
+  "revenue": "100",
+  "cost": "60",
+  "profit": "21",
+  "parent_profit": "20",
+  "prior_revenue": "90",
+  "assets": "200",
+  "liabilities": "80",
+  "equity": "120",
+  "begin_parent_equity": "90",
+  "end_parent_equity": "100",
+  "current_assets": "100",
+  "current_liabilities": "50",
+  "pretax_profit": "28",
+  "tax": "7",
+  "operating_cash": "25",
+  "investing_cash": "-10",
+  "financing_cash": "-8",
+  "fx_cash": "1",
+  "cash_increase": "8",
+  "published_at": "2026-10-01",
+  "notes": [
+    "合成材料不代表真实上市公司；合并净利润和归母净利润不可混用。"
+  ],
+  "events": [
+    {
+      "date": "2026-10-01",
+      "title": "披露年度业绩",
+      "subject": "样例精工",
+      "source": "公司公告"
+    },
+    {
+      "date": "2026-09-28",
+      "title": "确定签订合同",
+      "subject": "样例精工",
+      "source": "公司公告"
+    },
+    {
+      "date": "2026-09-01",
+      "title": "计划扩产尚未投产",
+      "subject": "样例精工",
+      "source": "公司公告"
+    }
+  ],
+  "reports": [
+    {
+      "institution": "样例机构甲（虚构）",
+      "date": "2026-09-30",
+      "year": "2027E",
+      "profit": "28",
+      "unit": "万元",
+      "currency": "CNY",
+      "metric": "归母净利润",
+      "target_price": "12",
+      "assumption": "需求增长10%",
+      "risk": "竞争降价"
+    },
+    {
+      "institution": "样例机构乙（虚构）",
+      "date": "2026-10-01",
+      "year": "2027E",
+      "profit": "30",
+      "unit": "万元",
+      "currency": "CNY",
+      "metric": "归母净利润",
+      "assumption": "需求增长15%",
+      "risk": "原材料上涨"
+    }
+  ],
+  "forecast": {
+    "base_year": 2025,
+    "base_revenue": "100",
+    "unit": "万元",
+    "currency": "CNY",
+    "growth": "0.10",
+    "gross_margin": "0.40",
+    "selling_rate": "0.02",
+    "admin_rate": "0.05",
+    "rd_rate": "0.04",
+    "finance_rate": "0.03",
+    "tax_surcharge_rate": "0.01",
+    "other_operating_net": "0",
+    "non_operating_net": "0",
+    "tax_rate": "0.25",
+    "parent_share": "1",
+    "shares": "1000000",
+    "scenario_growth": {
+      "悲观": "0.05",
+      "基准": "0.10",
+      "乐观": "0.15"
+    },
+    "assumption_source": "用户明确提供的分析者假设，不是实际业绩"
+  }
+}

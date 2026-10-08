@@ -1,0 +1,7 @@
+{
+  "langfuse": {
+    "base_url": "http://localhost:3300",
+    "public_key": "REPLACE_WITH_PROJECT_PUBLIC_KEY",
+    "secret_key": "REPLACE_WITH_PROJECT_SECRET_KEY"
+  }
+}

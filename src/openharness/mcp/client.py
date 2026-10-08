@@ -27,7 +27,11 @@ class McpServerNotConnectedError(Exception):
 
 
 class McpToolReturnedError(Exception):
-    """The connected MCP server returned an explicit tool error."""
+    """The connected MCP server failed to return a usable tool result."""
+
+    def __init__(self, message: str, *, code: str = "tool_error"):
+        super().__init__(message)
+        self.code = code
 
 
 class McpClientManager:
@@ -45,10 +49,27 @@ class McpClientManager:
         }
         self._sessions: dict[str, ClientSession] = {}
         self._stacks: dict[str, AsyncExitStack] = {}
+        self._owners: dict[str, asyncio.Task] = {}
+        self._shutdown: dict[str, asyncio.Event] = {}
 
     async def connect_all(self) -> None:
         """Connect all configured MCP servers supported by the current build."""
         for name, config in self._server_configs.items():
+            if name in self._owners:
+                continue
+            ready = asyncio.Event()
+            self._shutdown[name] = asyncio.Event()
+            self._owners[name] = asyncio.create_task(self._own_connection(name, config, ready))
+            try:
+                await ready.wait()
+            except asyncio.CancelledError:
+                self._owners[name].cancel()
+                await self.close()
+                raise
+
+    async def _own_connection(self, name: str, config: object, ready: asyncio.Event) -> None:
+        """Keep transport cancel scopes off the caller's research task."""
+        try:
             if isinstance(config, McpStdioServerConfig):
                 await self._connect_stdio(name, config)
             elif isinstance(config, McpHttpServerConfig):
@@ -61,6 +82,24 @@ class McpClientManager:
                     auth_configured=bool(getattr(config, "headers", None)),
                     detail=f"Unsupported MCP transport in current build: {config.type}",
                 )
+            ready.set()
+            if name in self._sessions:
+                await self._shutdown[name].wait()
+        except asyncio.CancelledError:
+            # Transport TaskGroups cancel their owner on HTTP/stream failure.
+            # Only this task owns those scopes; the research caller stays alive.
+            pass
+        except Exception:
+            pass
+        finally:
+            stack = self._stacks.pop(name, None)
+            if stack is not None:
+                await self._close_failed_stack(stack)
+            self._sessions.pop(name, None)
+            if not self._shutdown[name].is_set() and self._statuses[name].state != "failed":
+                self._statuses[name].state = "failed"
+                self._statuses[name].detail = "MCP transport closed during a request"
+            ready.set()
 
     async def reconnect_all(self) -> None:
         """Reconnect all configured servers."""
@@ -106,6 +145,12 @@ class McpClientManager:
 
     async def close(self) -> None:
         """Close all active MCP sessions."""
+        for signal in self._shutdown.values():
+            signal.set()
+        if self._owners:
+            await asyncio.gather(*self._owners.values(), return_exceptions=True)
+        self._owners.clear()
+        self._shutdown.clear()
         # MCP transports enter AnyIO cancel scopes in connection order. They
         # must leave in reverse order or cleanup can cancel the next Web run.
         for stack in reversed(list(self._stacks.values())):
@@ -132,6 +177,23 @@ class McpClientManager:
             resources.extend(status.resources)
         return resources
 
+    async def _request(self, server_name: str, awaitable):
+        owner = self._owners.get(server_name)
+        if owner is None:
+            return await awaitable
+        request = asyncio.create_task(awaitable)
+        try:
+            done, _ = await asyncio.wait({request, owner}, return_when=asyncio.FIRST_COMPLETED)
+            if request in done:
+                return await request
+            raise McpServerNotConnectedError(
+                f"MCP server '{server_name}' transport closed during the request"
+            )
+        finally:
+            if not request.done():
+                request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> str:
         """Invoke one MCP tool and stringify the result."""
         session = self._sessions.get(server_name)
@@ -144,15 +206,29 @@ class McpClientManager:
         timeout = getattr(self._server_configs.get(server_name), "request_timeout", 60.0)
         try:
             async with asyncio.timeout(timeout):
-                result: CallToolResult = await session.call_tool(tool_name, arguments)
+                result: CallToolResult = await self._request(server_name, session.call_tool(tool_name, arguments))
         except TimeoutError as exc:
             raise McpToolReturnedError(
                 f"MCP tool '{server_name}/{tool_name}' timed out after {timeout:g}s. "
-                "No result was received; do not treat this as evidence or retry unchanged."
+                "No result was received; do not treat this as evidence or retry unchanged.",
+                code="timeout",
+            ) from exc
+        except RuntimeError as exc:
+            # The MCP SDK raises RuntimeError for output-schema validation failures.
+            # Keep validation enabled and do not coerce missing financial data.
+            if not (str(exc).startswith(("Invalid structured content", "Invalid schema for tool", "Unresolvable"))
+                    or "has an output schema but did not return structured content" in str(exc)):
+                raise McpServerNotConnectedError(
+                    f"MCP server '{server_name}' call failed: transport closed or unavailable"
+                ) from exc
+            raise McpToolReturnedError(
+                f"MCP tool '{server_name}/{tool_name}' returned an invalid response "
+                "or failed during result processing. No usable evidence was received.",
+                code="invalid_response",
             ) from exc
         except Exception as exc:
             raise McpServerNotConnectedError(
-                f"MCP server '{server_name}' call failed: {type(exc).__name__}: {exc}"
+                f"MCP server '{server_name}' call failed: {type(exc).__name__}"
             ) from exc
         parts: list[str] = []
         for item in result.content:
@@ -181,7 +257,7 @@ class McpClientManager:
         timeout = getattr(self._server_configs.get(server_name), "request_timeout", 60.0)
         try:
             async with asyncio.timeout(timeout):
-                result: ReadResourceResult = await session.read_resource(uri)
+                result: ReadResourceResult = await self._request(server_name, session.read_resource(uri))
         except TimeoutError as exc:
             raise McpServerNotConnectedError(
                 f"MCP resource read from '{server_name}' timed out after {timeout:g}s. No result was received."

@@ -2,9 +2,12 @@
 
 import asyncio
 import importlib
+import json
 import pkgutil
 import tempfile
 import os
+import subprocess
+import sys
 from importlib.metadata import distribution
 from pathlib import Path
 import httpx
@@ -33,12 +36,27 @@ async def main():
     assert plugin_prefix + "plugin.json" in names
     assert plugin_prefix + "skills/skill-creator/templates/skill/SKILL.md" in names
     assert plugin_prefix + "skills/skill-creator/templates/skill/scripts/.gitkeep" in names
-    research_plugins = {"financial-statement-analysis", "company-event-monitor", "deep-investment-report", "research-report-digest"}
-    for plugin in research_plugins:
+    research_plugins = {
+        "financial-statement-analysis": ("financial", "analyze_statements"),
+        "company-event-monitor": ("monitor", "normalize_events"),
+        "deep-investment-report": ("deep", "forecast"),
+        "research-report-digest": ("digest", "digest_reports"),
+    }
+    for plugin, (_, script) in research_plugins.items():
         base = f"openharness/plugins/bundled/{plugin}/"
         assert base + "plugin.json" in names
-        for resource in ("SKILL.md", "scripts/run.py", "templates/input.schema.json", "templates/report.md"):
+        for resource in (
+            "SKILL.md",
+            f"scripts/{script}.py",
+            "scripts/models.py",
+            "scripts/export_report.py",
+            "scripts/__init__.py",
+            "templates/input.schema.json",
+            "templates/report.md",
+        ):
             assert base + f"skills/{plugin}/" + resource in names
+        assert base + f"skills/{plugin}/scripts/run.py" not in names
+    assert not any("/utils/research_workflows/" in name for name in names)
     assert not any("sample_plugins" in f for f in names)
     assert not any(f.startswith("openharness/skills/bundled/") for f in names)
     assert {e.name for e in dist.entry_points} == {"oh", "openh", "openharness"}
@@ -49,10 +67,59 @@ async def main():
         creator = load_skill_registry(cwd).get("skill-creator")
         assert creator is not None and creator.source == "plugin"
         assert (Path(creator.base_dir) / "templates" / "skill" / "SKILL.md").is_file()
-        for plugin in research_plugins:
+        fixtures = Path(__file__).parents[1] / "fixtures" / "research_skills"
+        for plugin, (kind, script) in research_plugins.items():
             skill = load_skill_registry(cwd).get(plugin)
             assert skill is not None and skill.metadata.status == "active"
             assert len(skill.metadata.content_hash) == 64
+            scripts = Path(skill.base_dir) / "scripts"
+            computed = cwd / kind / "computed.json"
+            commands = [
+                [sys.executable, str(scripts / f"{script}.py"), "--schema"],
+                [
+                    sys.executable,
+                    str(scripts / f"{script}.py"),
+                    "--input",
+                    str(fixtures / f"{kind}.json"),
+                    "--output",
+                    str(computed),
+                ],
+                [
+                    sys.executable,
+                    str(scripts / "export_report.py"),
+                    "--input",
+                    str(computed),
+                    "--output-dir",
+                    str(cwd / kind),
+                    "--session-dir",
+                    str(cwd / "skill-session"),
+                    "--task-id",
+                    "installed-script",
+                ],
+            ]
+            for command in commands:
+                executed = subprocess.run(
+                    command, cwd=cwd, capture_output=True, text=True, timeout=30
+                )
+                assert executed.returncode == 0, executed.stderr
+                response = json.loads(executed.stdout)
+            assert response["status"] == "complete" and len(response["artifacts"]) == 4
+        parsed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "openharness.utils.research_documents",
+                "--input",
+                str(fixtures / "annual-report.pdf"),
+                "--output-dir",
+                str(cwd / "parsed"),
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert parsed.returncode == 0, parsed.stderr
         store = ResearchStore(cwd, "a" * 12)
         source = store.capture(origin_id="user", kind="user", content="wheel smoke")
         assert store.read_source(source) == "wheel smoke"

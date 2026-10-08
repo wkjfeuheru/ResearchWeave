@@ -11,6 +11,7 @@ function ModelForm({ profile, onClose, onSaved }: {
   const [model, setModel] = useState(profile?.model || '');
   const [baseUrl, setBaseUrl] = useState(profile?.base_url || '');
   const [key, setKey] = useState('');
+  const [windowTokens, setWindowTokens] = useState(profile?.context_window_tokens?.toString() || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   return <Modal title={profile ? '编辑模型配置' : '添加模型配置'} onClose={() => { if (!saving) onClose(); }}>
@@ -18,7 +19,7 @@ function ModelForm({ profile, onClose, onSaved }: {
       e.preventDefault(); setSaving(true); setError('');
       try {
         await api(profile ? `/models/${profile.id}` : '/models', {
-          method: profile ? 'PUT' : 'POST', body: JSON.stringify({ label, api_format: format, model, base_url: baseUrl || null, api_key: key || null }),
+          method: profile ? 'PUT' : 'POST', body: JSON.stringify({ label, api_format: format, model, base_url: baseUrl || null, api_key: key || null, context_window_tokens: windowTokens ? Number(windowTokens) : null }),
         });
         setKey(''); await onSaved(); onClose();
       } catch (error) { setError(errorText(error)); } finally { setSaving(false); }
@@ -29,6 +30,7 @@ function ModelForm({ profile, onClose, onSaved }: {
         <label>接口类型<select value={format} onChange={e => setFormat(e.target.value)}><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic-compatible</option></select></label>
         <label>接口地址 <span className="optional">可选</span><input type="url" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder={format === 'openai' ? 'https://api.example.com/v1' : 'https://api.example.com'} /><small>留空使用该接口类型的官方地址。</small></label>
         <label>模型名称<input required maxLength={200} value={model} onChange={e => setModel(e.target.value)} placeholder="填写服务商提供的模型 ID" /></label>
+        <label>上下文窗口（Token）<input type="number" min={1} step={1} value={windowTokens} onChange={e => setWindowTokens(e.target.value)} placeholder="例如：32768" /><small>填写服务商提供的窗口大小。已识别的模型可留空，其他模型需填写。</small></label>
         <label>API Key<input type="password" autoComplete="new-password" value={key} onChange={e => setKey(e.target.value)} placeholder={profile?.configured ? '已配置，留空保留原密钥' : '输入 API Key'} /><small>密钥保存在本机后端，不保存在浏览器中。</small></label>
       </div>
       <footer className="modal-footer"><button type="button" className="button secondary" onClick={onClose} disabled={saving}>取消</button><button className="button primary" disabled={saving}>{saving && <LoaderCircle size={16} className="spin" />}保存配置</button></footer>

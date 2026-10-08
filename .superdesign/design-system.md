@@ -1,0 +1,2 @@
+# Financial research workspace
+Chinese-first, calm light desktop workspace. White cards on #f5f7fa; deep-blue #244a80 accent; slate #192338 text; #738097 secondary text. Spacious 8px grid, 12px card corners, restrained borders and shadows. Fixed 248px left sidebar, responsive drawer below 900px. Navigation: 主对话 / SkillHub / 模型配置. No decorative charts or invented market data. Main blank chat has research suggestions and model setup guidance. Reuse assets/logo.png as the project logo.

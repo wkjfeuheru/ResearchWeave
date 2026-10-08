@@ -32,11 +32,19 @@ class McpToolAdapter(BaseTool):
                 arguments.model_dump(mode="json", exclude_none=True),
             )
         except (McpServerNotConnectedError, McpToolReturnedError) as exc:
-            return ToolResult(output=str(exc), is_error=True)
+            code = getattr(exc, "code", "connection")
+            description = {"invalid_response": "工具返回异常：数据结构或结果处理失败",
+                           "timeout": "工具执行超时", "connection": "外部服务连接失败",
+                           "tool_error": "外部服务返回工具错误"}.get(code, "外部工具失败")
+            detail = f"{self._tool_info.server_name}/{self._tool_info.name}：{description}"
+            return ToolResult(output=str(exc), is_error=True, metadata={
+                "outcome": "error", "error_code": code, "detail": detail,
+                "research_source_specs": [],
+            })
         return ToolResult(output=output, metadata={"research_source_specs": [{
             "kind": "mcp", "title": self._tool_info.name,
             "locator": f"mcp:{self._tool_info.server_name}/{self._tool_info.name}",
-            "content": output, "fragment": True,
+            "content": output, "fragment": False,
         }]})
 
 

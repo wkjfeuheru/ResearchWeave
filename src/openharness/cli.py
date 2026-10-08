@@ -41,6 +41,8 @@ app.add_typer(plugin_app)
 app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(config_app)
+from openharness.evaluation.cli import app as eval_app
+app.add_typer(eval_app)
 
 
 @app.command("web")
@@ -666,6 +668,16 @@ def _login_provider(provider: str) -> None:
 
     manager = AuthManager()
 
+    if provider == "tavily":
+        try:
+            key = ApiKeyFlow(provider="tavily", prompt_text="Enter your Tavily API key").run()
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise typer.Exit(1)
+        store_credential("tavily", "api_key", key)
+        print("Tavily API key saved.", flush=True)
+        return
+
     if provider == "copilot":
         _run_copilot_login()
         return
@@ -754,16 +766,16 @@ def setup_cmd(
 
 @auth_app.command("login")
 def auth_login(
-    provider: Optional[str] = typer.Argument(None, help="Provider name (anthropic, openai, copilot, …)"),
+    provider: Optional[str] = typer.Argument(None, help="Provider or service name (anthropic, openai, copilot, tavily, …)"),
 ) -> None:
     """Interactively authenticate with a provider.
 
     Run without arguments to choose a provider from a menu.
-    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope.
+    Supported providers: anthropic, anthropic_claude, openai, openai_codex, copilot, dashscope, bedrock, vertex, moonshot, minimax, modelscope; search service: tavily.
     """
     if provider is None:
         print("Select a provider to authenticate:", flush=True)
-        labels = list(_PROVIDER_LABELS.items())
+        labels = [*list(_PROVIDER_LABELS.items()), ("tavily", "Tavily Search")]
         for i, (name, label) in enumerate(labels, 1):
             print(f"  {i}. {label} [{name}]", flush=True)
         raw = typer.prompt("Enter number or provider name", default="1")
@@ -801,6 +813,8 @@ def auth_status_cmd() -> None:
             print(f"  detail: {info['detail']}")
 
     print()
+    from openharness.utils.tavily_search import resolve_tavily_key
+    print("Search service: Tavily — " + ("configured" if resolve_tavily_key() else "missing API key"))
     print("Provider profiles:")
     print(f"{'Profile':<20} {'Provider':<18} {'Auth source':<22} {'State':<12} Active")
     print("-" * 92)
@@ -822,6 +836,11 @@ def auth_logout(
         target = manager.get_active_profile()
         manager.clear_profile_credential(target)
         print(f"Authentication cleared for profile: {target}", flush=True)
+        return
+    if provider == "tavily":
+        from openharness.auth.storage import clear_provider_credentials
+        clear_provider_credentials("tavily")
+        print("Tavily stored key cleared; environment variables, if set, remain effective.", flush=True)
         return
     manager.clear_credential(provider)
     print(f"Authentication cleared for provider: {provider}", flush=True)

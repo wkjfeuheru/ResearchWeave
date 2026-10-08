@@ -44,10 +44,14 @@ class ResearchMemoryTool(BaseTool):
         "auditable Reasoning Chain. read returns the current view; read(ids, include_content) retrieves "
         "archived records and source snapshots. set_context records user-authorized goals; create_plan "
         "archives the previous plan; update_task publishes committed progress. add_evidence must use "
-        "a program-issued source_id. Use locator for original-text locations and verification_note for verification notes; "
+        "a program-issued source_id. verify_evidence creates an audited successor after source, cross-source, or "
+        "calculation verification. Use locator for original-text locations and verification_note for verification notes; "
         "source_id_note is not a supported field. Use only schema-defined fields. "
         "add_reasoning records methods/results, never private chain of thought; "
         "add_conclusion links evidence and reasoning. Revise evidence/conclusions using supersedes. "
+        "add_conflict records both sides and marks core conclusions for review; investigate_conflict runs an "
+        "isolated investigator; resolve_conflict atomically commits the main agent's reviewed decision and "
+        "successor conclusion; reopen_conflict records changed evidence or a requested review. "
         "Cite evidence in answers as [E:ev_ID]. Writes are internal session bookkeeping."
     )
     input_model = ResearchMemoryInput
@@ -78,10 +82,16 @@ class ResearchMemoryTool(BaseTool):
             return ToolResult(output="Research memory is not enabled for this session", is_error=True)
         try:
             receipt = store.apply(arguments.operation.model_dump(mode="json"),
-                                  budget=int(context.metadata.get("research_injection_budget", 6000)))
+                                  budget=int(context.metadata.get("research_injection_budget", 6000)),
+                                  model=getattr(context.metadata.get("query_context"), "model", ""))
         except (ResearchError, ValueError) as exc:
             return ToolResult(output=str(exc), is_error=True)
-        return ToolResult(output=json.dumps(receipt, ensure_ascii=False), metadata={"research_progress": store.progress()})
+        progress = receipt["progress"] if "progress" in receipt else store.progress()
+        detail = {"add_conflict": "已登记双方证据与争议", "reopen_conflict": "相关判断需要重新核查"}.get(arguments.operation.action)
+        if arguments.operation.action == "resolve_conflict":
+            detail = "争议仍未决，证据缺口已保留" if arguments.operation.decision.outcome == "unresolved" else "裁决已提交，适用条件与证据已保存"
+        return ToolResult(output=json.dumps(receipt, ensure_ascii=False),
+                          metadata={"research_progress": progress, **({"detail": detail} if detail else {})})
 
     def is_read_only(self, arguments) -> bool:
         # Session bookkeeping is authorized by the research runtime; it cannot write arbitrary files.

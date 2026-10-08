@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class UsageSnapshot(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
+    usage_reported: bool | None = None
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     # Only requests reporting cache reads contribute to the hit-rate denominator.
@@ -56,6 +57,10 @@ def usage_from_provider(value: Any, provider: str) -> UsageSnapshot:
         write = _field(details, 'cache_write_tokens')
     return UsageSnapshot(
         input_tokens=total, output_tokens=output,
+        usage_reported=value is not None and (
+            _field(value, 'prompt_tokens' if provider == 'openai' else 'input_tokens') is not None
+            or _field(value, 'completion_tokens' if provider == 'openai' else 'output_tokens') is not None
+        ),
         cache_read_input_tokens=int(read) if read is not None else None,
         cache_creation_input_tokens=int(write) if write is not None else None,
         cache_observed_input_tokens=total if read is not None else 0,

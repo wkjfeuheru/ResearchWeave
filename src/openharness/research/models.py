@@ -42,6 +42,9 @@ class ResearchTask(Record):
     title: str = Field(min_length=1, max_length=120)
     status: TaskStatus = "pending"
     blocker: str = ""
+    completion_note: str = ""
+    started_at: str | None = None
+    completed_at: str | None = None
     updated_at: str = Field(default_factory=now)
 
 
@@ -59,6 +62,7 @@ class ResearchPlan(Record):
 class SourceRecord(Record):
     id: str
     plan_id: str | None = None
+    task_id: str | None = None
     kind: Literal["web", "search", "file", "mcp", "user", "tool", "calculation"]
     title: str
     locator: str
@@ -82,16 +86,19 @@ class SourceRecord(Record):
 class Evidence(Record):
     id: str = Field(default_factory=lambda: new_id("ev"))
     plan_id: str | None = None
+    task_id: str | None = None
     statement: str = Field(min_length=1)
     source_id: str
     locator: str = ""
     period: str = ""
     collected_at: str
     published_at: str | None = None
-    status: Literal["pending", "verified", "retracted"] = "pending"
+    status: Literal["pending", "source_checked", "verified", "retracted"] = "pending"
     needs_review: bool = False
     verification_step_id: str | None = None
     verification_note: str = ""
+    verification_method: Literal["source", "cross_source", "calculation"] | None = None
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
     input_evidence_ids: list[str] = Field(default_factory=list)
     calculation_step_id: str | None = None
     supersedes: str | None = None
@@ -101,6 +108,7 @@ class Evidence(Record):
 class ReasoningStep(Record):
     id: str = Field(default_factory=lambda: new_id("step"))
     plan_id: str | None = None
+    task_id: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
     prior_step_ids: list[str] = Field(default_factory=list)
     method: str = Field(min_length=1)
@@ -132,6 +140,88 @@ class ResearchState(Record):
     replan_required: bool = False
 
 
+class ConflictSide(Record):
+    statement: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+    step_ids: list[str] = Field(default_factory=list)
+    conclusion_ids: list[str] = Field(default_factory=list)
+    subject: str = ""
+    period: str = ""
+    unit: str = ""
+    basis: str = ""
+    conditions: list[str] = Field(default_factory=list)
+
+
+class SourceAssessment(Record):
+    evidence_id: str
+    originality: str = Field(min_length=1)
+    directness: str = Field(min_length=1)
+    scope_match: str = Field(min_length=1)
+    timing_and_corrections: str = Field(min_length=1)
+    independence: str = Field(min_length=1)
+    reproducibility: str = Field(min_length=1)
+
+
+class ArbitrationDecision(Record):
+    outcome: Literal["prefer_side", "compatible", "conditional", "unresolved"]
+    preferred_side: int | None = Field(default=None, ge=0)
+    statement: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+    step_ids: list[str] = Field(min_length=1)
+    assessments: list[SourceAssessment] = Field(min_length=1)
+    rejected_reasons: list[str] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list)
+    remaining_gaps: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def complete_outcome(self):
+        if self.outcome == "prefer_side" and (self.preferred_side is None or not self.rejected_reasons):
+            raise ValueError("Preferring a side requires its index and reasons for rejecting alternatives")
+        if self.outcome != "prefer_side" and self.preferred_side is not None:
+            raise ValueError("Only prefer_side may select a preferred side")
+        if self.outcome == "conditional" and not self.conditions:
+            raise ValueError("Conditional conclusions require explicit conditions")
+        if self.outcome == "unresolved" and not self.remaining_gaps:
+            raise ValueError("Unresolved conflicts require remaining evidence gaps")
+        return self
+
+
+class ConflictRecord(Record):
+    id: str = Field(default_factory=lambda: new_id("conflict"))
+    plan_id: str
+    context_id: str
+    question: str = Field(min_length=1)
+    kind: Literal["scope", "fact", "calculation", "interpretation"]
+    core: bool = True
+    sides: list[ConflictSide] = Field(min_length=2, max_length=10)
+    additional_evidence_ids: list[str] = Field(default_factory=list)
+    status: Literal["open", "investigating", "awaiting_review", "resolved", "unresolved", "interrupted"] = "open"
+    current_arbitration_id: str | None = None
+    last_attempt_fingerprint: str = ""
+    review_note: str = ""
+    created_at: str = Field(default_factory=now)
+    updated_at: str = Field(default_factory=now)
+
+
+class ArbitrationRecord(Record):
+    id: str = Field(default_factory=lambda: new_id("arb"))
+    conflict_id: str
+    input_fingerprint: str
+    review_fingerprint: str = ""
+    evidence_versions: list[str]
+    status: Literal["running", "completed", "timeout", "budget_exhausted", "interrupted", "failed", "stale"] = "running"
+    report: ArbitrationDecision | None = None
+    decision: ArbitrationDecision | None = None
+    imported_ids: list[str] = Field(default_factory=list)
+    replaced_conclusion_ids: list[str] = Field(default_factory=list)
+    output_conclusion_ids: list[str] = Field(default_factory=list)
+    note: str = ""
+    usage: dict = Field(default_factory=dict)
+    started_at: str = Field(default_factory=now)
+    finished_at: str | None = None
+
+
 class ResearchMemory(Record):
     schema_version: Literal[1] = 1
     session_id: str
@@ -144,6 +234,8 @@ class ResearchMemory(Record):
     evidence_pool: dict[str, Evidence] = Field(default_factory=dict)
     reasoning_chain: dict[str, ReasoningStep] = Field(default_factory=dict)
     conclusions: dict[str, Conclusion] = Field(default_factory=dict)
+    conflicts: dict[str, ConflictRecord] = Field(default_factory=dict)
+    arbitrations: dict[str, ArbitrationRecord] = Field(default_factory=dict)
     history: list[dict] = Field(default_factory=list)
     operations: dict[str, dict] = Field(default_factory=dict)
     answers: dict[str, dict] = Field(default_factory=dict)
@@ -184,6 +276,7 @@ class UpdateTask(Mutation):
     task_id: str
     status: TaskStatus
     blocker: str = ""
+    completion_note: str = ""
     next_step: str = ""
     unresolved: list[str] | None = None
 
@@ -194,9 +287,11 @@ class AddEvidence(Mutation):
     source_id: str
     locator: str = ""
     period: str = ""
-    status: Literal["pending", "verified", "retracted"] = "pending"
+    status: Literal["pending", "retracted"] = "pending"
     verification_step_id: str | None = None
     verification_note: str = ""
+    verification_method: Literal["source", "cross_source", "calculation"] | None = None
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
     input_evidence_ids: list[str] = Field(default_factory=list)
     calculation_step_id: str | None = None
     supersedes: str | None = None
@@ -220,6 +315,16 @@ class AddReasoning(Mutation):
         return self
 
 
+class VerifyEvidence(Mutation):
+    action: Literal["verify_evidence"]
+    evidence_id: str
+    level: Literal["source_checked", "verified"]
+    method: Literal["source", "cross_source", "calculation"]
+    verification_step_id: str
+    verification_note: str = Field(min_length=1)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+
+
 class AddConclusion(Mutation):
     action: Literal["add_conclusion"]
     statement: str = Field(min_length=1)
@@ -229,7 +334,31 @@ class AddConclusion(Mutation):
     supersedes: str | None = None
 
 
+class AddConflict(Mutation):
+    action: Literal["add_conflict"]
+    question: str = Field(min_length=1)
+    kind: Literal["scope", "fact", "calculation", "interpretation"]
+    core: bool = True
+    sides: list[ConflictSide] = Field(min_length=2, max_length=10)
+
+
+class ResolveConflict(Mutation):
+    action: Literal["resolve_conflict"]
+    conflict_id: str
+    arbitration_id: str
+    decision: ArbitrationDecision
+    conclusion_status: Literal["tentative", "verified"] = "tentative"
+
+
+class ReopenConflict(Mutation):
+    action: Literal["reopen_conflict"]
+    conflict_id: str
+    reason: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
 ResearchOperation = Annotated[
-    ReadMemory | SetContext | CreatePlan | UpdateTask | AddEvidence | AddReasoning | AddConclusion,
+    ReadMemory | SetContext | CreatePlan | UpdateTask | AddEvidence | AddReasoning | VerifyEvidence
+    | AddConclusion | AddConflict | ResolveConflict | ReopenConflict,
     Field(discriminator="action"),
 ]

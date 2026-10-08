@@ -24,16 +24,47 @@ export function UsageLine({ usage }: { usage: Usage }) {
   </div>;
 }
 
-function ResearchTasks({ progress }: { progress: ResearchProgress }) {
-  if (!progress.plan_id && !progress.replan_required) return null;
+function ResearchTasks({ progress, sessionId }: { progress: ResearchProgress; sessionId: string }) {
   const labels = { pending: '待执行', in_progress: '进行中', completed: '已完成', blocked: '受阻', cancelled: '已取消' };
+  const storageKey = `openharness:research-progress:${sessionId}:${progress.plan_id || 'replan'}`;
+  const hasBlocked = progress.tasks.some(task => task.status === 'blocked');
+  const conflicts = progress.conflicts || [];
+  const conflictLabels = { open: '发现冲突', investigating: '核查原文中', awaiting_review: '等待审查',
+    resolved: '裁决完成', unresolved: '仍未决', interrupted: '核查已中断' };
+  const hasPendingConflict = conflicts.some(conflict => conflict.core && conflict.status !== 'resolved');
+  const automaticOpen = progress.replan_required || progress.completed < progress.total || hasBlocked || hasPendingConflict;
+  const [open, setOpen] = useState(automaticOpen);
+  useEffect(() => {
+    if (hasBlocked) { setOpen(true); return; }
+    const saved = sessionStorage.getItem(storageKey);
+    setOpen(saved == null ? automaticOpen : saved === 'open');
+  }, [storageKey, hasBlocked]);
+  useEffect(() => {
+    if (sessionStorage.getItem(storageKey) == null) setOpen(automaticOpen);
+  }, [automaticOpen, storageKey]);
+  const toggle = () => setOpen(current => {
+    if (hasBlocked) return true;
+    const next = !current;
+    sessionStorage.setItem(storageKey, next ? 'open' : 'closed');
+    return next;
+  });
+  if (!progress.plan_id && !progress.replan_required) return null;
   return <div className="research-progress" aria-label="研究任务进度" aria-live="polite">
-    <div className="research-progress-heading"><strong>{progress.replan_required ? '正在重新规划' : progress.title}</strong>
-      {!progress.replan_required && <span>{progress.completed}/{progress.total} 项任务完成</span>}</div>
-    <ol>{progress.tasks.map(task => <li key={task.id} className={task.status}>
+    <button type="button" className="research-progress-heading" aria-expanded={open}
+      aria-disabled={hasBlocked} onClick={toggle}>
+      <span className="research-progress-title"><ChevronDown size={14} className={open ? 'expanded' : ''} />
+        <strong title={progress.replan_required ? '正在重新规划' : progress.title}>{progress.replan_required ? '正在重新规划' : progress.title}</strong></span>
+      {!progress.replan_required && <span className="research-progress-count">{progress.completed}/{progress.total} 项任务完成</span>}
+    </button>
+    {open && <ol>{progress.tasks.map(task => <li key={task.id} className={task.status}>
       <span className="task-status-symbol">{task.status === 'completed' ? <Check size={13} /> : '·'}</span>
-      <span>{task.title}</span><small>{labels[task.status]}</small>
-    </li>)}</ol>
+      <span>{task.title}</span><small>{labels[task.status]}{task.status === 'blocked' && task.blocker ? ` · ${task.blocker}` : ''}</small>
+    </li>)}</ol>}
+    {open && conflicts.length > 0 && <ol aria-label="争议处理进度">{conflicts.map(conflict =>
+      <li key={conflict.id} className={conflict.status === 'resolved' ? 'completed' : 'blocked'}>
+        <span className="task-status-symbol">{conflict.status === 'resolved' ? <Check size={13} /> : '·'}</span>
+        <span>{conflict.question}</span><small>{conflictLabels[conflict.status]}</small>
+      </li>)}</ol>}
   </div>;
 }
 
@@ -43,11 +74,13 @@ function Approval({ prompt, onRespond }: { prompt: Prompt; onRespond: (answer: s
     <div className="modal-body">
       {prompt.tool_name && <span className="tag">{prompt.tool_label || '工具操作'}</span>}
       <p>{prompt.message || (prompt.kind === 'edit' ? `请求编辑：${prompt.path}` : '请确认是否允许此次操作。')}</p>
+      {prompt.kind !== 'question' && prompt.session_scope && <p>选择“本会话始终允许”后，{prompt.session_scope}</p>}
       {prompt.diff && <pre className="diff">{prompt.diff}</pre>}
       {prompt.kind === 'question' && <textarea autoFocus aria-label="补充信息" rows={5} value={answer} onChange={e => setAnswer(e.target.value)} placeholder="输入你的回复…" />}
     </div>
     <footer className="modal-footer">
       <button className="button secondary" onClick={() => onRespond(prompt.kind === 'question' ? '用户取消了本次回答' : 'deny')}>取消</button>
+      {prompt.kind !== 'question' && prompt.session_scope && <button className="button secondary" onClick={() => onRespond('allow_session')}>本会话始终允许</button>}
       <button className="button primary" disabled={prompt.kind === 'question' && !answer.trim()} onClick={() => onRespond(prompt.kind === 'question' ? answer : 'allow')}>
         {prompt.kind === 'question' ? '回复并继续' : '允许此次操作'}
       </button>
@@ -120,7 +153,7 @@ export default function ChatPage({ session, models, skills, selectedProfile, onP
       })}<div ref={bottom} /></div>}
     </div>
     <div className="composer-container">
-      {session?.research_progress && <ResearchTasks progress={session.research_progress} />}
+      {session?.research_progress && <ResearchTasks progress={session.research_progress} sessionId={session.session_id} />}
       {enabled.length > 0 && <div className="active-skills">{enabled.map(skill => <span key={skill.id}><Layers size={12} />{skill.label}</span>)}</div>}
       {artifacts.length > 0 && <div className="session-artifacts" aria-label="研究产物">{artifacts.map(file => <a key={file.id} href={`/api/sessions/${session?.session_id}/artifacts/${file.id}/download`} download>
         <Download size={14} />{file.name}<small>{file.status}{file.task_id ? ` · ${file.task_id}` : ''}</small></a>)}</div>}

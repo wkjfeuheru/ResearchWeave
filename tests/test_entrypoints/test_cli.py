@@ -215,3 +215,25 @@ def test_terminal_coding_entrypoints_are_removed():
     for arguments in (["--print", "research"], ["--task-worker"], ["--continue"], ["--dry-run"], ["autopilot", "list"]):
         result = CliRunner().invoke(app, arguments)
         assert result.exit_code == 2
+
+
+def test_tavily_credentials_without_model_profile(tmp_path, monkeypatch):
+    from openharness.auth import storage
+    from openharness.utils.tavily_search import resolve_tavily_key
+    monkeypatch.setenv('OPENHARNESS_CONFIG_DIR', str(tmp_path))
+    monkeypatch.delenv('OPENHARNESS_TAVILY_API_KEY', raising=False)
+    monkeypatch.delenv('TAVILY_API_KEY', raising=False)
+    monkeypatch.setattr(storage, '_keyring_available', lambda: False)
+    monkeypatch.setattr('openharness.auth.flows.ApiKeyFlow.run', lambda self: 'test-tavily-credential')
+    before = load_settings().model_dump()
+    runner = CliRunner()
+    result = runner.invoke(app, ['auth', 'login', 'tavily'])
+    assert result.exit_code == 0 and 'saved' in result.output
+    assert 'test-tavily-credential' not in result.output
+    assert resolve_tavily_key() == 'test-tavily-credential'
+    assert load_settings().model_dump() == before
+    result = runner.invoke(app, ['auth', 'status'])
+    assert result.exit_code == 0 and 'Tavily — configured' in result.output
+    assert 'test-tavily-credential' not in result.output
+    result = runner.invoke(app, ['auth', 'logout', 'tavily'])
+    assert result.exit_code == 0 and not resolve_tavily_key()

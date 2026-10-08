@@ -27,7 +27,8 @@ deprecation: null
 1. 待填：输入确认步骤；需要大型规范时直接读取 [规范](references/standards.md)。
 2. 待填：主体任务步骤；需要背景时读取 [背景](references/background.md)，
    需要典型案例时读取 [案例](references/examples.md)。
-3. 待填：确定性校验与转换步骤；实现后在本步骤直接引用 `scripts/` 中的脚本。
+3. 待填：确定性校验与转换步骤；业务函数和专属模型实现在本插件 `scripts/`，
+   在本步骤直接引用按职责命名的脚本；公共基础能力可复用，不以单个运行入口代理业务。
 4. 待填：交付步骤；按实际输出选择 [报告模板](templates/report.md)、
    [代码模板](templates/code.md) 或 [表格模板](templates/table.md)。
 

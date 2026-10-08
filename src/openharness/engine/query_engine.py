@@ -67,6 +67,8 @@ class QueryEngine:
         self._settings = settings
         self._messages: list[ConversationMessage] = []
         self._cost_tracker = CostTracker()
+        # Account immediately, including child calls completed before timeout/cancellation.
+        self._tool_metadata["account_subagent_usage"] = lambda usage: self._cost_tracker.add(usage)
 
     @property
     def messages(self) -> list[ConversationMessage]:
@@ -150,7 +152,7 @@ class QueryEngine:
         if store is not None:
             text = re.sub(r"\n*<research_memory>.*?</research_memory>", "", text, flags=re.S)
             text += "\n\n" + store.prompt(
-                int(self._tool_metadata.get("research_injection_budget", 6000))
+                int(self._tool_metadata.get("research_injection_budget", 6000)), model=self._model
             )
         mode = self._tool_metadata.get("permission_mode")
         if mode and self._settings is not None:

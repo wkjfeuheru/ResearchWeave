@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import asyncio
 import json
 import logging
@@ -282,6 +284,8 @@ class OpenAICompatibleClient:
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final message, matching the Anthropic client interface."""
+        from openharness.services.context_budget import checked_request
+        request = checked_request(self, request)
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES + 1):
@@ -312,8 +316,8 @@ class OpenAICompatibleClient:
         if last_error is not None:
             raise self._translate_error(last_error) from last_error
 
-    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
-        """Single attempt: stream an OpenAI chat completion."""
+    def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
+        """Build once for both budgeting and transmission."""
         openai_messages = _convert_messages_to_openai(request.messages, request.system_prompt)
         openai_tools = _convert_tools_to_openai(request.tools) if request.tools else None
 
@@ -332,6 +336,10 @@ class OpenAICompatibleClient:
             # that requires reasoning_content on every assistant message.
             params.pop("stream_options", None)
 
+        return replace(request, prepared_payload=params)
+
+    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+        params = (request if request.prepared_payload is not None else self.prepare_request(request)).prepared_payload
         # Collect full response while streaming text deltas
         collected_content = ""
         collected_reasoning = ""

@@ -41,6 +41,7 @@ from openharness.engine.stream_events import (
 )
 from openharness.hooks import HookEvent, HookExecutor
 from openharness.permissions.checker import PermissionChecker
+from openharness.services.context_budget import ContextBudgetError, prepare_request, request_budget
 from openharness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.base import ToolRegistry
@@ -88,8 +89,6 @@ def _bounded_completion_tokens(max_tokens: int, context_window_tokens: int | Non
     config from making every turn fail while preserving normal defaults.
     """
     limit = MAX_SAFE_COMPLETION_TOKENS
-    if context_window_tokens is not None and context_window_tokens > 0:
-        limit = min(limit, int(context_window_tokens))
     return max(1, min(int(max_tokens), limit))
 
 
@@ -173,7 +172,8 @@ def _offload_tool_output_if_needed(
         _tool_artifact_dir()
         / f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"
     )
-    artifact_path.write_text(output, encoding="utf-8", errors="replace")
+    from openharness.utils.fs import atomic_write_text
+    atomic_write_text(artifact_path, output, mode=0o600)
     preview = output[: tool_output_preview_chars()]
     omitted = max(0, len(output) - len(preview))
     inline = (
@@ -210,7 +210,7 @@ async def _preprocess_images_in_messages(
     if is_model_multimodal(context.model):
         return
 
-    vision_config = context.tool_metadata.get("vision_model_config")
+    vision_config = (context.tool_metadata or {}).get("vision_model_config")
     if not vision_config:
         # No vision model configured — skip preprocessing.
         return
@@ -298,6 +298,8 @@ async def run_query(
     )
     reported_token_clamp = False
     citation_repairs = 0
+    verification_repairs = 0
+    conflict_repairs = 0
 
     async def _stream_compaction(
         *,
@@ -310,8 +312,11 @@ async def run_query(
         async def _progress(event: CompactProgressEvent) -> None:
             await progress_queue.put(event)
 
-        task = asyncio.create_task(
-            auto_compact_if_needed(
+        async def observed_compaction():
+            from openharness.engine.observer import observer_for
+
+            with observer_for(context.tool_metadata).span("compaction", metadata={"trigger": trigger}):
+                return await auto_compact_if_needed(
                 messages,
                 api_client=context.api_client,
                 model=context.model,
@@ -324,19 +329,35 @@ async def run_query(
                 carryover_metadata=context.tool_metadata,
                 context_window_tokens=context.context_window_tokens,
                 auto_compact_threshold_tokens=context.auto_compact_threshold_tokens,
-            )
-        )
-        while True:
-            try:
-                event = await asyncio.wait_for(progress_queue.get(), timeout=0.05)
-                yield event, None
-            except asyncio.TimeoutError:
-                if task.done():
-                    break
-                continue
-        while not progress_queue.empty():
-            yield progress_queue.get_nowait(), None
-        last_compaction_result = await task
+                max_tokens=effective_max_tokens,
+                tools=request_tools,
+                runtime_context_provider=context.runtime_context_provider,
+                )
+
+        task = asyncio.create_task(observed_compaction())
+        pending_event = None
+        try:
+            while not task.done() or not progress_queue.empty():
+                if not progress_queue.empty():
+                    yield progress_queue.get_nowait(), None
+                    continue
+                pending_event = asyncio.create_task(progress_queue.get())
+                # wait_for(queue.get()) can swallow cancellation when the queue
+                # future completes concurrently on supported Python versions.
+                done, _ = await asyncio.wait((task, pending_event), return_when=asyncio.FIRST_COMPLETED)
+                if pending_event in done:
+                    yield pending_event.result(), None
+                else:
+                    pending_event.cancel()
+                    await asyncio.gather(pending_event, return_exceptions=True)
+                pending_event = None
+            last_compaction_result = await task
+        finally:
+            children = [task] + ([pending_event] if pending_event is not None else [])
+            for child in children:
+                if not child.done():
+                    child.cancel()
+            await asyncio.gather(*children, return_exceptions=True)
         return
 
     turn_count = 0
@@ -354,12 +375,6 @@ async def run_query(
                 ),
                 None,
             )
-        # --- auto-compact check before calling the model ---------------
-        async for event, usage in _stream_compaction(trigger="auto"):
-            yield event, usage
-        compacted_messages, was_compacted = last_compaction_result
-        if compacted_messages is not messages:
-            messages[:] = compacted_messages
         # Reattach current context after compaction or a permission change.
         # Append a new user item only after all tool results are present; never
         # mutate a snapshot that has already been sent to the provider.
@@ -377,20 +392,37 @@ async def run_query(
             yield event, None
         # -----------------------------------------------------------------------------
 
+        request_tools = context.tool_registry.to_api_schema()
+
+        def build_request(candidate=None):
+            return prepare_request(context.api_client, ApiMessageRequest(
+                model=context.model, messages=messages if candidate is None else candidate, system_prompt=context.system_prompt,
+                max_tokens=effective_max_tokens, tools=request_tools, effort=context.effort,
+                context_window_tokens=context.context_window_tokens))
+
+        try:
+            # Validate configuration before attempting compaction or any main model call.
+            request_budget(build_request(), threshold=context.auto_compact_threshold_tokens)
+            async for event, usage in _stream_compaction(trigger="auto"):
+                yield event, usage
+            compacted_messages, was_compacted = last_compaction_result
+            request = build_request(compacted_messages if was_compacted else messages)
+            budget = request_budget(request, threshold=context.auto_compact_threshold_tokens)
+            if context.tool_metadata is not None:
+                from dataclasses import asdict
+                context.tool_metadata["context_budget"] = asdict(budget)
+            budget.require_fit()
+            if was_compacted:
+                messages[:] = compacted_messages
+        except ContextBudgetError as exc:
+            yield ErrorEvent(message=str(exc)), None
+            return
+
         final_message: ConversationMessage | None = None
         usage = UsageSnapshot()
 
         try:
-            async for event in context.api_client.stream_message(
-                ApiMessageRequest(
-                    model=context.model,
-                    messages=messages,
-                    system_prompt=context.system_prompt,
-                    max_tokens=effective_max_tokens,
-                    tools=context.tool_registry.to_api_schema(),
-                    effort=context.effort,
-                )
-            ):
+            async for event in context.api_client.stream_message(request):
                 if isinstance(event, ApiTextDeltaEvent):
                     yield AssistantTextDelta(text=event.text), None
                     continue
@@ -433,10 +465,11 @@ async def run_query(
                 async for event, usage in _stream_compaction(trigger="reactive", force=True):
                     yield event, usage
                 compacted_messages, was_compacted = last_compaction_result
-                if compacted_messages is not messages:
-                    messages[:] = compacted_messages
                 if was_compacted:
-                    continue
+                    retry_budget = request_budget(build_request(compacted_messages))
+                    if retry_budget.fits and retry_budget.input_tokens < budget.input_tokens:
+                        messages[:] = compacted_messages
+                        continue
             if (
                 "connect" in error_msg.lower()
                 or "timeout" in error_msg.lower()
@@ -469,7 +502,25 @@ async def run_query(
             return
 
         store = (context.tool_metadata or {}).get("research_store")
-        if store is not None and not final_message.tool_uses:
+        if store is not None and not final_message.tool_uses and not (context.tool_metadata or {}).get("conflict_investigator"):
+            state = store.load()
+            actionable = [item for item in state.conflicts.values()
+                          if item.core and item.plan_id == state.research_state.current_plan_id
+                          and (item.status == "awaiting_review" or (item.status == "open"
+                               and item.last_attempt_fingerprint != store.conflict_fingerprint(state, item)))]
+            if (actionable and conflict_repairs < 2
+                    and (context.max_turns is None or turn_count < context.max_turns)):
+                conflict_repairs += 1
+                messages.append(ConversationMessage(role="user", runtime_context="<research_conflict_check>\n"
+                    + json.dumps({"conflict_ids": [item.id for item in actionable],
+                                  "draft": final_message.text,
+                                  "required_action": "Investigate open core conflicts using investigate_conflict. "
+                                  "Read completed reports, review original evidence, and submit resolve_conflict. "
+                                  "Allow conditional or unresolved decisions. Do not present disputed claims as certain. "
+                                  "On timeout or failure retain uncertainty and continue independent work."}, ensure_ascii=False)
+                    + "\n</research_conflict_check>"))
+                yield StatusEvent(message="正在核查影响核心结论的争议…", discard_draft=True), usage
+                continue
             invalid = store.invalid_citations(final_message.text)
             if (
                 invalid
@@ -499,6 +550,46 @@ async def run_query(
                     )
                 )
                 yield StatusEvent(message="正在核对回答中的来源引用…", discard_draft=True), usage
+                continue
+            state = store.load()
+            plan = state.plans.get(state.research_state.current_plan_id or "")
+            ready_to_finalize = bool(plan) and all(
+                task.status in {"completed", "blocked", "cancelled"} for task in plan.tasks
+            )
+            candidates = store.verification_candidates(final_message.text) if ready_to_finalize else []
+            if (
+                candidates
+                and verification_repairs < 3
+                and (context.max_turns is None or turn_count < context.max_turns)
+            ):
+                verification_repairs += 1
+                note = {
+                    "session_id": state.session_id,
+                    "revision": state.revision,
+                    "draft": final_message.text,
+                    "verification_candidates": candidates,
+                    "required_action": (
+                        "Before publishing, advance only the listed cited evidence using auditable records. "
+                        "For source checking, read the evidence and its complete source snapshot, add a verification "
+                        "reasoning step, then call verify_evidence(level=source_checked, method=source). "
+                        "For cross-source verification, use already source-checked evidence from a distinct source in "
+                        "one verification step, then call verify_evidence(level=verified, method=cross_source) with "
+                        "supporting_evidence_ids. For deterministic calculations, verify the calculation evidence only "
+                        "when all traced inputs are source-checked. Use one research-memory mutation per turn and the "
+                        "latest revision. Do not fetch unrelated material merely to change a label. After verification, "
+                        "return the complete answer using the successor evidence IDs. If a candidate cannot be advanced, "
+                        "keep its current status and return the answer without claiming verification."
+                    ),
+                }
+                messages.append(
+                    ConversationMessage(
+                        role="user",
+                        runtime_context="<research_verification_check>\n"
+                        + json.dumps(note, ensure_ascii=False)
+                        + "\n</research_verification_check>",
+                    )
+                )
+                yield StatusEvent(message="正在核对引用原文与计算依据…", discard_draft=True), usage
                 continue
 
         messages.append(final_message)
@@ -544,9 +635,10 @@ async def run_query(
                 None,
             )
             if (context.tool_metadata or {}).get("research_store"):
+                progress = (result.result_metadata or {}).get("research_progress")
                 yield (
                     ResearchProgressEvent(
-                        progress=context.tool_metadata["research_store"].progress()
+                        progress=progress or context.tool_metadata["research_store"].progress()
                     ),
                     None,
                 )
@@ -590,9 +682,10 @@ async def run_query(
                         None,
                     )
                     if (context.tool_metadata or {}).get("research_store"):
+                        progress = (result.result_metadata or {}).get("research_progress")
                         yield (
                             ResearchProgressEvent(
-                                progress=context.tool_metadata["research_store"].progress()
+                                progress=progress or context.tool_metadata["research_store"].progress()
                             ),
                             None,
                         )
@@ -617,25 +710,44 @@ async def _execute_tool_call(
     tool_use_id: str,
     tool_input: dict[str, object],
 ) -> ToolResultBlock:
+    from openharness.engine.observer import observer_for
+
+    with observer_for(context.tool_metadata).span(
+        tool_name, kind="tool", input=tool_input,
+        metadata={"tool_use_id": tool_use_id,
+                  "investigation": bool((context.tool_metadata or {}).get("conflict_investigator"))},
+    ) as span:
+        result = await _execute_tool_call_impl(context, tool_name, tool_use_id, tool_input)
+        outcome = (result.result_metadata or {}).get("outcome")
+        span.update(output=result.content, status="denied" if outcome in {"denied", "evaluation_boundary"}
+                    else "error" if result.is_error else "ok",
+                    metadata={"tool_use_id": tool_use_id,
+                              "investigation": bool((context.tool_metadata or {}).get("conflict_investigator")),
+                              **(result.result_metadata or {})})
+        return result
+
+
+async def _execute_tool_call_impl(
+    context: QueryContext,
+    tool_name: str,
+    tool_use_id: str,
+    tool_input: dict[str, object],
+) -> ToolResultBlock:
     store = (context.tool_metadata or {}).get("research_store")
     if (
         store is not None
         and store.load().research_state.replan_required
-        and tool_name not in {"research_memory", "ask_user_question", "skill"}
+        and tool_name not in {"research_memory", "ask_user_question", "skill", "investigate_conflict"}
     ):
         return ToolResultBlock(
             tool_use_id=tool_use_id,
             content="Research requires a new plan. Use research_memory to update context and create_plan before executing more tools.",
             is_error=True,
         )
-    if store is not None and tool_name not in {"research_memory", "ask_user_question", "skill"}:
+    if store is not None and tool_name not in {"research_memory", "ask_user_question", "skill", "investigate_conflict"}:
         memory = store.load()
         plan = memory.plans.get(memory.research_state.current_plan_id)
-        if (
-            plan
-            and any(task.status in {"pending", "blocked"} for task in plan.tasks)
-            and not any(task.status == "in_progress" for task in plan.tasks)
-        ):
+        if plan and not memory.research_state.current_task_id:
             return ToolResultBlock(
                 tool_use_id=tool_use_id,
                 is_error=True,
@@ -718,6 +830,7 @@ async def _execute_tool_call(
                     tool_use_id=tool_use_id,
                     content=decision.reason or f"Permission denied for {tool_name}",
                     is_error=True,
+                    result_metadata={"outcome": "denied"},
                 )
         else:
             log.debug("permission blocked for %s: %s", tool_name, decision.reason)
@@ -725,6 +838,7 @@ async def _execute_tool_call(
                 tool_use_id=tool_use_id,
                 content=decision.reason or f"Permission denied for {tool_name}",
                 is_error=True,
+                result_metadata={"outcome": "denied"},
             )
 
     log.debug("executing %s ...", tool_name)
@@ -737,14 +851,16 @@ async def _execute_tool_call(
                 "tool_registry": context.tool_registry,
                 "ask_user_prompt": context.ask_user_prompt,
                 **(context.tool_metadata or {}),
+                "query_context": context,
             },
             hook_executor=context.hook_executor,
         ),
     )
     elapsed = time.monotonic() - t0
-    if store is not None and tool_name not in {"research_memory"}:
-        source_specs = result.metadata.get("research_source_specs") or [
-            {
+    if store is not None and tool_name not in {"research_memory", "investigate_conflict"}:
+        source_specs = result.metadata.get("research_source_specs")
+        if source_specs is None:
+            source_specs = [{
                 "content": result.output,
                 "kind": "calculation"
                 if tool_name == "bash"
@@ -754,8 +870,7 @@ async def _execute_tool_call(
                 "title": tool_name,
                 "locator": f"tool:{tool_name}:{tool_use_id}",
                 "fragment": True,
-            }
-        ]
+            }]
         sources = []
         for index, spec in enumerate(source_specs):
             sources.append(
@@ -806,6 +921,8 @@ async def _execute_tool_call(
             if key != "research_source_specs"
         },
     )
+    if artifact_path is not None:
+        tool_result.result_metadata["tool_output_artifact"] = str(artifact_path)
     if store is not None and result.metadata.get("research_sources"):
         tool_result.content += "\n\nresearch_sources: " + json.dumps(
             result.metadata["research_sources"]

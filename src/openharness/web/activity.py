@@ -14,6 +14,7 @@ def describe_tool(name: str, arguments: dict) -> dict:
         "write_file": ("other", "写入文件", ("path",)),
         "edit_file": ("other", "编辑文件", ("path",)),
         "research_memory": ("other", "更新研究记录", ()),
+        "investigate_conflict": ("other", "核查冲突原文", ()),
         "ask_user_question": ("other", "补充研究信息", ()),
         "notebook_edit": ("other", "编辑笔记本", ("notebook_path",)),
         "image_generation": ("other", "生成图像", ()),
@@ -24,8 +25,13 @@ def describe_tool(name: str, arguments: dict) -> dict:
         "tool_search": ("search", "查找工具", ()),
         "sleep": ("other", "等待", ()),
     }.get(name, ("other", "执行工具操作", ()))
+    if name == "research_memory":
+        operation = arguments.get("operation", {})
+        if isinstance(operation, dict):
+            label = {"add_conflict": "发现结论冲突", "resolve_conflict": "提交争议裁决",
+                     "reopen_conflict": "重新核查争议"}.get(operation.get("action"), label)
     if name.startswith("mcp__"):
-        label = "外部工具操作"
+        label = "外部工具 · " + name.removeprefix("mcp__").replace("__", " / ", 1)
     target = next((arguments[key] for key in keys if isinstance(arguments.get(key), str)), "")
     if category == "fetch" and target:
         try:

@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator, Callable, Protocol
 
 from anthropic import APIError, APIStatusError, AsyncAnthropic
@@ -46,6 +46,8 @@ class ApiMessageRequest:
     max_tokens: int = 4096
     tools: list[dict[str, Any]] = field(default_factory=list)
     effort: str | None = None
+    context_window_tokens: int | None = None
+    prepared_payload: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,8 @@ class AnthropicApiClient:
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final assistant message with retry on transient errors."""
+        from openharness.services.context_budget import checked_request
+        request = checked_request(self, request)
         last_error: Exception | None = None
 
         for attempt in range(MAX_RETRIES + 1):
@@ -200,8 +204,8 @@ class AnthropicApiClient:
                 raise _translate_api_error(last_error) from last_error
             raise RequestFailure(str(last_error)) from last_error
 
-    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
-        """Single attempt at streaming a message."""
+    def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
+        """Build once for both budgeting and transmission."""
         params: dict[str, Any] = {
             "model": request.model,
             "messages": [message.to_api_param() for message in request.messages],
@@ -232,6 +236,10 @@ class AnthropicApiClient:
             }
             params["extra_headers"] = {"x-client-request-id": str(uuid.uuid4())}
 
+        return replace(request, prepared_payload=params)
+
+    async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+        params = (request if request.prepared_payload is not None else self.prepare_request(request)).prepared_payload
         try:
             stream_api = self._client.beta.messages if self._claude_oauth else self._client.messages
             async with stream_api.stream(**params) as stream:

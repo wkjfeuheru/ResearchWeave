@@ -29,7 +29,7 @@ _BUILTIN_SITES = (
     ("csrc.gov.cn", "中国证监会", ["policy", "disclosure"], "CN", "official"),
     ("nfra.gov.cn", "国家金融监督管理总局", ["policy"], "CN", "official"),
     ("miit.gov.cn", "工业和信息化部", ["policy", "industry"], "CN", "official"),
-    ("nea.gov.cn", "国家能源局", ["policy", "industry"], "CN", "official"),
+    ("nea.gov.cn", "国家能源局", ["policy", "macro", "industry"], "CN", "official"),
     ("sse.com.cn", "上海证券交易所", ["policy", "disclosure"], "CN", "official"),
     ("szse.cn", "深圳证券交易所", ["policy", "disclosure"], "CN", "official"),
     ("bse.cn", "北京证券交易所", ["disclosure"], "CN", "official"),
@@ -89,10 +89,26 @@ def classify_source(url: str, sites: list[ResearchSiteConfig]) -> dict:
     )]
     if not matches:
         return {"url": url, "domain": host, "listed": False, "name": None,
-                "categories": [], "region": None, "tier": None}
+                "catalog_domain": None, "categories": [], "region": None, "tier": None}
     site = max(matches, key=lambda item: len(item.domain))
     return {"url": url, "domain": host, "listed": True, "name": site.name,
-            "categories": site.categories, "region": site.region, "tier": site.tier}
+            "catalog_domain": site.domain, "categories": site.categories,
+            "region": site.region, "tier": site.tier}
+
+
+def source_identity(url: str, sites: list[ResearchSiteConfig] | None = None) -> str:
+    """Return a conservative publisher identity for source-independence checks."""
+    source = classify_source(url, sites if sites is not None else get_research_sites())
+    if source["catalog_domain"]:
+        return source["catalog_domain"]
+    host = source["domain"]
+    if not host:
+        return url
+    labels = host.split(".")
+    compound_suffixes = {"com.cn", "org.cn", "net.cn", "gov.cn", "com.hk", "co.uk", "com.au", "co.jp"}
+    suffix = ".".join(labels[-2:])
+    width = 3 if suffix in compound_suffixes else 2
+    return ".".join(labels[-width:]) if len(labels) >= width else host
 
 
 def describe_source(source: dict) -> str:

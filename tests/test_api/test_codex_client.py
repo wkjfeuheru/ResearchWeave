@@ -188,7 +188,7 @@ async def test_codex_client_streams_text(monkeypatch):
 
     client = CodexApiClient(_fake_codex_token())
     request = ApiMessageRequest(
-        model="gpt-5.5",
+        model="gpt-5.5", context_window_tokens=200_000,
         messages=[ConversationMessage.from_user_text("hi")],
         system_prompt="Be helpful.",
         effort="xhigh",

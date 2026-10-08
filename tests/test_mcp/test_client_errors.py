@@ -38,6 +38,69 @@ class _AsyncContextManager:
 
 
 @pytest.mark.asyncio
+async def test_transport_child_failure_does_not_cancel_research_or_other_server(monkeypatch):
+    manager = McpClientManager({name: McpStdioServerConfig(command="test") for name in ("bad", "good")})
+    fail = asyncio.Event()
+
+    async def crash():
+        await fail.wait()
+        raise RuntimeError("HTTP 400 in transport task")
+
+    async def connect(name, config):
+        stack = AsyncExitStack()
+        group = await stack.enter_async_context(anyio.create_task_group())
+        stack.callback(group.cancel_scope.cancel)
+        session = AsyncMock()
+        if name == "bad":
+            group.start_soon(crash)
+
+            async def request(*args):
+                fail.set()
+                await asyncio.Event().wait()
+            session.call_tool.side_effect = request
+        else:
+            session.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
+        manager._stacks[name] = stack
+        manager._sessions[name] = session
+        manager._statuses[name].state = "connected"
+
+    monkeypatch.setattr(manager, "_connect_stdio", connect)
+    await manager.connect_all()
+    try:
+        with pytest.raises(McpServerNotConnectedError):
+            await asyncio.wait_for(manager.call_tool("bad", "financials", {}), 2)
+        assert await manager.call_tool("good", "financials", {}) == "ok"
+        await asyncio.sleep(0)
+        assert manager._statuses["bad"].state == "failed"
+    finally:
+        await manager.close()
+    assert not manager._owners and not manager._stacks
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_connection_startup_settles_owner(monkeypatch):
+    manager = McpClientManager({"slow": McpStdioServerConfig(command="test")})
+    entered = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def connect(name, config):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(manager, "_connect_stdio", connect)
+    task = asyncio.create_task(manager.connect_all())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    assert finished.is_set()
+    assert not manager._owners
+
+
+@pytest.mark.asyncio
 async def test_call_tool_raises_when_server_never_connected():
     manager = McpClientManager({})
     with pytest.raises(McpServerNotConnectedError, match="not connected"):
@@ -297,3 +360,25 @@ async def test_close_multiple_transport_scopes_does_not_cancel_next_run():
     await manager.close()
     await asyncio.sleep(0)
     assert not manager._stacks
+
+
+@pytest.mark.asyncio
+async def test_schema_mismatch_is_returned_error_without_disconnecting_or_fabricating():
+    manager = McpClientManager({})
+    session = AsyncMock()
+    session.call_tool.side_effect = RuntimeError(
+        "Invalid structured content returned by tool financials: None is not of type 'object'"
+    )
+    manager._sessions['finance'] = session
+    with pytest.raises(McpToolReturnedError) as error:
+        await manager.call_tool('finance', 'financials', {})
+    assert error.value.code == 'invalid_response'
+    adapter = McpToolAdapter(manager, McpToolInfo(server_name='finance', name='financials',
+                                                description='', input_schema={'type': 'object'}))
+    result = await adapter.execute(adapter.input_model(), ToolExecutionContext(cwd=Path.cwd()))
+    assert result.is_error and result.metadata['error_code'] == 'invalid_response'
+    assert result.metadata['research_source_specs'] == []
+    assert 'finance/financials' in result.metadata['detail']
+    session.call_tool.side_effect = None
+    session.call_tool.return_value = CallToolResult(content=[TextContent(type='text', text='recovered')])
+    assert await manager.call_tool('finance', 'financials', {}) == 'recovered'

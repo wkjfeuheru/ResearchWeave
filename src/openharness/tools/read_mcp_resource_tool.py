@@ -38,5 +38,5 @@ class ReadMcpResourceTool(BaseTool):
         return ToolResult(output=output, metadata={"research_source_specs": [{
             "kind": "mcp", "title": arguments.uri,
             "locator": f"mcp:{arguments.server}/{arguments.uri}",
-            "content": output, "fragment": True,
+            "content": output, "fragment": False,
         }]})

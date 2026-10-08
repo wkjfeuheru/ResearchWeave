@@ -81,6 +81,7 @@ def test_registry_contains_only_research_tools():
         "mcp_auth",
         "notebook_edit",
         "research_memory",
+        "investigate_conflict",
         "skill",
         "sleep",
         "tool_search",
@@ -148,6 +149,7 @@ async def test_memory_disabled_ignores_retired_state_and_plugins_keep_hooks(tmp_
     )
     try:
         assert "research_memory" not in {tool.name for tool in bundle.tool_registry.list_tools()}
+        assert "investigate_conflict" not in {tool.name for tool in bundle.tool_registry.list_tools()}
         assert "research_store" not in bundle.engine.tool_metadata
         assert not (
             {"research_mode", "long_term_memory_store", "task_focus_state"}

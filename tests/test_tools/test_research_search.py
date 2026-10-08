@@ -17,6 +17,7 @@ from openharness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
 
 @pytest.fixture
 def catalogue(monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_WEB_SEARCH_URL", "https://search.example/html")
     settings = WebSettings(research_sites=[
         ResearchSiteConfig(domain="official.example", name="官方", categories=["macro", "policy"], tier="official"),
         ResearchSiteConfig(domain="disclosure.example", categories=["disclosure"], tier="official"),
@@ -97,7 +98,8 @@ async def test_zero_curated_results_do_not_query_web(tmp_path, monkeypatch, cata
     result = await WebSearchTool().execute(
         WebSearchToolInput(query="行业", category="industry"), ToolExecutionContext(cwd=tmp_path),
     )
-    assert result.is_error and len(calls) == 1
+    assert not result.is_error and len(calls) == 1
+    assert result.metadata["outcome"] == "empty"
     assert result.metadata["research_source_specs"] == []
     assert "scope=web" in result.output
 
@@ -109,7 +111,8 @@ async def test_category_with_no_sites_makes_no_request(tmp_path, monkeypatch, ca
     result = await WebSearchTool().execute(
         WebSearchToolInput(query="新闻", category="news"), ToolExecutionContext(cwd=tmp_path),
     )
-    assert result.is_error and not calls
+    assert not result.is_error and not calls
+    assert result.metadata["outcome"] == "empty"
 
 
 @pytest.mark.asyncio

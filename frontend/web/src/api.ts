@@ -4,6 +4,8 @@ export interface ModelProfile {
   api_format: string;
   model: string;
   base_url: string | null;
+  context_window_tokens?: number | null;
+  auto_compact_threshold_tokens?: number | null;
   configured: boolean;
   active: boolean;
   supported: boolean;
@@ -31,6 +33,7 @@ export interface SessionFile {
 
 export interface Message {
   id: string;
+  answer_id?: string;
   role: 'user' | 'assistant' | 'tool' | 'tool_result' | 'system' | 'activity';
   text: string;
   turn_id?: string;
@@ -40,6 +43,8 @@ export interface Message {
   label?: string;
   target?: string;
   status?: 'running' | 'completed' | 'failed' | 'interrupted';
+  outcome?: 'success' | 'partial' | 'empty' | 'error';
+  detail?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   is_error?: boolean;
@@ -72,10 +77,14 @@ export interface ResearchProgress {
   revision: number;
   plan_id: string | null;
   title: string;
-  tasks: { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled' }[];
+  current_task_id: string | null;
+  tasks: { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled';
+    blocker: string; completion_note: string; updated_at: string; started_at: string | null; completed_at: string | null }[];
   completed: number;
   total: number;
   replan_required: boolean;
+  conflicts?: { id: string; question: string; core: boolean;
+    status: 'open' | 'investigating' | 'awaiting_review' | 'resolved' | 'unresolved' | 'interrupted' }[];
 }
 
 export interface Prompt {
@@ -84,6 +93,7 @@ export interface Prompt {
   message?: string;
   tool_name?: string;
   tool_label?: string;
+  session_scope?: string;
   path?: string;
   diff?: string;
 }

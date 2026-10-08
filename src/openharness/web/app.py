@@ -95,6 +95,7 @@ class Workspace:
             idle = connection is None or connection.task is None or connection.task.done()
             if idle:
                 ResearchStore(self.cwd, session_id).recover_pending_steers()
+                ResearchStore(self.cwd, session_id).recover_investigations()
             record = self.store.load_by_id(self.cwd, session_id)
             if record is not None:
                 # Acceptance is authoritative even if the process stopped
@@ -218,12 +219,14 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
 
             async def probe():
                 complete = False
+                from openharness.services.context_budget import checked_request
                 async for event in client.stream_message(
-                    ApiMessageRequest(
+                    checked_request(client, ApiMessageRequest(
                         model=settings.model,
                         max_tokens=64,
+                        context_window_tokens=settings.context_window_tokens,
                         messages=[ConversationMessage.from_user_text("Reply with OK.")],
-                    )
+                    ))
                 ):
                     if isinstance(event, ApiMessageCompleteEvent):
                         complete = True
@@ -236,12 +239,15 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
             return {"ok": False, "message": "连接超时，请检查接口地址和网络"}
         except Exception as exc:  # noqa: BLE001 -- redact upstream exception bodies
             from openharness.api.errors import AuthenticationFailure, RateLimitFailure
+            from openharness.services.context_budget import ContextBudgetError
 
             message = "连接失败，请检查接口地址、模型名称及网络"
             if isinstance(exc, AuthenticationFailure):
                 message = "认证失败，请检查模型凭据"
             elif isinstance(exc, RateLimitFailure):
                 message = "请求受限，请检查服务额度或稍后重试"
+            elif isinstance(exc, ContextBudgetError):
+                message = "上下文预算配置不可用，请填写真实的上下文窗口（context_window_tokens），并核对输出额度。"
             return {"ok": False, "message": message}
         finally:
             await client.close()
@@ -434,9 +440,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
                 elif request.type == "steer":
                     await connection.steer(request)
                 elif request.type == "response" and request.request_id == connection.request_id:
-                    future = connection.prompts.get(request.prompt_id)
-                    if future and not future.done():
-                        future.set_result(request.answer)
+                    connection.respond(request.request_id, request.prompt_id, request.answer)
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass
         finally:

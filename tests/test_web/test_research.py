@@ -28,15 +28,26 @@ def test_research_progress_provenance_and_history_restore(workspace, monkeypatch
     assert operations and all("tool_input" not in row and not row["text"] for row in operations)
     progress = [event["progress"] for event in events if event["type"] == "research_progress"]
     assert any(item["total"] == 2 and item["completed"] == 0 for item in progress)
+    assert [item["revision"] for item in progress] == sorted({item["revision"] for item in progress})
+    first_completed = next(item for item in progress if item["tasks"]
+                           and item["tasks"][0]["status"] == "completed")
+    assert first_completed["tasks"][1]["status"] == "pending"
+    second_started = next(item for item in progress if len(item["tasks"]) > 1
+                          and item["current_task_id"] == item["tasks"][1]["id"])
+    assert second_started["tasks"][1]["status"] == "in_progress"
+    assert second_started["tasks"][1]["started_at"]
     assert progress[-1]["completed"] == 2
     response = client.get(f"/api/sessions/{sid}").json()
     text = response["messages"][-1]["text"]
-    assert "[1]" in text and "来源：" in text and "report.txt" in text and "待核验" in text
+    assert "已核对原文" in text
+    assert "[1]" not in text and "来源：" not in text and "report.txt" not in text
     assert "research_memory" not in json.dumps(response, ensure_ascii=False)
     store = ResearchStore(cwd, sid)
     memory = store.load()
     assert len(memory.task_context) == 1
-    assert len(memory.reasoning_chain) == len(memory.conclusions) == len(memory.evidence_pool) == 1
+    assert len(memory.reasoning_chain) == len(memory.evidence_pool) == 2
+    assert len(memory.conclusions) == 1
+    assert list(memory.evidence_pool.values())[-1].status == "source_checked"
     assert next(iter(memory.conclusions.values())).status == "tentative"
     assert memory.answers
     assert response["research_progress"]["completed"] == 2

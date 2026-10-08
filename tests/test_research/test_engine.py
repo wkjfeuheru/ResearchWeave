@@ -76,7 +76,7 @@ def engine(tmp_path, store, tool, model=None):
     registry.register(tool)
     return QueryEngine(api_client=model or OneToolModel(tool.name), tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings()), cwd=tmp_path,
-        model="test", system_prompt="Research instructions", max_turns=10,
+        model="test", context_window_tokens=200_000, system_prompt="Research instructions", max_turns=10,
         tool_metadata={ "research_store": store})
 
 
@@ -150,6 +150,7 @@ async def test_full_compaction_uses_research_prompt_and_keeps_store(tmp_path):
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
     source = store.capture(origin_id="report", content="research source")
     messages = [ConversationMessage.from_user_text(f"资料 {i}") for i in range(16)]
+    messages[0].content = [TextBlock(text="历史资料 " * 2000)]
     requests = []
     class Summarizer:
         async def stream_message(self, request):
@@ -157,7 +158,7 @@ async def test_full_compaction_uses_research_prompt_and_keeps_store(tmp_path):
             yield ApiMessageCompleteEvent(message=ConversationMessage(role="assistant", content=[TextBlock(text="<summary>研究仍待核验</summary>")]), usage=UsageSnapshot())
     metadata = { "research_store": store,
                 "recent_verified_work": ["must not become financial verification"]}
-    result = await compact_conversation(messages, api_client=Summarizer(), model="test", carryover_metadata=metadata)
+    result = await compact_conversation(messages, api_client=Summarizer(), model="test", context_window_tokens=200_000, carryover_metadata=metadata)
     prompt = requests[0].messages[-1].text
     assert "用户目标" in prompt and "Files and Code Sections" not in prompt
     assert any(item.kind == "research_memory" for item in result.attachments)
@@ -210,3 +211,59 @@ async def test_unknown_citations_get_bounded_correction_without_publishing_draft
     assert not any(message.role == "assistant" and "[E:unknown]" in message.text for message in agent.messages[:-1])
     assert any("<research_answer_check>" in (message.runtime_context or "") for message in agent.messages)
     assert not final.research_citations["invalid"] if repairs else final.research_citations["invalid"] == ["unknown"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('is_error', [False, True])
+async def test_empty_search_specs_do_not_fall_back_to_generic_evidence(tmp_path, is_error):
+    class EmptySearchTool(LargeSourceTool):
+        async def execute(self, arguments, context):
+            return ToolResult(output='No search results / channel unavailable', is_error=is_error,
+                              metadata={'research_source_specs': [], 'outcome': 'error' if is_error else 'empty'})
+    store = ResearchStore(tmp_path, 'a' * 12, root=tmp_path / 'memory')
+    agent = engine(tmp_path, store, EmptySearchTool())
+    _ = [event async for event in agent.submit_message('搜索资料')]
+    result = next(block for message in agent.messages for block in message.content if isinstance(block, ToolResultBlock))
+    assert result.result_metadata['research_sources'] == []
+    assert not any(source.origin_id == 'source-call' for source in store.load().sources.values())
+
+
+@pytest.mark.asyncio
+async def test_final_verification_is_bounded_to_three_rounds(tmp_path):
+    store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
+    user = store.capture(origin_id="user", content="核验营收", kind="user")
+    store.apply({"action": "set_context", "operation_id": "context", "expected_revision": 1,
+                 "goal": "核验营收", "user_source_ids": [user.id]})
+    plan = store.apply({"action": "create_plan", "operation_id": "plan", "expected_revision": 2,
+                        "title": "核验", "tasks": ["核对原文"]})
+    task_id = plan["tasks"][0]["id"]
+    store.apply({"action": "update_task", "operation_id": "start", "expected_revision": 3,
+                 "task_id": task_id, "status": "in_progress"})
+    source = store.capture(origin_id="full-report", content="完整年报披露营收增长", kind="web",
+                           locator="https://example.org/report", fragment=False)
+    item = store.apply({"action": "add_evidence", "operation_id": "evidence",
+                        "expected_revision": store.load().revision, "source_id": source.id,
+                        "statement": "营收增长"})["evidence_id"]
+    store.apply({"action": "update_task", "operation_id": "complete",
+                 "expected_revision": store.load().revision, "task_id": task_id,
+                 "status": "completed", "completion_note": "已登记完整原文，等待核验"})
+
+    class UncooperativeModel:
+        def __init__(self):
+            self.requests = []
+
+        async def stream_message(self, request):
+            self.requests.append(request)
+            text = f"营收增长 [E:{item}]"
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(role="assistant", content=[TextBlock(text=text)]),
+                usage=UsageSnapshot(input_tokens=1, output_tokens=1),
+            )
+
+    model = UncooperativeModel()
+    agent = engine(tmp_path, store, LargeSourceTool(), model)
+    events = [event async for event in agent.submit_message("给出结论")]
+    assert len(model.requests) == 4
+    assert "待核验（尚未完成原文核对）" in agent.messages[-1].text
+    from openharness.engine.stream_events import StatusEvent
+    assert sum(isinstance(event, StatusEvent) and "核对引用原文" in event.message for event in events) == 3

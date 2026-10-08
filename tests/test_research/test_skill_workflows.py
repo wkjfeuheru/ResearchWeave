@@ -2,6 +2,10 @@
 
 import copy
 import json
+import os
+import shutil
+import subprocess
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,20 +16,10 @@ from pypdf import PdfWriter
 from pydantic import ValidationError
 
 from openharness.utils.research_documents import parse_document
-from openharness.utils.research_workflows.events import normalize_monitor
-from openharness.utils.research_workflows.export import export_result
-from openharness.utils.research_workflows.financial import calculate_financial
-from openharness.utils.research_workflows.models import RESULT_TYPES
-from openharness.utils.research_workflows.reports import calculate_deep, normalize_digest
+from tests.research_skill_support import FUNCTIONS, RESULT_TYPES, SKILLS, export_result, module
 from openharness.utils.session_files import SessionFiles
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "research_skills"
-FUNCTIONS = {
-    "financial": calculate_financial,
-    "monitor": normalize_monitor,
-    "digest": normalize_digest,
-    "deep": calculate_deep,
-}
 
 
 def fixture(kind):
@@ -314,10 +308,112 @@ def test_no_reliable_share_count_means_no_eps():
 
 
 def test_plugin_script_limits_workflow_to_its_own_kind(capsys):
-    from openharness.utils.research_workflows.cli import main
-
+    main = module("financial", "analyze_statements").main
     with pytest.raises(SystemExit) as exc:
-        main(["schema", "deep"], skill_kind="financial")
-    assert exc.value.code == 2 and "invalid choice" in capsys.readouterr().err
-    main(["schema", "financial"], skill_kind="financial")
+        main(["--schema", "deep"])
+    assert exc.value.code == 2 and "unrecognized arguments" in capsys.readouterr().err
+    main(["--schema"])
     assert json.loads(capsys.readouterr().out)["title"] == "FinancialResult"
+
+
+@pytest.mark.parametrize("kind", SKILLS)
+def test_script_json_round_trip_retains_calculated_values(kind):
+    calculated = compute(kind)
+    restored = RESULT_TYPES[kind].model_validate_json(calculated.model_dump_json())
+    assert restored.model_dump() == calculated.model_dump()
+    base = Path(module(kind, SKILLS[kind][1]).__file__).parents[1]
+    schema = json.loads((base / "templates/input.schema.json").read_text())
+    assert RESULT_TYPES[kind].model_json_schema() == schema
+
+
+@pytest.mark.parametrize("kind", SKILLS)
+def test_business_and_export_scripts_from_another_cwd(kind, tmp_path):
+    script = Path(module(kind, SKILLS[kind][1]).__file__)
+    output = tmp_path / "work" / "computed.json"
+    env = {
+        **os.environ,
+        "OPENHARNESS_RESEARCH_SESSION_DIR": str(tmp_path / "session"),
+        "OPENHARNESS_RESEARCH_TASK_ID": "script-task",
+    }
+
+    def run(path, *args):
+        result = subprocess.run(
+            [sys.executable, str(path), *map(str, args)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    assert run(script, "--schema")["title"] == RESULT_TYPES[kind].__name__
+    processed = run(script, "--input", FIXTURES / f"{kind}.json", "--output", output)
+    assert processed["status"] == "complete" and Path(processed["result"]) == output
+    assert (
+        RESULT_TYPES[kind].model_validate_json(output.read_text()).model_dump()
+        == compute(kind).model_dump()
+    )
+    # Computation saves an intermediate result; exporting registers the four final files.
+    assert not SessionFiles(tmp_path / "session").list("artifacts")
+    exported = run(
+        script.parent / "export_report.py", "--input", output, "--output-dir", tmp_path / "exports"
+    )
+    assert len(exported["artifacts"]) == 4
+    assert all(item["task_id"] == "script-task" for item in exported["artifacts"])
+    assert json.loads((tmp_path / "exports" / f"{kind}.json").read_text()) == json.loads(
+        output.read_text()
+    )
+    wb = load_workbook(tmp_path / "exports" / f"{kind}.xlsx", data_only=True)
+    if kind in {"financial", "deep", "digest"}:
+        sheet, field, expected = {
+            "financial": ("ratios", "[0].value", 0.4),
+            "deep": ("forecasts", "[0].values.revenue", 1100000),
+            "digest": ("comparison", "[0].predictions[0].value_yuan", 200000000),
+        }[kind]
+        row = next(row for row in wb[sheet].values if row[0] == field)
+        assert row[1] == expected and isinstance(row[1], (int, float))
+        assert Decimal(row[2]) == Decimal(str(expected))
+
+
+def test_business_script_rejects_other_skill_input_without_output(tmp_path):
+    script = module("financial", "analyze_statements").__file__
+    output = tmp_path / "unexpected.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            script,
+            "--input",
+            str(FIXTURES / "monitor.json"),
+            "--output",
+            str(output),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2 and json.loads(result.stderr)["status"] == "failed"
+    assert not output.exists()
+
+
+def test_copied_plugin_packages_keep_sibling_models_isolated(tmp_path):
+    from importlib import import_module
+    from openharness.utils.research_script_support import script_package
+
+    loaded = []
+    for kind in ("financial", "monitor"):
+        source = Path(module(kind, SKILLS[kind][1]).__file__).parent
+        copied = tmp_path / kind / "scripts"
+        shutil.copytree(source, copied, ignore=shutil.ignore_patterns("__pycache__"))
+        package = script_package(str(copied / (SKILLS[kind][1] + ".py")))
+        business = import_module(package + "." + SKILLS[kind][1])
+        model = getattr(business, SKILLS[kind][3])
+        assert Path(import_module(package + ".models").__file__).parent == copied
+        assert (
+            getattr(business, SKILLS[kind][2])(model.model_validate(fixture(kind))).status
+            == "complete"
+        )
+        loaded.append(model.__module__)
+    assert loaded[0] != loaded[1]
