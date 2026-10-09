@@ -260,6 +260,7 @@ async def test_contract_retries_only_verified_no_effect_and_preserves_key(
             "effect": "external_write",
             "retry_mode": mode,
             "max_attempts": 2,
+            "idempotency_key_supported": mode == "idempotency_key",
         }
         keys = []
         reconciled = False
@@ -271,8 +272,13 @@ async def test_contract_retries_only_verified_no_effect_and_preserves_key(
                     "not committed",
                     is_error=True,
                     metadata={"no_effect": mode != "reconcile_before_retry"},
+                    retryable=True,
                 )
             return await super().execute(arguments, context)
+
+        async def execute_with_idempotency_key(self, arguments, context, *, idempotency_key):
+            assert idempotency_key == context.idempotency_key
+            return await self.execute(arguments, context)
 
         async def reconcile_no_effect(self, arguments, context):
             self.reconciled = True
@@ -420,7 +426,7 @@ async def test_recovery_cannot_reset_total_tool_attempt_limit(tmp_path, monkeypa
 
         async def execute(self, arguments, context):
             self.calls += 1
-            return ToolResult("transient", is_error=True)
+            return ToolResult("transient", is_error=True, retryable=True)
 
     tool, context = setup(tmp_path, monkeypatch, RetryRead())
     service = ToolExecutionService()

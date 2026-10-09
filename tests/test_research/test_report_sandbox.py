@@ -1,6 +1,7 @@
 """Real report isolation acceptance: no skipped backend or host fallback."""
 
 import asyncio
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -15,8 +16,16 @@ from openharness.tools.bash_tool import BashTool, BashToolInput
 from tests.test_research.test_dispatch_subagents import project as project
 
 
+def _settings() -> Settings:
+    """Permit testing a freshly built image without replacing a user's tags."""
+    settings = Settings()
+    if image := os.environ.get("OPENHARNESS_TEST_DOCKER_IMAGE"):
+        settings.sandbox.docker.image = image
+    return settings
+
+
 async def run(workspace, command, *, backend="srt", key="test"):
-    settings = report_settings(Settings(), workspace)
+    settings = report_settings(_settings(), workspace)
     settings.sandbox.backend = backend
     process = await create_shell_subprocess(
         command,
@@ -94,7 +103,7 @@ async def test_report_backend_missing_fails_closed(project, monkeypatch):
     ctx = ToolExecutionContext(
         cwd=project.resolve_workspace("P"),
         metadata={"research_runtime": project},
-        settings=Settings(),
+        settings=_settings(),
     )
     result = await BashTool().execute(BashToolInput(command="touch reports/host-fallback"), ctx)
     assert result.is_error and "not found" in result.output
@@ -105,7 +114,7 @@ async def test_report_timeout_and_cancel_remove_descendants(project):
     ctx = ToolExecutionContext(
         cwd=project.resolve_workspace("P"),
         metadata={"research_runtime": project},
-        settings=Settings(),
+        settings=_settings(),
     )
     command = "(sleep 3; touch reports/leaked) & wait"
     result = await BashTool().execute(BashToolInput(command=command, timeout_seconds=1), ctx)
@@ -127,7 +136,7 @@ async def test_nonreport_host_compatibility(tmp_path):
             command=f"{shlex.quote(sys.executable)} -c "
             + shlex.quote(f"from pathlib import Path; print(Path({str(private)!r}).read_text())")
         ),
-        ToolExecutionContext(cwd=tmp_path, settings=Settings()),
+        ToolExecutionContext(cwd=tmp_path, settings=_settings()),
     )
     assert not result.is_error and "legacy" in result.output
 
@@ -172,7 +181,7 @@ async def test_actual_docker_cancel_removes_only_owned_execution(project, tmp_pa
     )
 
     root = project.resolve_workspace("P")
-    settings = report_settings(Settings(), root)
+    settings = report_settings(_settings(), root)
     settings.sandbox.backend = "docker"
     keeper = await start_docker_sandbox(
         settings, "keeper-runtime:project:execution", root, report=True
@@ -209,7 +218,7 @@ async def test_actual_isolated_exports_registered_only_by_host(project, backend)
     from openharness.utils.session_files import SessionFiles
 
     root = project.resolve_workspace("P")
-    settings = Settings()
+    settings = _settings()
     settings.sandbox.backend = backend
     execution = project.repository.begin_execution("bash", f"export-{backend}")
     ctx = ToolExecutionContext(

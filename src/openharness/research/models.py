@@ -539,6 +539,12 @@ class AddConflict(Mutation):
     sides: list[ConflictSide] = Field(min_length=2, max_length=10)
 
 
+class SubmitConflictReport(Mutation):
+    action: Literal["submit_conflict_report"]
+    conflict_id: str
+    report: ArbitrationDecision
+
+
 class ResolveConflict(Mutation):
     action: Literal["resolve_conflict"]
     conflict_id: str
@@ -564,6 +570,7 @@ ResearchOperation = Annotated[
     | VerifyEvidence
     | AddConclusion
     | AddConflict
+    | SubmitConflictReport
     | ResolveConflict
     | ReopenConflict,
     Field(discriminator="action"),

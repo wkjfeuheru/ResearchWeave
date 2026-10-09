@@ -1,0 +1,11 @@
+....F................................................................... [ 45%]
+........................................................................ [ 91%]
+..............                                                           [100%]
+=================================== FAILURES ===================================
+_________ test_bash_tool_uses_devnull_stdin_for_non_interactive_shell __________
+tests/test_tools/test_bash_tool.py:199: in test_bash_tool_uses_devnull_stdin_for_non_interactive_shell
+    assert seen_kwargs["prefer_pty"] is True
+E   assert False is True
+=========================== short test summary info ============================
+FAILED tests/test_tools/test_bash_tool.py::test_bash_tool_uses_devnull_stdin_for_non_interactive_shell
+1 failed, 157 passed in 39.35s

@@ -40,7 +40,6 @@ react_tui_smoke.txt
 # OS
 .DS_Store
 Thumbs.db
-uv.lock
 
 # Pinned local sandbox dependencies
 tools/sandbox/node_modules/

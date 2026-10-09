@@ -62,6 +62,8 @@ class McpToolAdapter(BaseTool[BaseModel]):
                     "error_code": code,
                     "detail": detail,
                     "research_source_specs": [],
+                    "no_effect": isinstance(exc, McpServerNotConnectedError)
+                    and exc.request_not_sent,
                 },
             )
         return ToolResult(

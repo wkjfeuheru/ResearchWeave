@@ -1,0 +1,673 @@
+{
+  "total_count": 5,
+  "jobs": [
+    {
+      "id": 113789054630,
+      "run_id": 37921134047,
+      "workflow_name": "CI",
+      "head_branch": "codex/backend-stabilization-ci",
+      "run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/runs/37921134047",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOU8dvx88AAAAaflsupg",
+      "head_sha": "40eab46f3511226d2b2698e015cb2028f0978541",
+      "url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/jobs/113789054630",
+      "html_url": "https://github.com/wkjfeuheru/ResearchWeave/actions/runs/37921134047/job/113789054630",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-10-09T11:01:00Z",
+      "started_at": "2026-10-09T11:01:02Z",
+      "completed_at": null,
+      "name": "Research web build and browser tests",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-09T11:01:02Z",
+          "completed_at": "2026-10-09T11:01:03Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-09T11:01:03Z",
+          "completed_at": "2026-10-09T11:01:05Z"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-09T11:01:05Z",
+          "completed_at": "2026-10-09T11:01:05Z"
+        },
+        {
+          "name": "Run astral-sh/setup-uv@v6",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-09T11:01:05Z",
+          "completed_at": "2026-10-09T11:01:07Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-09T11:01:07Z",
+          "completed_at": "2026-10-09T11:01:08Z"
+        },
+        {
+          "name": "Install backend dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-09T11:01:08Z",
+          "completed_at": "2026-10-09T11:01:10Z"
+        },
+        {
+          "name": "Install frontend dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-09T11:01:10Z",
+          "completed_at": "2026-10-09T11:01:12Z"
+        },
+        {
+          "name": "Build web frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-09T11:01:12Z",
+          "completed_at": "2026-10-09T11:01:15Z"
+        },
+        {
+          "name": "Install test browser",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-09T11:01:15Z",
+          "completed_at": "2026-10-09T11:01:33Z"
+        },
+        {
+          "name": "Set up sandbox Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-09T11:01:33Z",
+          "completed_at": "2026-10-09T11:01:33Z"
+        },
+        {
+          "name": "Install sandbox dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-09T11:01:33Z",
+          "completed_at": "2026-10-09T11:01:37Z"
+        },
+        {
+          "name": "Browser integration tests",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 12,
+          "started_at": "2026-10-09T11:01:37Z",
+          "completed_at": null
+        },
+        {
+          "name": "Build distributable wheel",
+          "status": "pending",
+          "conclusion": null,
+          "number": 13,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Verify wheel in a clean environment",
+          "status": "pending",
+          "conclusion": null,
+          "number": 14,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up sandbox Node",
+          "status": "pending",
+          "conclusion": null,
+          "number": 24,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 25,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run astral-sh/setup-uv@v6",
+          "status": "pending",
+          "conclusion": null,
+          "number": 26,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "pending",
+          "conclusion": null,
+          "number": 27,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 28,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/check-runs/113789054630",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000000072,
+      "runner_name": "GitHub Actions 1000000072",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 113789054873,
+      "run_id": 37921134047,
+      "workflow_name": "CI",
+      "head_branch": "codex/backend-stabilization-ci",
+      "run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/runs/37921134047",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOU8dvx88AAAAaflsvmQ",
+      "head_sha": "40eab46f3511226d2b2698e015cb2028f0978541",
+      "url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/jobs/113789054873",
+      "html_url": "https://github.com/wkjfeuheru/ResearchWeave/actions/runs/37921134047/job/113789054873",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-10-09T11:01:00Z",
+      "started_at": "2026-10-09T11:01:02Z",
+      "completed_at": null,
+      "name": "Real sandbox acceptance (missing backends fail)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-09T11:01:02Z",
+          "completed_at": "2026-10-09T11:01:03Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-09T11:01:03Z",
+          "completed_at": "2026-10-09T11:01:04Z"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-09T11:01:04Z",
+          "completed_at": "2026-10-09T11:01:04Z"
+        },
+        {
+          "name": "Run astral-sh/setup-uv@v6",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-09T11:01:04Z",
+          "completed_at": "2026-10-09T11:01:06Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-09T11:01:06Z",
+          "completed_at": "2026-10-09T11:01:07Z"
+        },
+        {
+          "name": "Install mandatory backends",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-09T11:01:07Z",
+          "completed_at": "2026-10-09T11:01:34Z"
+        },
+        {
+          "name": "Real isolation and crash recovery",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 7,
+          "started_at": "2026-10-09T11:01:34Z",
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 11,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run astral-sh/setup-uv@v6",
+          "status": "pending",
+          "conclusion": null,
+          "number": 12,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "pending",
+          "conclusion": null,
+          "number": 13,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "pending",
+          "conclusion": null,
+          "number": 14,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/check-runs/113789054873",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000000073,
+      "runner_name": "GitHub Actions 1000000073",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 113789054874,
+      "run_id": 37921134047,
+      "workflow_name": "CI",
+      "head_branch": "codex/backend-stabilization-ci",
+      "run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/runs/37921134047",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOU8dvx88AAAAaflsvmg",
+      "head_sha": "40eab46f3511226d2b2698e015cb2028f0978541",
+      "url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/jobs/113789054874",
+      "html_url": "https://github.com/wkjfeuheru/ResearchWeave/actions/runs/37921134047/job/113789054874",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-10-09T11:01:00Z",
+      "started_at": "2026-10-09T11:01:02Z",
+      "completed_at": null,
+      "name": "Python tests (3.10)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-09T11:01:03Z",
+          "completed_at": "2026-10-09T11:01:05Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-09T11:01:05Z",
+          "completed_at": "2026-10-09T11:01:06Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-09T11:01:06Z",
+          "completed_at": "2026-10-09T11:01:06Z"
+        },
+        {
+          "name": "Set up uv",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-09T11:01:06Z",
+          "completed_at": "2026-10-09T11:01:09Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-09T11:01:09Z",
+          "completed_at": "2026-10-09T11:01:11Z"
+        },
+        {
+          "name": "Set up sandbox Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-09T11:01:11Z",
+          "completed_at": "2026-10-09T11:01:14Z"
+        },
+        {
+          "name": "Install sandbox dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-09T11:01:14Z",
+          "completed_at": "2026-10-09T11:01:41Z"
+        },
+        {
+          "name": "Run test suite",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 8,
+          "started_at": "2026-10-09T11:01:41Z",
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up sandbox Node",
+          "status": "pending",
+          "conclusion": null,
+          "number": 13,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up uv",
+          "status": "pending",
+          "conclusion": null,
+          "number": 14,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "pending",
+          "conclusion": null,
+          "number": 15,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Checkout",
+          "status": "pending",
+          "conclusion": null,
+          "number": 16,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/check-runs/113789054874",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000000074,
+      "runner_name": "GitHub Actions 1000000074",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 113789054908,
+      "run_id": 37921134047,
+      "workflow_name": "CI",
+      "head_branch": "codex/backend-stabilization-ci",
+      "run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/runs/37921134047",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOU8dvx88AAAAaflsvvA",
+      "head_sha": "40eab46f3511226d2b2698e015cb2028f0978541",
+      "url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/jobs/113789054908",
+      "html_url": "https://github.com/wkjfeuheru/ResearchWeave/actions/runs/37921134047/job/113789054908",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-09T11:01:00Z",
+      "started_at": "2026-10-09T11:01:02Z",
+      "completed_at": "2026-10-09T11:01:30Z",
+      "name": "Python quality",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-09T11:01:02Z",
+          "completed_at": "2026-10-09T11:01:04Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-09T11:01:04Z",
+          "completed_at": "2026-10-09T11:01:05Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-09T11:01:05Z",
+          "completed_at": "2026-10-09T11:01:05Z"
+        },
+        {
+          "name": "Set up uv",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-09T11:01:05Z",
+          "completed_at": "2026-10-09T11:01:07Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-09T11:01:07Z",
+          "completed_at": "2026-10-09T11:01:08Z"
+        },
+        {
+          "name": "Strict production types",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-09T11:01:08Z",
+          "completed_at": "2026-10-09T11:01:26Z"
+        },
+        {
+          "name": "Ruff",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-09T11:01:26Z",
+          "completed_at": "2026-10-09T11:01:26Z"
+        },
+        {
+          "name": "Production formatting",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-09T11:01:26Z",
+          "completed_at": "2026-10-09T11:01:26Z"
+        },
+        {
+          "name": "Post Set up uv",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-09T11:01:26Z",
+          "completed_at": "2026-10-09T11:01:27Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-09T11:01:27Z",
+          "completed_at": "2026-10-09T11:01:28Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-09T11:01:28Z",
+          "completed_at": "2026-10-09T11:01:28Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-09T11:01:28Z",
+          "completed_at": "2026-10-09T11:01:28Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/check-runs/113789054908",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000000075,
+      "runner_name": "GitHub Actions 1000000075",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 113789055081,
+      "run_id": 37921134047,
+      "workflow_name": "CI",
+      "head_branch": "codex/backend-stabilization-ci",
+      "run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/runs/37921134047",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOU8dvx88AAAAaflswaQ",
+      "head_sha": "40eab46f3511226d2b2698e015cb2028f0978541",
+      "url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/actions/jobs/113789055081",
+      "html_url": "https://github.com/wkjfeuheru/ResearchWeave/actions/runs/37921134047/job/113789055081",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-10-09T11:01:00Z",
+      "started_at": "2026-10-09T11:01:02Z",
+      "completed_at": null,
+      "name": "Python tests (3.11)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-09T11:01:03Z",
+          "completed_at": "2026-10-09T11:01:05Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-09T11:01:05Z",
+          "completed_at": "2026-10-09T11:01:06Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-09T11:01:06Z",
+          "completed_at": "2026-10-09T11:01:06Z"
+        },
+        {
+          "name": "Set up uv",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-09T11:01:06Z",
+          "completed_at": "2026-10-09T11:01:09Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-09T11:01:09Z",
+          "completed_at": "2026-10-09T11:01:10Z"
+        },
+        {
+          "name": "Set up sandbox Node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-09T11:01:10Z",
+          "completed_at": "2026-10-09T11:01:11Z"
+        },
+        {
+          "name": "Install sandbox dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-09T11:01:11Z",
+          "completed_at": "2026-10-09T11:01:37Z"
+        },
+        {
+          "name": "Run test suite",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 8,
+          "started_at": "2026-10-09T11:01:37Z",
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up sandbox Node",
+          "status": "pending",
+          "conclusion": null,
+          "number": 13,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up uv",
+          "status": "pending",
+          "conclusion": null,
+          "number": 14,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "pending",
+          "conclusion": null,
+          "number": 15,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Checkout",
+          "status": "pending",
+          "conclusion": null,
+          "number": 16,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/wkjfeuheru/ResearchWeave/check-runs/113789055081",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000000076,
+      "runner_name": "GitHub Actions 1000000076",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

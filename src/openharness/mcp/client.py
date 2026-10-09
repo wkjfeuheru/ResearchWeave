@@ -27,7 +27,11 @@ RequestT = TypeVar("RequestT")
 
 
 class McpServerNotConnectedError(Exception):
-    """Raised when an MCP server is not connected or its session has been lost."""
+    """Raised when a session is absent or lost. Only pre-dispatch absence proves no effect."""
+
+    def __init__(self, message: str, *, request_not_sent: bool = False) -> None:
+        super().__init__(message)
+        self.request_not_sent = request_not_sent
 
 
 class McpToolReturnedError(Exception):
@@ -211,7 +215,8 @@ class McpClientManager:
             status = self._statuses.get(server_name)
             detail = status.detail if status else "unknown server"
             raise McpServerNotConnectedError(
-                f"MCP server '{server_name}' is not connected: {detail}"
+                f"MCP server '{server_name}' is not connected: {detail}",
+                request_not_sent=True,
             )
         timeout = getattr(self._server_configs.get(server_name), "request_timeout", 60.0)
         try:
@@ -268,7 +273,8 @@ class McpClientManager:
             status = self._statuses.get(server_name)
             detail = status.detail if status else "unknown server"
             raise McpServerNotConnectedError(
-                f"MCP server '{server_name}' is not connected: {detail}"
+                f"MCP server '{server_name}' is not connected: {detail}",
+                request_not_sent=True,
             )
         timeout = getattr(self._server_configs.get(server_name), "request_timeout", 60.0)
         try:

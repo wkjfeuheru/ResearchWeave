@@ -89,3 +89,16 @@ def report_environment(workspace: Path) -> dict[str, str]:
         "PYTHONDONTWRITEBYTECODE": "1",
         "OPENHARNESS_ISOLATED_EXPORT": "1",
     }
+
+
+def agent_shell_settings(settings: Settings, workspace: Path) -> Settings:
+    """Reuse the strict report backend; ordinary commands may write within cwd."""
+    derived = report_settings(settings, workspace)
+    derived.sandbox.filesystem.allow_read.append(str(workspace.resolve()))
+    derived.sandbox.filesystem.allow_write = [str(workspace.resolve())]
+    from openharness.config.paths import get_config_dir, get_data_dir
+
+    private = [str(get_config_dir().resolve()), str(get_data_dir().resolve())]
+    derived.sandbox.filesystem.deny_read = ["/", *private]
+    derived.sandbox.filesystem.deny_write.extend(private)
+    return derived

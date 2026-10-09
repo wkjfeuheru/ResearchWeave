@@ -93,4 +93,6 @@ npm run test:e2e
 
 真实模型测试独立执行，使用已有模型配置及临时研究工作区。`tests/test_web/real_research_eval.py --help` 提供规划、资料采集、计算、带来源回答、浏览器检查和重启追问的两轮验收入口。
 
-Harness 开发说明见[工具契约、权限、重试与恢复](docs/HARNESS_EXECUTION.md)，本轮实际测试与限制见[验收记录](docs/testing/harness-validation.md)。
+Agent Shell 和 Skill 计算默认要求 SRT 0.0.79 或配置的 Docker；后端不可用时拒绝执行。显式可信宿主模式仅限报告项目之外的主 Agent。安全策略、私有持久化、有界等待和恢复维护见[后端稳定性说明](docs/BACKEND_STABILIZATION.md)。
+
+Harness 开发说明见[工具契约、权限、重试与恢复](docs/HARNESS_EXECUTION.md)，本轮实际命令与测试结果见[验收记录](docs/testing/backend-stability-validation.md)。

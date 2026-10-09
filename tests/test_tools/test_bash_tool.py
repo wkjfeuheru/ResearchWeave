@@ -173,7 +173,15 @@ async def test_bash_tool_collects_combined_output(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_bash_tool_uses_devnull_stdin_for_non_interactive_shell(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("host", [False, True])
+async def test_bash_tool_uses_devnull_stdin_for_non_interactive_shell(
+    monkeypatch, tmp_path: Path, host
+):
+    from openharness.config import Settings
+    from openharness.permissions.capabilities import CapabilityContext
+
+    settings = Settings()
+    settings.sandbox.allow_trusted_host = host
     process = _FakeProcess(
         stdout=_FakeStdout([b"ok\n", b""]),
         returncode=0,
@@ -191,12 +199,16 @@ async def test_bash_tool_uses_devnull_stdin_for_non_interactive_shell(monkeypatc
 
     result = await BashTool().execute(
         BashToolInput(command="echo ok"),
-        ToolExecutionContext(cwd=tmp_path),
+        ToolExecutionContext(
+            cwd=tmp_path, settings=settings, capabilities=CapabilityContext(allow_trusted_host=host)
+        ),
     )
 
     assert result.is_error is False
     assert seen_kwargs["stdin"] == asyncio.subprocess.DEVNULL
-    assert seen_kwargs["prefer_pty"] is True
+    assert seen_kwargs["prefer_pty"] is host
+    assert result.metadata["safety_level"] == ("trusted_host" if host else "sandbox")
+    assert seen_kwargs["settings"].sandbox.enabled is not host
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,76 @@
+## main...origin/main
+ M .github/workflows/ci.yml
+ M .gitignore
+ M README.md
+ M README.zh-CN.md
+ M docs/HARNESS_EXECUTION.md
+ M frontend/web/e2e/workspace.spec.ts
+ M frontend/web/src/useConversation.ts
+ M scripts/test_docker_sandbox_e2e.py
+ M src/openharness/api/retry.py
+ M src/openharness/auth/storage.py
+ M src/openharness/config/paths.py
+ M src/openharness/config/settings.py
+ M src/openharness/engine/query.py
+ M src/openharness/engine/query_engine.py
+ M src/openharness/engine/subagents.py
+ M src/openharness/mcp/client.py
+ M src/openharness/permissions/capabilities.py
+ M src/openharness/plugins/loader.py
+ M src/openharness/research/conflicts.py
+ M src/openharness/research/dispatch_audit.py
+ M src/openharness/research/models.py
+ M src/openharness/research/prompt.py
+ M src/openharness/research/repository.py
+ M src/openharness/research/store.py
+ M src/openharness/runtime.py
+ M src/openharness/sandbox/Dockerfile
+ M src/openharness/sandbox/docker_backend.py
+ M src/openharness/sandbox/policy.py
+ M src/openharness/services/operations.py
+ M src/openharness/services/session_storage.py
+ M src/openharness/services/tool_execution.py
+ M src/openharness/skills/loader.py
+ M src/openharness/skills/resources.py
+ M src/openharness/skills/types.py
+ M src/openharness/tools/__init__.py
+ M src/openharness/tools/base.py
+ M src/openharness/tools/bash_tool.py
+ M src/openharness/tools/contracts.py
+ M src/openharness/tools/mcp_tool.py
+ M src/openharness/tools/research_memory_tool.py
+ M src/openharness/tools/web_search_tool.py
+ M src/openharness/utils/file_lock.py
+ M src/openharness/utils/fs.py
+ M src/openharness/utils/session_files.py
+ M src/openharness/web/storage.py
+ M tests/test_entrypoints/test_research_product.py
+ M tests/test_harness/test_execution.py
+ M tests/test_harness/test_retry_hooks.py
+ M tests/test_research/test_dispatch_subagents.py
+ M tests/test_research/test_investigation.py
+ M tests/test_research/test_memory_compatibility.py
+ M tests/test_research/test_report_sandbox.py
+ M tests/test_research/test_workspace_memory.py
+ M tests/test_sandbox/test_docker_backend.py
+ M tests/test_tools/test_bash_tool.py
+ M tests/test_tools/test_core_tools.py
+ M tests/test_tools/test_image_generation_tool.py
+ M tests/test_tools/test_integration_flows.py
+ M tests/test_tools/test_mcp_auth_tool.py
+ M tests/test_web/browser_server.py
+?? docs/BACKEND_STABILIZATION.md
+?? docs/TOOL_RETIREMENT.md
+?? docs/testing/backend-stability-logs/
+?? docs/testing/backend-stability-validation.md
+?? docs/testing/ci-next-logs/
+?? docs/testing/ci-next-validation.md
+?? docs/testing/harness-next-logs/
+?? docs/testing/harness-next-validation.md
+?? scripts/ci_validation.py
+?? src/openharness/tools/retired.py
+?? src/openharness/utils/search_types.py
+?? src/openharness/utils/tavily_search.py
+?? tests/test_backend_stability/
+?? tests/test_harness/test_product_recovery.py
+?? uv.lock

@@ -8,13 +8,13 @@ import pytest
 
 from openharness.tools.bash_tool import BashTool, BashToolInput
 from openharness.tools.base import ToolExecutionContext
-from openharness.tools.config_tool import ConfigTool, ConfigToolInput
+from openharness.config.settings import Settings, load_settings, save_settings
+import json
 from openharness.tools.file_edit_tool import FileEditTool, FileEditToolInput
 from openharness.tools.file_read_tool import FileReadTool, FileReadToolInput
 from openharness.tools.file_write_tool import FileWriteTool, FileWriteToolInput
 from openharness.tools.glob_tool import GlobTool, GlobToolInput
 from openharness.tools.grep_tool import GrepTool, GrepToolInput
-from openharness.tools.notebook_edit_tool import NotebookEditTool, NotebookEditToolInput
 from openharness.tools.skill_tool import SkillTool, SkillToolInput
 from openharness.tools.tool_search_tool import ToolSearchTool, ToolSearchToolInput
 from openharness.tools import create_research_tool_registry
@@ -197,11 +197,9 @@ async def test_skill_and_config_tools(tmp_path: Path, monkeypatch):
     )
     assert "Helpful pytest notes." in skill_result.output
 
-    config_result = await ConfigTool().execute(
-        ConfigToolInput(action="set", key="effort", value="high"),
-        ToolExecutionContext(cwd=tmp_path),
-    )
-    assert config_result.output == "Updated effort"
+    save_settings(Settings(effort="high"))
+    assert load_settings().effort == "high"
+    assert create_research_tool_registry(mode="general").get("config") is None
 
 
 @pytest.mark.asyncio
@@ -231,10 +229,27 @@ async def test_skill_tool_rejects_user_only_skills(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_notebook_edit_tool(tmp_path: Path):
-    result = await NotebookEditTool().execute(
-        NotebookEditToolInput(path="demo.ipynb", cell_index=0, new_source="print('nb ok')\n"),
+    notebook = {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": ["print('nb ok')\n"],
+            }
+        ],
+    }
+    result = await FileWriteTool().execute(
+        FileWriteToolInput(path="demo.ipynb", content=json.dumps(notebook)),
         ToolExecutionContext(cwd=tmp_path),
     )
     assert result.is_error is False
     assert "demo.ipynb" in result.output
-    assert "nb ok" in (tmp_path / "demo.ipynb").read_text(encoding="utf-8")
+    assert json.loads((tmp_path / "demo.ipynb").read_text())["cells"][0]["source"] == [
+        "print('nb ok')\n"
+    ]
+    assert create_research_tool_registry().get("notebook_edit") is None

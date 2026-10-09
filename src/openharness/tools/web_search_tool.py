@@ -14,7 +14,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from openharness.config import load_settings
-from openharness.utils.tavily_search import SearchBatch, search_tavily
+from openharness.utils.search_types import SearchBatch
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from openharness.utils.research_sites import (
     CATEGORY_LABELS,
@@ -398,3 +398,12 @@ def _clean_html(fragment: str) -> str:
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+async def search_tavily(
+    query: str, *, domains: list[str] | None, category: str
+) -> list[SearchBatch]:
+    """Lazy compatible entrypoint: HTML imports do not initialize the paid provider."""
+    from openharness.utils.tavily_search import search_tavily as transport
+
+    return await transport(query, domains=domains, category=category)

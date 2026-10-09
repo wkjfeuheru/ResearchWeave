@@ -43,7 +43,7 @@ from openharness.research.models import (
 )
 from openharness.services.token_estimation import estimate_tokens
 from openharness.utils.file_lock import exclusive_file_lock
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory, private_file
 from openharness.utils.research_sites import source_identity
 from openharness.research.conflicts import ConflictStoreMixin
 from openharness.research.errors import ResearchError
@@ -61,6 +61,8 @@ class ResearchStore(ConflictStoreMixin):
         self.directory = (root or get_data_dir() / "research" / digest) / session_id
         self.path = self.directory / "state.json"
         self.lock = self.directory / ".lock"
+        private_directory(self.directory)
+        private_file(self.path)
 
     def _load(self) -> ResearchMemory:
         if not self.path.exists():
@@ -409,6 +411,7 @@ class ResearchStore(ConflictStoreMixin):
             snapshot = f"content/{content_hash}.txt"
             path = self.directory / snapshot
             if not path.exists():
+                private_directory(path.parent)
                 atomic_write_text(path, content, mode=0o600)
             elif hashlib.sha256(path.read_bytes()).hexdigest() != content_hash:
                 raise ResearchError("资料快照校验失败；原文件已保留")

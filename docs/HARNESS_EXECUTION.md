@@ -16,6 +16,7 @@ This change extends the existing hand-written Agent Loop and ToolRegistry. Plann
 | `resources_read`, `resources_write` | Resource scopes; `path` resolves the input path against the workspace |
 | `parallelism` | `serial`. `resources` requires explicit resource declarations; read-only alone never implies safe parallelism |
 | `retry_mode`, `max_attempts` | `never`, `1`; explicit retries capped at 3 total tool attempts |
+| `idempotency_key_supported` | False; key retry requires an adapter override that actually transmits the stable host key to a supporting remote service |
 | `timeout_seconds`, `cancellable` | 600 seconds; cancellation capability declaration. Cancellation always propagates; inability to undo a write becomes uncertain |
 | `max_output_chars` | 30,000; larger results are stored as private artifacts and the model receives a preview/reference |
 | `result_statuses` | Declared result states: success, failed, partial, uncertain, cancelled, denied and blocked; successful receipts use `succeeded` |
@@ -38,7 +39,7 @@ Duplicate registration raises an error. `register(..., replace=True)` can explic
 7. Persist the result artifact and settle the core operation **before** POST hooks.
 8. Report POST-hook failures as diagnostics without changing core success or replaying the tool.
 
-`ToolResult` retains `output`, `is_error` and `metadata`, with optional `status`/`error_code`. Existing `ToolResultBlock` and events carry normalized fields in `result_metadata`. `ToolExecutionContext.operation_id` and `.idempotency_key` are assigned by the host, not read from model arguments.
+`ToolResult` retains `output`, `is_error` and `metadata`, with optional `status`/`error_code`, conservative `retryable=False` and `no_effect=None`. Existing `ToolResultBlock` and events carry normalized fields in `result_metadata`. `ToolExecutionContext.operation_id` and `.idempotency_key` are assigned by the host, not read from model arguments.
 
 PRE hooks with possible effects make the receipt's effect conservative (`mixed`). A failing PRE effect hook can leave `partial` work even when the core tool never ran. Invalid arguments and rejected tool permission never run PRE hooks.
 
@@ -46,7 +47,7 @@ PRE hooks with possible effects make the receipt's effect conservative (`mixed`)
 
 Permission precedence is deterministic: sensitive paths and explicit tool deny → path deny and command deny → permission mode → limited tool allow / confirmation. `allowed_tools` does not override hard denials or PLAN restrictions. Paths are resolved to absolute paths, including symlink resolution; existing ResearchAgentRuntime checks enforce project workspace boundaries. Shell confinement remains the existing sandbox's responsibility; required unavailable sandboxes fail closed.
 
-PLAN also rejects an explicitly declared local write even if a legacy research-control tool reports `is_read_only()`. DEFAULT preserves the existing automatic admission of internal research bookkeeping; external/unknown/mixed effects do not receive that compatibility exception.
+PLAN also rejects an explicitly declared local write even if a legacy research-control tool reports `is_read_only()`. DEFAULT preserves automatic admission only for exact built-in research-memory/project bookkeeping tools with host capabilities. General local writes, subclasses and external/unknown/mixed effects do not receive that compatibility exception.
 
 `CapabilityContext` is a frozen host field, inherited by child queries. `restrict()` rejects expansion. A tool receives only its declared capability set. Mutable tool metadata cannot grant capabilities.
 
@@ -118,4 +119,6 @@ No generic rollback is claimed. External POST/MCP reconciliation requires a prov
 - Output schema-only declarations are descriptive; runtime structured validation requires `output_model`.
 - API usage may remain unknown after stream failure or cancellation. An operator should reconcile billing externally if exact cost is required.
 
-See `testing/harness-validation.md` for the actual checkout, commands, results and environmental limitations of this implementation run.
+See [backend stabilization](BACKEND_STABILIZATION.md) for the private persistence, strict shell policy, bounded claim wait, retry adapter, schema version 2 and retention details, and [its validation record](testing/backend-stability-validation.md) for this run's commands and results. Earlier implementation evidence remains in [harness-next-validation.md](testing/harness-next-validation.md).
+
+Retired tool migration, main-agent conflict reports and verified result-artifact recovery are described in [TOOL_RETIREMENT.md](TOOL_RETIREMENT.md).

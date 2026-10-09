@@ -452,7 +452,10 @@ async def test_removed_tools_are_uncallable_and_undiscoverable_in_research_mode(
         tool.name for tool in registry.list_tools()
     }
     general = create_research_tool_registry(mode="general")
-    assert RESEARCH_EXCLUDED_TOOLS <= {tool.name for tool in general.list_tools()}
+    assert RESEARCH_EXCLUDED_TOOLS.isdisjoint(tool.name for tool in general.list_tools())
+    assert {tool.name for tool in general.list_tools()} == {
+        tool.name for tool in registry.list_tools()
+    }
 
 
 def test_subagent_config_is_small_and_bounded():

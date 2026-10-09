@@ -43,7 +43,7 @@ Report production can start an explicit `research_project` with a versioned obje
 
 Each report project now binds an isolated directory with `MEMORY.md`, `artifacts/` and `reports/`. Existing file tools maintain the Markdown background, and the original loop reloads it for each model request. See [workspace configuration, file boundaries and recovery](docs/WORKSPACE_MEMORY.md).
 
-`dispatch_subagents` delegates 1–16 independent assignments with bounded parallelism, separate histories and private output directories under `subagents/`. Children return candidates for main-agent review and cannot edit main `MEMORY.md` or authoritative task state. The research registry excludes `notebook_edit`, `config`, `mcp_auth`, `image_generation` and `sleep`; their underlying services and the explicit general registry remain available.
+`dispatch_subagents` delegates 1–16 independent assignments with bounded parallelism, separate histories and private output directories under `subagents/`. Children return candidates for main-agent review and cannot edit main `MEMORY.md` or authoritative task state. The research registry excludes `notebook_edit`, `config`, `mcp_auth`, `image_generation` and `sleep`; host configuration services remain available. The general registry compatibility argument uses the same retained research tools.
 
 ## Models, credentials and extensions
 
@@ -82,7 +82,7 @@ The personal assistant product, messaging integrations, coding orchestration, te
 
 The deterministic Agent core integration suite covers parallel delegation, memory updates, replanning, cancellation/recovery and report delivery through the existing loop. See the [E2E-01–16 test report and coverage](docs/testing/agent-core-e2e-report.md) and [remaining limits](docs/testing/agent-core-risks.md).
 
-Report projects require SRT 0.0.79 or the configured Docker backend; unavailable backends reject Shell execution. See [sandbox setup, exports and crash recovery](docs/SANDBOX_EXECUTION.md). Run `uv run python scripts/check_types.py` for strict checks of all production Python, including bundled scripts.
+Agent Shell and Skill calculations require SRT 0.0.79 or the configured Docker backend; unavailable backends reject execution. Explicit trusted host mode is available only to the main agent outside report projects. See [shell policy, exports and recovery](docs/BACKEND_STABILIZATION.md). Run `uv run python scripts/check_types.py` for strict checks of all production Python, including bundled scripts.
 
 ```bash
 uv run pytest -q
@@ -97,4 +97,4 @@ Real model verification is separate from deterministic tests. See `tests/test_we
 
 [Cleanup scope and validation report](docs/research-product-cleanup.md)
 
-Developer reference: [Harness contracts, permissions, retry and recovery](docs/HARNESS_EXECUTION.md), with [validation results](docs/testing/harness-validation.md).
+Developer reference: [Harness contracts, permissions, retry and recovery](docs/HARNESS_EXECUTION.md), [backend stabilization](docs/BACKEND_STABILIZATION.md), and [validation results](docs/testing/backend-stability-validation.md).

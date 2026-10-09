@@ -1,0 +1,30 @@
+## main...origin/main
+ M docs/HARNESS_EXECUTION.md
+ M frontend/web/e2e/workspace.spec.ts
+ M frontend/web/src/useConversation.ts
+ M src/openharness/engine/query.py
+ M src/openharness/mcp/client.py
+ M src/openharness/research/conflicts.py
+ M src/openharness/research/models.py
+ M src/openharness/research/prompt.py
+ M src/openharness/services/tool_execution.py
+ M src/openharness/tools/__init__.py
+ M src/openharness/tools/base.py
+ M src/openharness/tools/mcp_tool.py
+ M src/openharness/tools/research_memory_tool.py
+ M tests/test_entrypoints/test_research_product.py
+ M tests/test_harness/test_retry_hooks.py
+ M tests/test_research/test_dispatch_subagents.py
+ M tests/test_research/test_investigation.py
+ M tests/test_research/test_memory_compatibility.py
+ M tests/test_research/test_workspace_memory.py
+ M tests/test_tools/test_core_tools.py
+ M tests/test_tools/test_image_generation_tool.py
+ M tests/test_tools/test_integration_flows.py
+ M tests/test_tools/test_mcp_auth_tool.py
+?? docs/TOOL_RETIREMENT.md
+?? docs/testing/harness-next-logs/
+?? docs/testing/harness-next-validation.md
+?? src/openharness/tools/retired.py
+?? src/openharness/utils/tavily_search.py
+?? tests/test_harness/test_product_recovery.py

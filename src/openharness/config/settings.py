@@ -22,7 +22,7 @@ from openharness.hooks.schemas import HookDefinition
 from openharness.mcp.types import McpServerConfig
 from openharness.permissions.modes import PermissionMode
 from openharness.utils.file_lock import exclusive_file_lock
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_file
 from openharness.config.context_components import ContextComponentsSettings
 
 
@@ -106,6 +106,10 @@ class SandboxSettings(BaseModel):
     backend: str = "srt"
     required_srt_version: str | None = None
     fail_if_unavailable: bool = False
+    allow_trusted_host: bool = Field(
+        default=False,
+        description="Explicit host-admin opt-in for main-agent shell execution without isolation; never applies to report projects or children",
+    )
     enabled_platforms: list[str] = Field(default_factory=list)
     network: SandboxNetworkSettings = Field(default_factory=SandboxNetworkSettings)
     filesystem: SandboxFilesystemSettings = Field(default_factory=SandboxFilesystemSettings)
@@ -1153,6 +1157,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         config_path = get_config_file_path()
 
     if config_path.exists():
+        private_file(config_path)
         raw = json.loads(config_path.read_text(encoding="utf-8"))
         settings = Settings.model_validate(raw)
         env_profile = os.environ.get("OPENHARNESS_PROFILE")
@@ -1195,4 +1200,5 @@ def save_settings(settings: Settings, config_path: Path | None = None) -> None:
         atomic_write_text(
             config_path,
             settings.model_dump_json(indent=2) + "\n",
+            mode=0o600,
         )

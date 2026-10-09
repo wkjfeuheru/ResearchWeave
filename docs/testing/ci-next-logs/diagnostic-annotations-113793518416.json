@@ -1,0 +1,38 @@
+[
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/wkjfeuheru/ResearchWeave/blob/900619322bd3635fd5de245f657e185eab8fb171/.github",
+    "start_line": 2,
+    "start_column": null,
+    "end_line": 2,
+    "end_column": null,
+    "annotation_level": "warning",
+    "title": "",
+    "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/setup-python@v5, astral-sh/setup-uv@v6. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+    "raw_details": ""
+  },
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/wkjfeuheru/ResearchWeave/blob/900619322bd3635fd5de245f657e185eab8fb171/.github",
+    "start_line": 500,
+    "start_column": null,
+    "end_line": 500,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "",
+    "message": "Process completed with exit code 1.",
+    "raw_details": ""
+  },
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/wkjfeuheru/ResearchWeave/blob/900619322bd3635fd5de245f657e185eab8fb171/.github",
+    "start_line": 396,
+    "start_column": null,
+    "end_line": 396,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "Validation result",
+    "message": "\ntests/test_research/test_report_sandbox.py:247: AssertionError\n_______________ TestFilesystemIsolation.test_bind_mount_readable _______________\n\nself = <test_docker_sandbox_e2e.TestFilesystemIsolation object at 0x7f01cbd3c510>\ne2e_image = 'openharness-sandbox-e2e:latest'\nproject_dir = PosixPath('/tmp/oh-docker-e2e-kyfnf4pz')\n\n    def test_bind_mount_readable(self, e2e_image, project_dir):\n        \"\"\"Files in the project directory should be readable from inside the container.\"\"\"\n        marker = project_dir / \"test_marker.txt\"\n        marker.write_text(\"E2E_MARKER_OK\", encoding=\"utf-8\")\n    \n        settings = _settings()\n        session = DockerSandboxSession(\n            settings=settings,\n            session_id=\"e2e-fsread\",\n            cwd=project_dir,\n        )\n    \n        async def _run():\n            await session.start()\n            try:\n                rc, stdout, _ = await _run_and_capture(\n                    session,\n                    [\"cat\", str(marker)],\n                    project_dir,\n                )\n                assert rc == 0\n                assert \"E2E_MARKER_OK\" in stdout\n            finally:\n                await session.stop()\n    \n>       asyncio.run(_run())\n\nscripts/test_docker_sandbox_e2e.py:359: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/asyncio/runners.py:190: in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/asyncio/runners.py:118: in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/asyncio/base_events.py:654: in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\n    async def _run():\n        await session.start()\n        try:\n            rc, stdout, _ = await _run_and_capture(\n                session,\n                [\"cat\", str(marker)],\n                project_dir,\n            )\n>           assert rc == 0\nE           assert 1 == 0\n\nscripts/test_docker_sandbox_e2e.py:354: AssertionError\n_______________ TestFilesystemIsolation.test_bind_mount_writable _______________\n\nself = <test_docker_sandbox_e2e.TestFilesystemIsolation object at 0x7f01cbd3d850>\ne2e_image = 'openharness-sandbox-e2e:latest'\nproject_dir = PosixPath('/tmp/oh-docker-e2e-7w2twxfj')\n\n    def test_bind_mount_writable(self, e2e_image, project_dir):\n        \"\"\"Files written inside the container should appear on the host.\"\"\"\n        output_file = project_dir / \"from_container.txt\"\n        settings = _settings()\n        session = DockerSandboxSession(\n            settings=settings,\n            session_id=\"e2e-fswrite\",\n            cwd=project_dir,\n        )\n    \n        async def _run():\n            await session.start()\n            try:\n                rc, _, _ = await _run_and_capture(\n                    session,\n                    [\"bash\", \"-c\", f\"echo CONTAINER_WROTE_THIS > {output_file}\"],\n                    project_dir,\n                )\n                assert rc == 0\n                assert output_file.exists(), \"File written in container should exist on host\"\n                assert \"CONTAINER_WROTE_THIS\" in output_file.read_text()\n            finally:\n                await session.stop()\n    \n>       asyncio.run(_run())\n\nscripts/test_docker_sandbox_e2e.py:385: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/asyncio/runners.py:190: in run\n    return runner.run(main)\n           ^^^^^^^^^^^^^^^^\n/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/asyncio/runners.py:118: in run\n    return self._loop.run_until_complete(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/asyncio/base_events.py:654: in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _",
+    "raw_details": ""
+  }
+]

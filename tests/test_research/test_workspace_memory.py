@@ -223,10 +223,10 @@ async def test_read_create_local_edit_and_optimistic_overwrite(workspace):
         ("glob", {"pattern": "../*"}),
         ("grep", {"pattern": "root", "root": "/etc/passwd"}),
         ("grep", {"pattern": "root", "file_glob": "../*"}),
-        ("notebook_edit", {"path": "../escape.ipynb", "cell_index": 0, "new_source": "bad"}),
+        ("write_file", {"path": "../escape.ipynb", "content": "{}"}),
         ("bash", {"cwd": "/tmp", "command": "pwd"}),
         ("image_to_text", {"image_path": "/etc/passwd"}),
-        ("image_generation", {"output_path": "../image.png"}),
+        ("write_file", {"path": "../image.png", "content": "bad"}),
     ],
 )
 async def test_existing_tools_reject_escape_paths(workspace, name, values):

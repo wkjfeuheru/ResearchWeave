@@ -1,0 +1,66 @@
+...........FFFFFF....F................F................................. [ 53%]
+..............................................................           [100%]
+=================================== FAILURES ===================================
+_ test_generation_is_not_callable_even_with_legacy_credentials[research-openai] _
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[research-codex] _
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[research-auto] __
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[general-openai] _
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[general-codex] __
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+__ test_generation_is_not_callable_even_with_legacy_credentials[general-auto] __
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+____________ test_main_reports_and_separately_commits_after_review _____________
+tests/test_research/test_investigation.py:58: in test_main_reports_and_separately_commits_after_review
+    apply(
+tests/test_research/test_conflicts.py:13: in apply
+    return store.apply(
+src/openharness/research/store.py:469: in apply
+    json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/json/__init__.py:238: in dumps
+    **kw).encode(obj)
+          ^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/json/encoder.py:200: in encode
+    chunks = self.iterencode(o, _one_shot=True)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/json/encoder.py:258: in iterencode
+    return _iterencode(o, 0)
+           ^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/json/encoder.py:180: in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+E   TypeError: Object of type ArbitrationDecision is not JSON serializable
+_ test_report_conflict_investigation_uses_common_loop_and_preserves_authority __
+tests/test_research/test_memory_compatibility.py:127: in test_report_conflict_investigation_uses_common_loop_and_preserves_authority
+    assert project.repository._plan(project.store.load()).model_dump() == tasks_before
+E   AssertionError: assert {'id': 'plan_...', ...}], ...} == {'id': 'plan_...', ...}], ...}
+E     
+E     Omitting 12 identical items, use -vv to show
+E     Differing items:
+E     {'tasks': [{'id': 'parent', 'title': 'parent', 'status': 'blocked', 'blocker': 'Main agent stopped before completion checks passed', ...}]} != {'tasks': [{'id': 'parent', 'title': 'parent', 'status': 'in_progress', 'blocker': '', ...}]}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[research-openai]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[research-codex]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[research-auto]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[general-openai]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[general-codex]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[general-auto]
+FAILED tests/test_research/test_investigation.py::test_main_reports_and_separately_commits_after_review
+FAILED tests/test_research/test_memory_compatibility.py::test_report_conflict_investigation_uses_common_loop_and_preserves_authority
+8 failed, 126 passed in 15.71s

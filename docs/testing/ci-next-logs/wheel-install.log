@@ -1,0 +1,7 @@
+Using Python 3.11.17 environment at: /tmp/openharness-stability-wheel-env
+Resolved 62 packages in 1.07s
+Prepared 1 package in 198ms
+Uninstalled 1 package in 230ms
+Installed 1 package in 62ms
+ - openharness-ai==0.1.9 (from file:///tmp/openharness-stability-wheel-final/openharness_ai-0.1.9-py3-none-any.whl)
+ + openharness-ai==0.1.9 (from file:///tmp/openharness-ci-next-9p1npvvz/wheels/openharness_ai-0.1.9-py3-none-any.whl)

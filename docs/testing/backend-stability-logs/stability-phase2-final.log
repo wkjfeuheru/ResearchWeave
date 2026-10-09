@@ -1,0 +1,24 @@
+.....FF....F............................................................ [ 37%]
+........................................................................ [ 75%]
+................................................                         [100%]
+=================================== FAILURES ===================================
+______ test_general_local_write_cannot_claim_readonly_exception[default] _______
+tests/test_backend_stability/test_safety.py:164: in test_general_local_write_cannot_claim_readonly_exception
+    context.tool_metadata["research.write"] = True
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: 'NoneType' object does not support item assignment
+________ test_general_local_write_cannot_claim_readonly_exception[plan] ________
+tests/test_backend_stability/test_safety.py:164: in test_general_local_write_cannot_claim_readonly_exception
+    context.tool_metadata["research.write"] = True
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: 'NoneType' object does not support item assignment
+_____ test_default_agent_shell_fails_closed_even_if_metadata_requests_host _____
+tests/test_backend_stability/test_safety.py:229: in test_default_agent_shell_fails_closed_even_if_metadata_requests_host
+    assert result.metadata["safety_level"] == "sandbox_required"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'safety_level'
+=========================== short test summary info ============================
+FAILED tests/test_backend_stability/test_safety.py::test_general_local_write_cannot_claim_readonly_exception[default]
+FAILED tests/test_backend_stability/test_safety.py::test_general_local_write_cannot_claim_readonly_exception[plan]
+FAILED tests/test_backend_stability/test_safety.py::test_default_agent_shell_fails_closed_even_if_metadata_requests_host
+3 failed, 189 passed in 21.16s

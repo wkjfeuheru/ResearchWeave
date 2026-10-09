@@ -368,7 +368,17 @@ class QueryEngine:
                     "prompt": user_message.text,
                 },
             )
+        from openharness.permissions.capabilities import CapabilityContext
+
         context = QueryContext(
+            trusted_settings=self._settings.model_copy(deep=True) if self._settings else None,
+            capabilities=CapabilityContext(
+                allow_trusted_host=bool(
+                    self._settings
+                    and self._settings.sandbox.allow_trusted_host
+                    and not self._settings.sandbox.enabled
+                )
+            ),
             execution_session_id=self._execution_session_id,
             api_client=self._api_client,
             tool_registry=self._tool_registry,
@@ -487,7 +497,17 @@ class QueryEngine:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Continue an interrupted tool loop without appending a new user message."""
         self._messages = sanitize_conversation_messages(self._messages)
+        from openharness.permissions.capabilities import CapabilityContext
+
         context = QueryContext(
+            trusted_settings=self._settings.model_copy(deep=True) if self._settings else None,
+            capabilities=CapabilityContext(
+                allow_trusted_host=bool(
+                    self._settings
+                    and self._settings.sandbox.allow_trusted_host
+                    and not self._settings.sandbox.enabled
+                )
+            ),
             execution_session_id=self._execution_session_id,
             current_user_message_id=next(
                 (

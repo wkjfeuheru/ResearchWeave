@@ -1,0 +1,94 @@
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  34.82kB
+Step 1/5 : FROM python:3.11-slim
+3.11-slim: Pulling from library/python
+Digest: sha256:0dd364ba7e10242f07755449e3a3d0e35f9efd987952737b90def6709ab0c5ce
+Status: Image is up to date for python:3.11-slim
+ ---> 541096ae9b05
+Step 2/5 : RUN apt-get update && apt-get install -y --no-install-recommends     ripgrep bash git &&     rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 72f665a25c9c
+Step 3/5 : RUN pip install --no-cache-dir --timeout 60 --retries 3 pydantic==2.13.5 httpx==0.28.1 pypdf==6.19.0 python-docx==1.2.0 openpyxl==3.1.5
+ ---> Running in 7b5f08672b47
+Collecting pydantic==2.13.5
+  Downloading pydantic-2.13.5-py3-none-any.whl.metadata (110 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 110.2/110.2 kB 239.5 kB/s eta 0:00:00
+Collecting httpx==0.28.1
+  Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+Collecting pypdf==6.19.0
+  Downloading pypdf-6.19.0-py3-none-any.whl.metadata (7.5 kB)
+Collecting python-docx==1.2.0
+  Downloading python_docx-1.2.0-py3-none-any.whl.metadata (2.0 kB)
+Collecting openpyxl==3.1.5
+  Downloading openpyxl-3.1.5-py2.py3-none-any.whl.metadata (2.5 kB)
+Collecting annotated-types>=0.6.0 (from pydantic==2.13.5)
+  Downloading annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+Collecting pydantic-core==2.46.5 (from pydantic==2.13.5)
+  Downloading pydantic_core-2.46.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+Collecting typing-extensions>=4.14.1 (from pydantic==2.13.5)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting typing-inspection>=0.4.2 (from pydantic==2.13.5)
+  Downloading typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
+Collecting anyio (from httpx==0.28.1)
+  Downloading anyio-4.15.1-py3-none-any.whl.metadata (4.7 kB)
+Collecting certifi (from httpx==0.28.1)
+  Downloading certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+Collecting httpcore==1.* (from httpx==0.28.1)
+  Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+Collecting idna (from httpx==0.28.1)
+  Downloading idna-3.20-py3-none-any.whl.metadata (7.2 kB)
+Collecting lxml>=3.1.0 (from python-docx==1.2.0)
+  Downloading lxml-6.1.3-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl.metadata (3.3 kB)
+Collecting et-xmlfile (from openpyxl==3.1.5)
+  Downloading et_xmlfile-2.0.0-py3-none-any.whl.metadata (2.7 kB)
+Collecting h11>=0.16 (from httpcore==1.*->httpx==0.28.1)
+  Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+Downloading pydantic-2.13.5-py3-none-any.whl (472 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 472.6/472.6 kB 64.1 kB/s eta 0:00:00
+Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.5/73.5 kB 41.1 kB/s eta 0:00:00
+Downloading pypdf-6.19.0-py3-none-any.whl (395 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 395.5/395.5 kB 31.5 kB/s eta 0:00:00
+Downloading python_docx-1.2.0-py3-none-any.whl (252 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 253.0/253.0 kB 23.7 kB/s eta 0:00:00
+Downloading openpyxl-3.1.5-py2.py3-none-any.whl (250 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 250.9/250.9 kB 24.9 kB/s eta 0:00:00
+Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 78.8/78.8 kB 43.6 kB/s eta 0:00:00
+Downloading pydantic_core-2.46.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 46.4 kB/s eta 0:00:00
+Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
+Downloading lxml-6.1.3-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (5.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 14.1 kB/s eta 0:00:00
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 45.6/45.6 kB 54.5 kB/s eta 0:00:00
+Downloading typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+Downloading anyio-4.15.1-py3-none-any.whl (132 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 132.1/132.1 kB 81.8 kB/s eta 0:00:00
+Downloading idna-3.20-py3-none-any.whl (69 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 69.6/69.6 kB 70.4 kB/s eta 0:00:00
+Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 137.0/137.0 kB 69.8 kB/s eta 0:00:00
+Downloading et_xmlfile-2.0.0-py3-none-any.whl (18 kB)
+Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+Installing collected packages: typing-extensions, pypdf, lxml, idna, h11, et-xmlfile, certifi, annotated-types, typing-inspection, python-docx, pydantic-core, openpyxl, httpcore, anyio, pydantic, httpx
+Successfully installed annotated-types-0.8.0 anyio-4.15.1 certifi-2026.7.22 et-xmlfile-2.0.0 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 idna-3.20 lxml-6.1.3 openpyxl-3.1.5 pydantic-2.13.5 pydantic-core-2.46.5 pypdf-6.19.0 python-docx-1.2.0 typing-extensions-4.16.0 typing-inspection-0.4.4
+[91mWARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+[0m[91m
+[notice] A new release of pip is available: 24.0 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+[0m ---> Removed intermediate container 7b5f08672b47
+ ---> bed49c272788
+Step 4/5 : RUN useradd -m -s /bin/bash ohuser
+ ---> Running in 6be52789c344
+ ---> Removed intermediate container 6be52789c344
+ ---> d9b56bff46d3
+Step 5/5 : USER ohuser
+ ---> Running in 1e04cf9888c8
+ ---> Removed intermediate container 1e04cf9888c8
+ ---> 14d76fa94f74
+Successfully built 14d76fa94f74
+Successfully tagged openharness-sandbox:ci-next-9p1npvvz

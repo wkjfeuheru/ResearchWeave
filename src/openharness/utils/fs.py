@@ -31,6 +31,7 @@ import contextlib
 import os
 import stat
 import tempfile
+import logging
 from pathlib import Path
 
 __all__ = ["atomic_write_bytes", "atomic_write_text"]
@@ -58,7 +59,7 @@ def atomic_write_bytes(
             tmp_file.write(data)
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
-        _apply_mode(tmp_path, target_mode)
+        _apply_mode(tmp_path, target_mode, strict=mode is not None)
         os.replace(tmp_path, dst)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -89,10 +90,61 @@ def _resolve_target_mode(path: Path, explicit_mode: int | None) -> int:
     return stat.S_IMODE(st.st_mode)
 
 
-def _apply_mode(path: Path, target_mode: int) -> None:
+def _apply_mode(path: Path, target_mode: int, *, strict: bool = False) -> None:
     try:
         os.chmod(path, target_mode)
+        if strict and os.name == "posix" and stat.S_IMODE(path.stat().st_mode) != target_mode:
+            raise PermissionError("Filesystem did not enforce the requested privacy mode")
     except OSError:
-        # chmod can fail on Windows / FAT / some network mounts. The payload
-        # is still intact; only permission enforcement is weakened.
-        pass
+        if strict and os.name == "posix":
+            raise
+        if strict:
+            logging.getLogger(__name__).warning(
+                "POSIX privacy modes are unavailable on this filesystem"
+            )
+
+
+def private_directory(path: Path) -> Path:
+    """Create/harden a reserved storage directory, never chmod existing ancestors."""
+    path = Path(path)
+    missing = []
+    parent = path
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700, exist_ok=True)
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("Private storage directory must not be a symlink")
+    if os.name == "posix":
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(fd, 0o700)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
+                raise PermissionError("Private directory mode cannot be enforced")
+        finally:
+            os.close(fd)
+    else:
+        _apply_mode(path, 0o700, strict=True)
+    return path
+
+
+def private_file(path: Path) -> None:
+    """Harden an existing sensitive regular file without following symlinks."""
+    if not path.exists() and not path.is_symlink():
+        return
+    if os.name != "posix":
+        _apply_mode(path, 0o600, strict=True)
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return  # SQLite checkpoint/removal may remove a sidecar after the existence check.
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Private storage file must be regular")
+        os.fchmod(fd, 0o600)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+            raise PermissionError("Private file mode cannot be enforced")
+    finally:
+        os.close(fd)

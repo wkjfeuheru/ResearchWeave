@@ -15,7 +15,9 @@ IGNORED_PARTS = {"__pycache__", "tests", ".pytest_cache", ".cache", ".git"}
 
 def resolve_resource(base: str | Path, candidate: str | Path) -> Path:
     """Reject traversal and symlinks escaping the Skill root."""
-    root = Path(base).resolve()
+    root = Path(os.path.abspath(Path(base).expanduser()))
+    if root.resolve() != root:
+        raise ValueError("Skill resource root was replaced by a symlink")
     path = Path(candidate)
     if ".." in path.parts:
         raise ValueError("Skill resource path traversal is forbidden")

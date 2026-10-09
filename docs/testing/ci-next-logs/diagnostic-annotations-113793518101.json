@@ -1,0 +1,38 @@
+[
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/wkjfeuheru/ResearchWeave/blob/900619322bd3635fd5de245f657e185eab8fb171/.github",
+    "start_line": 2,
+    "start_column": null,
+    "end_line": 2,
+    "end_column": null,
+    "annotation_level": "warning",
+    "title": "",
+    "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4, actions/setup-python@v5, astral-sh/setup-uv@v6. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+    "raw_details": ""
+  },
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/wkjfeuheru/ResearchWeave/blob/900619322bd3635fd5de245f657e185eab8fb171/.github",
+    "start_line": 188,
+    "start_column": null,
+    "end_line": 188,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "",
+    "message": "Process completed with exit code 1.",
+    "raw_details": ""
+  },
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/wkjfeuheru/ResearchWeave/blob/900619322bd3635fd5de245f657e185eab8fb171/.github",
+    "start_line": 119,
+    "start_column": null,
+    "end_line": 119,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "Validation result",
+    "message": "\n> openharness-research-web@0.1.0 test:e2e\n> playwright test\n\n[WebServer] INFO:     Started server process [3677]\n[WebServer] INFO:     Waiting for application startup.\n[WebServer] INFO:     Application startup complete.\n[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)\n\nRunning 18 tests using 1 worker\n\u00b7[WebServer] INFO:     127.0.0.1:34376 - \"WebSocket /api/sessions/ce8c817a06ae/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:34380 - \"WebSocket /api/sessions/ce8c817a06ae/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:33760 - \"WebSocket /api/sessions/c6248eecc819/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:33766 - \"WebSocket /api/sessions/c6248eecc819/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:33794 - \"WebSocket /api/sessions/de5d56010305/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:33796 - \"WebSocket /api/sessions/de5d56010305/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:33846 - \"WebSocket /api/sessions/7724311fa4dc/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:33856 - \"WebSocket /api/sessions/7724311fa4dc/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:33892 - \"WebSocket /api/sessions/ab3d05ece161/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:33926 - \"WebSocket /api/sessions/ab3d05ece161/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:33936 - \"WebSocket /api/sessions/9f14c816cbd7/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:35828 - \"WebSocket /api/sessions/7084382a5f82/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:35848 - \"WebSocket /api/sessions/7084382a5f82/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7\u00b7[WebServer] INFO:     127.0.0.1:54544 - \"WebSocket /api/sessions/502ede75ec07/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:54584 - \"WebSocket /api/sessions/502ede75ec07/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:54596 - \"WebSocket /api/sessions/502ede75ec07/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:36390 - \"WebSocket /api/sessions/502ede75ec07/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:36450 - \"WebSocket /api/sessions/89f7acdb50c2/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:36518 - \"WebSocket /api/sessions/d69cf41d6107/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:55938 - \"WebSocket /api/sessions/d69cf41d6107/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:55984 - \"WebSocket /api/sessions/ec87fb22a633/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:56070 - \"WebSocket /api/sessions/5b5fb82b7e35/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:59746 - \"WebSocket /api/sessions/5b5fb82b7e35/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:59788 - \"WebSocket /api/sessions/a314aa3b685b/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7[WebServer] INFO:     127.0.0.1:59870 - \"WebSocket /api/sessions/e4cdb78352b4/ws\" [accepted]\n[WebServer] INFO:     connection open\n[WebServer] INFO:     127.0.0.1:40222 - \"WebSocket /api/sessions/e4cdb78352b4/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7\u00b7[WebServer] INFO:     127.0.0.1:40306 - \"WebSocket /api/sessions/7b44ad9e3fa1/ws\" [accepted]\n[WebServer] INFO:     connection open\nF[WebServer] INFO:     127.0.0.1:38396 - \"WebSocket /api/sessions/5fe4e5522c79/ws\" [accepted]\n[WebServer] INFO:     connection open\n\u00b7\n\n  1) e2e/workspace.spec.ts:570:1 \u203a attachments, r",
+    "raw_details": ""
+  }
+]

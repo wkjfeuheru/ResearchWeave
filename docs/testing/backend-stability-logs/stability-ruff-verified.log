@@ -1,0 +1,18 @@
+F401 [*] `pathlib.Path` imported but unused
+  --> src/openharness/tools/bash_tool.py:15:21
+   |
+13 | import json
+14 | from uuid import uuid4
+15 | from pathlib import Path
+   |                     ^^^^
+16 | from typing import Iterable
+   |
+help: Remove unused import: `pathlib.Path`
+   |
+14 | from uuid import uuid4
+   - from pathlib import Path
+15 | from typing import Iterable
+   |
+
+Found 1 error.
+[*] 1 fixable with the `--fix` option.

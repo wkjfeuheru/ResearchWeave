@@ -17,11 +17,12 @@ from openharness.research.models import (
     ConflictRecord,
     ReopenConflict,
     ResolveConflict,
+    SubmitConflictReport,
     new_id,
     now,
 )
 from openharness.utils.file_lock import exclusive_file_lock
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory
 
 if TYPE_CHECKING:
     from openharness.research.store import ResearchStore
@@ -287,6 +288,35 @@ class ConflictStoreMixin:
             )
             self._reopen_record(memory, conflict, operation.reason)
             return {"conflict_id": conflict.id}
+        if isinstance(operation, SubmitConflictReport):
+            # The main loop has already collected and registered both sides. Submit only a
+            # report here; resolve_conflict remains a separate, reviewed authority change.
+            conflict = self._current_conflict(memory, operation.conflict_id)
+            if any(item.status == "running" for item in memory.arbitrations.values()):
+                raise ResearchError(
+                    "An investigation is still running; settle it before submitting a report"
+                )
+            if conflict.status in {"resolved", "awaiting_review", "unresolved"}:
+                raise ResearchError(
+                    "Review the existing report or reopen the conflict with a reason"
+                )
+            self._validate_decision(memory, conflict, operation.report)
+            arbitration = ArbitrationRecord(
+                conflict_id=conflict.id,
+                input_fingerprint=self.conflict_fingerprint(memory, conflict),
+                evidence_versions=sorted(self._conflict_inputs(memory, conflict)[0]),
+                report=operation.report,
+                status="completed",
+                finished_at=now(),
+                note="Report submitted by the main agent for separate review",
+            )
+            memory.arbitrations[arbitration.id] = arbitration
+            conflict.current_arbitration_id = arbitration.id
+            conflict.status, conflict.updated_at = "awaiting_review", now()
+            self._mark_conflict_review(memory, conflict)
+            arbitration.review_fingerprint = self.conflict_fingerprint(memory, conflict)
+            conflict.last_attempt_fingerprint = arbitration.review_fingerprint
+            return {"conflict_id": conflict.id, "arbitration_id": arbitration.id}
         if isinstance(operation, ResolveConflict):
             conflict = self._current_conflict(memory, operation.conflict_id)
             self._require([operation.arbitration_id], memory.arbitrations, "arbitration")
@@ -454,6 +484,7 @@ class ConflictStoreMixin:
                                 ):
                                     raise ResearchError("资料快照校验失败；原文件已保留")
                             else:
+                                private_directory(snapshot.parent)
                                 atomic_write_text(snapshot, content, mode=0o600)
                         if (
                             bucket == "evidence_pool"

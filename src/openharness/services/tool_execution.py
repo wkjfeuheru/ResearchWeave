@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import time
+import math
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
@@ -20,7 +22,7 @@ from openharness.tools.base import ToolExecutionContext, ToolResult
 from openharness.tools.contracts import resolve_contract
 from openharness.research.source_specs import SourceSpec
 from openharness.services.operations import OperationStore
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory
 from openharness.config.paths import get_data_dir
 
 if TYPE_CHECKING:
@@ -134,14 +136,7 @@ async def _execute_impl(
     )
     decision = context.permission_checker.evaluate(
         tool_name,
-        is_read_only=(
-            tool.is_read_only(parsed_input)
-            and service.contract.effect not in {"external_write", "unknown", "mixed"}
-            and not (
-                context.permission_checker.mode == PermissionMode.PLAN
-                and service.contract.effect == "local_write"
-            )
-        ),
+        is_read_only=_permission_read_only(tool, parsed_input, service.contract, context),
         file_path=_file_path,
         command=_command,
     )
@@ -224,8 +219,7 @@ async def _execute_impl(
         store is not None
         and not project_mode
         and store.load().research_state.replan_required
-        and tool_name
-        not in {"research_memory", "ask_user_question", "skill", "investigate_conflict"}
+        and tool_name not in {"research_memory", "ask_user_question", "skill"}
     ):
         return ToolResultBlock(
             tool_use_id=tool_use_id,
@@ -235,8 +229,7 @@ async def _execute_impl(
     if (
         store is not None
         and not project_mode
-        and tool_name
-        not in {"research_memory", "ask_user_question", "skill", "investigate_conflict"}
+        and tool_name not in {"research_memory", "ask_user_question", "skill"}
     ):
         memory = store.load()
         plan = memory.plans.get(memory.research_state.current_plan_id or "")
@@ -293,7 +286,9 @@ async def _execute_impl(
             ToolExecutionContext(
                 cwd=tool_cwd,
                 capabilities=context.capabilities.restrict(service.contract.required_capabilities),
-                settings=(context.tool_metadata or {}).get("trusted_settings"),
+                settings=context.trusted_settings.model_copy(deep=True)
+                if context.trusted_settings
+                else None,
                 runtime_id=(context.tool_metadata or {}).get("runtime_id"),
                 metadata={
                     "tool_registry": context.tool_registry,
@@ -324,15 +319,12 @@ async def _execute_impl(
         or tool_name
         not in {
             "research_memory",
-            "investigate_conflict",
             "planner",
             "replanner",
             "research_project",
         }
     ):
         source_specs: list[SourceSpec] | None = result.metadata.get("research_source_specs")
-        if tool_name == "investigate_conflict":
-            source_specs = []  # The investigator imports its own validated evidence with provenance.
         if source_specs is None:
             source_specs = [
                 {
@@ -458,7 +450,10 @@ async def _execute_impl(
 class ToolExecutionService:
     """One invocation adapter; state survives instances through the SQLite ledger."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, claim_wait_seconds: float = 30.0) -> None:
+        if not math.isfinite(claim_wait_seconds) or not 0 <= claim_wait_seconds <= 300:
+            raise ValueError("claim_wait_seconds must be finite and within 0..300 seconds")
+        self.claim_wait_seconds = claim_wait_seconds
         self.owner = uuid4().hex
         self.ledger: Any = None
         self.operation: Any = None
@@ -489,14 +484,34 @@ class ToolExecutionService:
                     )
                     else "cancelled"
                 )
-                self.ledger.settle(
-                    self.operation["operation_id"],
-                    status,
-                    owner=self.owner,
-                    error_code="cancelled_after_start" if self.started_body else "cancelled",
-                )
+                try:
+                    self.ledger.settle(
+                        self.operation["operation_id"],
+                        status,
+                        owner=self.owner,
+                        error_code="cancelled_after_start" if self.started_body else "cancelled",
+                    )
+                except Exception:
+                    log.error(
+                        "Cancellation receipt could not settle; operation requires host verification"
+                    )
             raise
         except Exception as exc:
+            if (
+                not self.claimed
+                and isinstance(exc, sqlite3.OperationalError)
+                and "locked" in str(exc).lower()
+            ):
+                return ToolResultBlock(
+                    tool_use_id=call,
+                    content="Operation database is busy; no tool was executed.",
+                    is_error=True,
+                    result_metadata={
+                        "status": "blocked",
+                        "error_code": "resource_conflict",
+                        "no_effect": True,
+                    },
+                )
             status = (
                 "uncertain"
                 if (
@@ -579,6 +594,8 @@ class ToolExecutionService:
             resources=declared,
         )
         operation_id = self.operation["operation_id"]
+        deadline = time.monotonic() + self.claim_wait_seconds
+        delay = 0.02
         while True:
             current = self.ledger.get(operation_id, session=session, scope=scope)
             if current["status"] == "succeeded":
@@ -615,7 +632,26 @@ class ToolExecutionService:
                 self.claimed = True
                 self.operation = self.ledger.get(operation_id, session=session, scope=scope)
                 return None
-            await asyncio.sleep(0.02)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                code = (
+                    "operation_in_progress"
+                    if current["status"] == "running"
+                    else "resource_conflict"
+                )
+                self.settled = True
+                return ToolResultBlock(
+                    tool_use_id=call,
+                    is_error=True,
+                    content=f"Admission wait expired: {code}. No tool or hook was executed.",
+                    result_metadata={
+                        "status": "blocked",
+                        "error_code": code,
+                        "operation_id": operation_id,
+                    },
+                )
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 1.5, 0.5)
 
     async def invoke(self, tool: Any, arguments: Any, context: ToolExecutionContext) -> Any:
         self.started_body = True
@@ -624,10 +660,51 @@ class ToolExecutionService:
         context.idempotency_key = self.operation["idempotency_key"]
         remaining = self.contract.max_attempts - self.operation["attempts"] + 1
         for attempt in range(1, remaining + 1):
-            result = await asyncio.wait_for(
-                tool.execute(arguments, context), self.contract.timeout_seconds
+            execution = (
+                tool.execute_with_idempotency_key(
+                    arguments, context, idempotency_key=context.idempotency_key
+                )
+                if self.contract.retry_mode == "idempotency_key"
+                else tool.execute(arguments, context)
+            )
+            result = await asyncio.wait_for(execution, self.contract.timeout_seconds)
+            no_effect = (
+                result.no_effect
+                if result.no_effect is not None
+                else result.metadata.get("no_effect") is True
+            )
+            result = replace(
+                result,
+                metadata={
+                    **result.metadata,
+                    "no_effect": no_effect,
+                    "retryable": result.retryable or result.metadata.get("retryable") is True,
+                },
             )
             if not result.is_error or attempt >= remaining or self.contract.retry_mode == "never":
+                break
+            if (
+                not result.metadata["retryable"]
+                or result.status in {"partial", "uncertain"}
+                or result.error_code
+                in {
+                    "authentication",
+                    "authorization",
+                    "invalid_request",
+                    "quota_exhausted",
+                    "cancelled",
+                    "context_length",
+                }
+                or result.metadata.get("error_code")
+                in {
+                    "authentication",
+                    "authorization",
+                    "invalid_request",
+                    "quota_exhausted",
+                    "cancelled",
+                    "context_length",
+                }
+            ):
                 break
             no_effect = (
                 self.contract.effect == "read_only" or result.metadata.get("no_effect") is True
@@ -636,6 +713,7 @@ class ToolExecutionService:
                 no_effect = await asyncio.wait_for(
                     tool.reconcile_no_effect(arguments, context), self.contract.timeout_seconds
                 )
+                result = replace(result, metadata={**result.metadata, "no_effect": bool(no_effect)})
             if not no_effect:
                 break
             self.ledger.next_attempt(context.operation_id, owner=self.owner)
@@ -668,6 +746,7 @@ class ToolExecutionService:
             / "operation_artifacts"
             / f"{self.operation['operation_id']}.txt"
         )
+        private_directory(path.parent)
         atomic_write_text(path, result.output, mode=0o600)
         return replace(
             result,
@@ -689,6 +768,7 @@ class ToolExecutionService:
             state = "blocked"
         result.result_metadata.update(operation_id=operation_id, status=status)
         path = self.ledger.path.parent / "operation_artifacts" / f"{operation_id}.json"
+        private_directory(path.parent)
         atomic_write_text(path, result.model_dump_json(), mode=0o600)
         self.ledger.settle(
             operation_id,
@@ -778,9 +858,16 @@ def recover_messages(messages: list[Any], metadata: Any, cwd: Path, session_id: 
 
 def _receipt_result(receipt: dict[str, Any], call: str) -> ToolResultBlock:
     try:
-        return ToolResultBlock.model_validate_json(
+        result = ToolResultBlock.model_validate_json(
             Path(receipt["result_ref"]).read_text()
         ).model_copy(update={"tool_use_id": call})
+        if (
+            result.is_error
+            or result.result_metadata.get("status") != "success"
+            or result.result_metadata.get("operation_id") != receipt["operation_id"]
+        ):
+            raise ValueError("Saved result does not establish this operation's success")
+        return result
     except (OSError, ValueError, TypeError):
         return ToolResultBlock(
             tool_use_id=call,
@@ -793,3 +880,16 @@ def _receipt_result(receipt: dict[str, Any], call: str) -> ToolResultBlock:
                 "operation_id": receipt["operation_id"],
             },
         )
+
+
+def _permission_read_only(tool: Any, arguments: Any, contract: Any, context: QueryContext) -> bool:
+    from openharness.tools.research_memory_tool import ResearchMemoryTool
+    from openharness.tools.research.project import ResearchProjectTool
+
+    if contract.effect == "local_write":
+        return (
+            type(tool) in {ResearchMemoryTool, ResearchProjectTool}
+            and context.capabilities.permits(contract.required_capabilities)
+            and context.permission_checker.mode != PermissionMode.PLAN
+        )
+    return contract.effect in {"read_only", "model_call"} and tool.is_read_only(arguments)

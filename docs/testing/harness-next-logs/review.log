@@ -1,0 +1,44 @@
+.................FFFFFFF.                                                [100%]
+=================================== FAILURES ===================================
+_ test_report_conflict_investigation_uses_common_loop_and_preserves_authority __
+tests/test_research/test_memory_compatibility.py:132: in test_report_conflict_investigation_uses_common_loop_and_preserves_authority
+    assert plan_after == tasks_before
+E   AssertionError: assert {'id': 'plan_...', ...}], ...} == {'id': 'plan_...', ...}], ...}
+E     
+E     Omitting 12 identical items, use -vv to show
+E     Differing items:
+E     {'tasks': [{'id': 'parent', 'title': 'parent', 'status': 'blocked', 'blocker': 'Main agent stopped before completion checks passed', ...}]} != {'tasks': [{'id': 'parent', 'title': 'parent', 'status': 'blocked', 'blocker': 'Main agent stopped before completion checks passed', ...}]}
+E     Use -v to get more diff
+_ test_generation_is_not_callable_even_with_legacy_credentials[research-openai] _
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[research-codex] _
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[research-auto] __
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[general-openai] _
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+_ test_generation_is_not_callable_even_with_legacy_credentials[general-codex] __
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+__ test_generation_is_not_callable_even_with_legacy_credentials[general-auto] __
+tests/test_tools/test_image_generation_tool.py:20: in test_generation_is_not_callable_even_with_legacy_credentials
+    context = QueryContext(
+E   TypeError: QueryContext.__init__() missing 1 required positional argument: 'max_tokens'
+=========================== short test summary info ============================
+FAILED tests/test_research/test_memory_compatibility.py::test_report_conflict_investigation_uses_common_loop_and_preserves_authority
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[research-openai]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[research-codex]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[research-auto]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[general-openai]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[general-codex]
+FAILED tests/test_tools/test_image_generation_tool.py::test_generation_is_not_callable_even_with_legacy_credentials[general-auto]
+7 failed, 18 passed in 5.19s

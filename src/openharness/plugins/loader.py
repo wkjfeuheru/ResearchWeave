@@ -49,7 +49,7 @@ def _find_manifest(plugin_dir: Path) -> Path | None:
         plugin_dir / "plugin.json",
         plugin_dir / ".claude-plugin" / "plugin.json",
     ]:
-        if candidate.exists():
+        if candidate.exists() and candidate.resolve().is_relative_to(plugin_dir.resolve()):
             return candidate
     return None
 
@@ -70,7 +70,12 @@ def discover_plugin_paths(
         if not root.exists():
             continue
         for path in sorted(root.iterdir()):
-            if path.is_dir() and _find_manifest(path) is not None and path not in seen:
+            if (
+                path.is_dir()
+                and path.resolve().is_relative_to(root.resolve())
+                and _find_manifest(path) is not None
+                and path not in seen
+            ):
                 seen.add(path)
                 paths.append(path)
     return paths
@@ -96,7 +101,12 @@ def discover_plugin_paths_for_settings(
         if not root.exists():
             continue
         for path in sorted(root.iterdir()):
-            if path.is_dir() and _find_manifest(path) is not None and path not in seen:
+            if (
+                path.is_dir()
+                and path.resolve().is_relative_to(root.resolve())
+                and _find_manifest(path) is not None
+                and path not in seen
+            ):
                 seen.add(path)
                 paths.append(path)
     return paths
@@ -141,6 +151,9 @@ def load_plugin(
     metadata_only: bool = False,
 ) -> LoadedPlugin | None:
     """Load one plugin directory."""
+    if path.is_symlink():
+        logger.warning("Ignoring symlink plugin entry: %s", path)
+        return None
     manifest_path = _find_manifest(path)
     if manifest_path is None:
         return None
@@ -149,6 +162,18 @@ def load_plugin(
     except Exception as exc:
         logger.debug("Failed to load plugin manifest from %s: %s", manifest_path, exc)
         return None
+    for value in (
+        manifest.skills_dir,
+        manifest.tools_dir,
+        manifest.hooks_file,
+        manifest.mcp_file,
+        "hooks/hooks.json",
+        ".mcp.json",
+    ):
+        candidate = path / value
+        if not candidate.resolve().is_relative_to(path.resolve()):
+            logger.warning("Ignoring plugin contribution outside its root: %s", candidate)
+            return None
     enabled = enabled_plugins.get(manifest.name, manifest.enabled_by_default)
 
     skills = _load_plugin_skills(path / manifest.skills_dir)
@@ -252,15 +277,22 @@ def _walk_plugin_markdown(
     if not root.exists():
         return []
     files: list[Path] = []
-    for current_root, dirnames, filenames in os.walk(root, followlinks=True):
+    for current_root, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(current_root)
+        dirnames[:] = [d for d in dirnames if not (current / d).is_symlink()]
         skill_file = current / "SKILL.md"
-        if stop_at_skill_dir and skill_file.exists():
+        if (
+            stop_at_skill_dir
+            and skill_file.exists()
+            and skill_file.resolve().is_relative_to(root.resolve())
+        ):
             files.append(skill_file)
             dirnames[:] = []
             continue
         for filename in sorted(filenames):
-            if filename.lower().endswith(".md"):
+            if filename.lower().endswith(".md") and (current / filename).resolve().is_relative_to(
+                root.resolve()
+            ):
                 files.append(current / filename)
     return sorted(files)
 
@@ -354,6 +386,8 @@ def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list[BaseTool[Ba
 
     tools: list[BaseTool[BaseModel]] = []
     for py_file in sorted(tools_dir.glob("*.py")):
+        if not py_file.resolve().is_relative_to(path.resolve()):
+            continue
         if py_file.name.startswith("_"):
             continue
         module_name = f"_plugin_tools_{manifest.name}_{py_file.stem}"
