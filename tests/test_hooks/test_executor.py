@@ -34,9 +34,15 @@ class FakeApiClient:
 async def test_command_hook_executes(tmp_path: Path, monkeypatch):
     # This tests command execution, not the developer's interactive login profile.
     from openharness.utils import shell
+
     original = shell.resolve_shell_command
-    monkeypatch.setattr(shell, "resolve_shell_command", lambda command, **kwargs:
-                        [part if part != "-lc" else "-c" for part in original(command, **kwargs)])
+    monkeypatch.setattr(
+        shell,
+        "resolve_shell_command",
+        lambda command, **kwargs: [
+            part if part != "-lc" else "-c" for part in original(command, **kwargs)
+        ],
+    )
     registry = HookRegistry()
     registry.register(
         HookEvent.SESSION_START,
@@ -44,7 +50,11 @@ async def test_command_hook_executes(tmp_path: Path, monkeypatch):
     )
     executor = HookExecutor(
         registry,
-        HookExecutionContext(cwd=tmp_path, api_client=FakeApiClient('{"ok": true}'), default_model="claude-sonnet-4-6"),
+        HookExecutionContext(
+            cwd=tmp_path,
+            api_client=FakeApiClient('{"ok": true}'),
+            default_model="claude-sonnet-4-6",
+        ),
     )
 
     result = await executor.execute(HookEvent.SESSION_START, {"event": "session_start"})
@@ -124,3 +134,28 @@ async def test_command_hook_escapes_shell_metacharacters(tmp_path: Path):
     # With proper escaping, the literal $(echo INJECTED) must survive.
     # Without escaping, bash expands the subshell and the $() wrapper is gone.
     assert "$(echo INJECTED)" in output
+
+
+async def test_prompt_hook_ignores_retry_notifications(tmp_path):
+    from openharness.api.client import ApiRetryEvent, ApiTextDeltaEvent
+
+    class RetryingClient(FakeApiClient):
+        async def stream_message(self, request):
+            yield ApiRetryEvent(message="retrying", attempt=1, max_attempts=3, delay_seconds=0)
+            yield ApiTextDeltaEvent(text='{"ok": true}')
+            async for event in super().stream_message(request):
+                yield event
+
+    registry = HookRegistry()
+    registry.register(HookEvent.PRE_TOOL_USE, PromptHookDefinition(prompt="Check tool"))
+    executor = HookExecutor(
+        registry,
+        HookExecutionContext(
+            cwd=tmp_path,
+            api_client=RetryingClient('{"ok": true}'),
+            default_model="fixture",
+            context_window_tokens=100000,
+        ),
+    )
+    result = await executor.execute(HookEvent.PRE_TOOL_USE, {"tool_name": "bash"})
+    assert not result.blocked and all(item.success for item in result.results)

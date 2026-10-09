@@ -31,8 +31,19 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra web
+        run: uv sync --extra dev --extra web --extra eval
 
+      - name: Set up sandbox Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep
+          npm ci --prefix tools/sandbox
+          echo "$GITHUB_WORKSPACE/tools/sandbox/node_modules/.bin" >> "$GITHUB_PATH"
+          docker build -t openharness-sandbox:latest src/openharness/sandbox
       - name: Run test suite
         run: uv run pytest -q
 
@@ -54,10 +65,14 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra web
+        run: uv sync --extra dev --extra web --extra eval
 
+      - name: Strict production types
+        run: uv run python scripts/check_types.py
       - name: Ruff
-        run: uv run ruff check src tests scripts
+        run: uv run ruff check src tests scripts evals hatch_build.py
+      - name: Production formatting
+        run: uv run ruff format --check src evals scripts/check_types.py hatch_build.py
 
   web-workspace:
     name: Research web build and browser tests
@@ -70,11 +85,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/web/package-lock.json
       - name: Install backend dependencies
-        run: uv sync --extra dev --extra web
+        run: uv sync --extra dev --extra web --extra eval
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend/web
@@ -84,6 +99,16 @@ jobs:
       - name: Install test browser
         run: npx playwright install --with-deps chromium
         working-directory: frontend/web
+      - name: Set up sandbox Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep
+          npm ci --prefix tools/sandbox
+          echo "$GITHUB_WORKSPACE/tools/sandbox/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Browser integration tests
         run: npm run test:e2e
         working-directory: frontend/web
@@ -97,3 +122,29 @@ jobs:
             uv pip install --python /tmp/openharness-wheel-check/bin/python "${research_wheel}[web]"
           done
           /tmp/openharness-wheel-check/bin/python tests/test_install/wheel_smoke.py
+
+  sandbox-acceptance:
+    name: Real sandbox acceptance (missing backends fail)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install mandatory backends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep
+          npm ci --prefix tools/sandbox
+          echo "$GITHUB_WORKSPACE/tools/sandbox/node_modules/.bin" >> "$GITHUB_PATH"
+          uv sync --extra dev --extra web --extra eval
+          docker build -t openharness-sandbox:latest src/openharness/sandbox
+          docker tag openharness-sandbox:latest openharness-sandbox-e2e:latest
+      - name: Real isolation and crash recovery
+        env:
+          OPENHARNESS_REQUIRE_SANDBOX: "1"
+        run: uv run pytest -q tests/test_research/test_report_sandbox.py tests/test_research/test_dispatch_recovery.py scripts/test_docker_sandbox_e2e.py

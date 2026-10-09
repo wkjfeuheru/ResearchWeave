@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 
-def read_deliverable(path):
+def read_deliverable(path: str | Path) -> tuple[str, dict[str, object]]:
     path = Path(path)
     if path.stat().st_size > 2_000_000:
         raise ValueError("产物超过评分读取上限")
@@ -17,7 +17,7 @@ def read_deliverable(path):
     elif path.suffix == ".docx":
         from docx import Document
 
-        doc = Document(path)
+        doc = Document(str(path))
         text = "\n".join(
             [p.text for p in doc.paragraphs]
             + [" | ".join(c.text for c in row.cells) for t in doc.tables for row in t.rows]

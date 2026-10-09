@@ -1,5 +1,6 @@
 """Conversation grants survive recovery without crossing policy or session boundaries."""
 
+from openharness.utils.async_timeout import timeout as async_timeout
 import asyncio
 from types import SimpleNamespace
 
@@ -18,8 +19,14 @@ from tests.test_web.test_app import ORIGIN, FakeClient, add_model, add_session, 
 
 
 def respond(socket, prompt, answer="allow_session"):
-    socket.send_json({"type": "response", "request_id": prompt["request_id"],
-                      "prompt_id": prompt["prompt_id"], "answer": answer})
+    socket.send_json(
+        {
+            "type": "response",
+            "request_id": prompt["request_id"],
+            "prompt_id": prompt["prompt_id"],
+            "answer": answer,
+        }
+    )
 
 
 def grant_write(socket):
@@ -61,7 +68,9 @@ def test_session_grants_survive_new_turn_model_switch_and_server_recovery(worksp
             assert prompt["kind"] == "permission"
             respond(socket, prompt, "deny")
             collect(socket)
-        assert "session_approvals" not in recovered.app.state.workspace.record(other)["tool_metadata"]
+        assert (
+            "session_approvals" not in recovered.app.state.workspace.record(other)["tool_metadata"]
+        )
 
 
 class ActionClient(FakeClient):
@@ -73,7 +82,9 @@ class ActionClient(FakeClient):
         last = next(m for m in reversed(request.messages) if m.content)
         if last.text == "action":
             name, arguments = self.action
-            message = ConversationMessage(role="assistant", content=[ToolUseBlock(name=name, input=arguments)])
+            message = ConversationMessage(
+                role="assistant", content=[ToolUseBlock(name=name, input=arguments)]
+            )
             yield ApiMessageCompleteEvent(message=message, usage=UsageSnapshot())
         else:
             async for event in super().stream_message(request):
@@ -86,8 +97,10 @@ def test_grant_does_not_authorize_other_tools_or_other_file_reviews(workspace, m
     with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
         socket.receive_json()
         grant_write(socket)
-        monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings",
-                            lambda settings: ActionClient(("write_file", {"path": "other.txt", "content": "new"})))
+        monkeypatch.setattr(
+            "openharness.runtime._resolve_api_client_from_settings",
+            lambda settings: ActionClient(("write_file", {"path": "other.txt", "content": "new"})),
+        )
         submit(socket, "action", request_id="different-file")
         prompt = collect(socket, "prompt")[-1]
         assert prompt["kind"] == "edit" and prompt["path"] == str(cwd / "other.txt")
@@ -95,8 +108,9 @@ def test_grant_does_not_authorize_other_tools_or_other_file_reviews(workspace, m
         collect(socket)
         assert not (cwd / "other.txt").exists()
         (cwd / "note.txt").write_text("original")
-        monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings",
-                            lambda settings: FakeClient([]))
+        monkeypatch.setattr(
+            "openharness.runtime._resolve_api_client_from_settings", lambda settings: FakeClient([])
+        )
         submit(socket, "edit", request_id="different-tool")
         prompt = collect(socket, "prompt")[-1]
         assert prompt["kind"] == "permission" and prompt["tool_name"] == "edit_file"
@@ -122,7 +136,9 @@ def test_one_off_permission_does_not_become_a_session_grant(workspace):
     assert "session_approvals" not in app.state.workspace.record(sid)["tool_metadata"]
 
 
-@pytest.mark.parametrize("policy", ["denied_tool", "denied_path", "sensitive_path", "denied_command"])
+@pytest.mark.parametrize(
+    "policy", ["denied_tool", "denied_path", "sensitive_path", "denied_command"]
+)
 def test_session_grants_cannot_bypass_permission_policy(workspace, monkeypatch, policy):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
@@ -137,18 +153,27 @@ def test_session_grants_cannot_bypass_permission_policy(workspace, monkeypatch, 
     else:
         settings.permission.denied_commands = ["printf denied"]
     save_settings(settings)
-    name, arguments = ("bash", {"command": "printf denied"}) if policy == "denied_command" else (
-        "write_file", {"path": str(target), "content": "must not write"})
+    name, arguments = (
+        ("bash", {"command": "printf denied"})
+        if policy == "denied_command"
+        else ("write_file", {"path": str(target), "content": "must not write"})
+    )
     record = app.state.workspace.record(sid)
     record["tool_metadata"]["session_approvals"] = {"tools": [name], "edit_paths": [str(target)]}
     app.state.workspace.store.write(record)
-    monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings", lambda settings: ActionClient((name, arguments)))
+    monkeypatch.setattr(
+        "openharness.runtime._resolve_api_client_from_settings",
+        lambda settings: ActionClient((name, arguments)),
+    )
     with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "action")
         events = collect(socket)
         assert not any(e["type"] == "prompt" for e in events)
-        assert any(e["type"] == "message" and e.get("message", {}).get("status") == "failed" for e in events)
+        assert any(
+            e["type"] == "message" and e.get("message", {}).get("status") == "failed"
+            for e in events
+        )
     assert not target.exists()
 
 
@@ -164,8 +189,11 @@ async def test_parallel_calls_reuse_grant_and_ignore_stale_responses(workspace):
     connection = BrowserConnection(SimpleNamespace(send_json=send_json), sid, app.state.workspace)
     connection.bundle = SimpleNamespace(engine=SimpleNamespace(tool_metadata={}))
     connection.request_id = "turn"
-    tasks = [asyncio.create_task(connection.permission("mcp__finance__income", "confirm")) for _ in range(4)]
-    async with asyncio.timeout(2):
+    tasks = [
+        asyncio.create_task(connection.permission("mcp__finance__income", "confirm"))
+        for _ in range(4)
+    ]
+    async with async_timeout(2):
         while len(connection.prompts) != 4:
             await asyncio.sleep(0)
     prompt = events[0]
@@ -175,16 +203,25 @@ async def test_parallel_calls_reuse_grant_and_ignore_stale_responses(workspace):
     connection.respond("turn", prompt["prompt_id"], "allow_session")
     assert await asyncio.gather(*tasks) == [True] * 4
     assert len(events) == 1 and not connection.prompts
-    assert app.state.workspace.record(sid)["tool_metadata"]["session_approvals"] == {"tools": ["mcp__finance__income"]}
-    waiting = [asyncio.create_task(connection.permission("another-tool", "confirm")) for _ in range(2)]
-    async with asyncio.timeout(2):
+    assert app.state.workspace.record(sid)["tool_metadata"]["session_approvals"] == {
+        "tools": ["mcp__finance__income"]
+    }
+    waiting = [
+        asyncio.create_task(connection.permission("another-tool", "confirm")) for _ in range(2)
+    ]
+    async with async_timeout(2):
         while len(connection.prompts) != 2:
             await asyncio.sleep(0)
     pending = events[-1]
     await connection.cancel()
     connection.respond("turn", pending["prompt_id"], "allow_session")
-    assert all(isinstance(value, asyncio.CancelledError) for value in await asyncio.gather(*waiting, return_exceptions=True))
-    assert connection.bundle.engine.tool_metadata["session_approvals"] == {"tools": ["mcp__finance__income"]}
+    assert all(
+        isinstance(value, asyncio.CancelledError)
+        for value in await asyncio.gather(*waiting, return_exceptions=True)
+    )
+    assert connection.bundle.engine.tool_metadata["session_approvals"] == {
+        "tools": ["mcp__finance__income"]
+    }
     assert not connection.prompts and not connection.prompt_lock.locked()
 
 
@@ -201,7 +238,7 @@ async def test_failed_grant_commit_does_not_authorize_operation(workspace, monke
     connection.bundle = SimpleNamespace(engine=SimpleNamespace(tool_metadata={}))
     connection.request_id = "turn"
     task = asyncio.create_task(connection.permission("bash", "confirm"))
-    async with asyncio.timeout(2):
+    async with async_timeout(2):
         while not events:
             await asyncio.sleep(0)
 
@@ -218,5 +255,9 @@ async def test_failed_grant_commit_does_not_authorize_operation(workspace, monke
 
 
 def test_corrupt_grants_do_not_turn_into_wildcard_authorization():
-    assert _persistable_tool_metadata({"session_approvals": {"tools": "bash", "edit_paths": True, "all": True}}) == {"session_approvals": {}}
-    assert _persistable_tool_metadata({"session_approvals": {"tools": [False, "bash", "bash", ""]}}) == {"session_approvals": {"tools": ["bash"]}}
+    assert _persistable_tool_metadata(
+        {"session_approvals": {"tools": "bash", "edit_paths": True, "all": True}}
+    ) == {"session_approvals": {}}
+    assert _persistable_tool_metadata(
+        {"session_approvals": {"tools": [False, "bash", "bash", ""]}}
+    ) == {"session_approvals": {"tools": ["bash"]}}

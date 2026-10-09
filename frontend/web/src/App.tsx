@@ -6,7 +6,6 @@ import ModelPage from './ModelPage';
 import SkillPage from './SkillPage';
 import { ErrorBanner, Modal } from './components';
 import { useConversation } from './useConversation';
-import logo from '../../../assets/logo.png';
 
 type Page = 'chat' | 'models' | 'skills';
 const nav = [
@@ -170,7 +169,7 @@ export default function App() {
   return <div className="app-shell">
     {sidebarOpen && <button className="sidebar-scrim" aria-label="收起导航" onClick={() => setSidebarOpen(false)} />}
     <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-      <div className="brand"><img src={logo} alt="OpenHarness" /><div><strong>OpenHarness</strong><span>金融投研工作台</span></div><button className="icon-button mobile-close" aria-label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
+      <div className="brand"><Layers size={36} role="img" aria-label="OpenHarness" /><div><strong>OpenHarness</strong><span>金融投研工作台</span></div><button className="icon-button mobile-close" aria-label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
       <nav aria-label="主要导航">{nav.map(({ id, label, icon: Icon }) => <button key={id} aria-label={label} className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)}><Icon size={19} strokeWidth={1.7} /><span>{label}</span>{id === 'skills' && skills.filter(s => s.enabled).length > 0 && <span className="nav-count">{skills.filter(s => s.enabled).length}</span>}</button>)}</nav>
       <button className="new-conversation" disabled={chat.busy || creating || uploading} onClick={() => {
         setSessionId(null); sessionStorage.removeItem('openharness.web.session'); setDraft(''); chat.setError('');

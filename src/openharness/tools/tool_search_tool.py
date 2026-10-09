@@ -13,7 +13,7 @@ class ToolSearchToolInput(BaseModel):
     query: str = Field(description="Substring to search in tool names and descriptions")
 
 
-class ToolSearchTool(BaseTool):
+class ToolSearchTool(BaseTool[ToolSearchToolInput]):
     """Search tool registry contents."""
 
     name = "tool_search"
@@ -24,13 +24,16 @@ class ToolSearchTool(BaseTool):
         del arguments
         return True
 
-    async def execute(self, arguments: ToolSearchToolInput, context: ToolExecutionContext) -> ToolResult:
+    async def execute(
+        self, arguments: ToolSearchToolInput, context: ToolExecutionContext
+    ) -> ToolResult:
         registry = context.metadata.get("tool_registry") if hasattr(context, "metadata") else None
         if registry is None:
             return ToolResult(output="Tool registry context not available", is_error=True)
         query = arguments.query.lower()
         matches = [
-            tool for tool in registry.list_tools()
+            tool
+            for tool in registry.list_tools()
             if query in tool.name.lower() or query in tool.description.lower()
         ]
         if not matches:

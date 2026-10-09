@@ -31,7 +31,7 @@ class Company(Contract):
     identity_sources: list[Reference] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def supported(self):
+    def supported(self) -> Company:
         if self.financial_sector:
             raise ValueError("首版仅支持A股非金融企业；金融企业需要专属科目与比率")
         return self
@@ -47,7 +47,7 @@ class Result(Contract):
 
     @field_validator("as_of")
     @classmethod
-    def timezone_required(cls, value):
+    def timezone_required(cls, value: datetime) -> datetime:
         if value.tzinfo is None:
             raise ValueError("as_of requires a timezone")
         return value
@@ -60,7 +60,7 @@ class Amount(Contract):
     missing_reason: str = ""
 
     @model_validator(mode="after")
-    def grounded(self):
+    def grounded(self) -> Amount:
         if self.value is None and not self.missing_reason:
             raise ValueError("缺失数值须说明原因")
         if self.value is not None and (

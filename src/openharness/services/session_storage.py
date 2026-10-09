@@ -1,23 +1,32 @@
 """Session persistence helpers."""
 
 from __future__ import annotations
+from openharness.engine.metadata import ExecutionMetadata
 
 import json
 import time
 from hashlib import sha1
 from pathlib import Path
-from typing import Any
+from typing import Mapping, cast, Any
 from uuid import uuid4
 
 from openharness.api.usage import UsageSnapshot
 from openharness.config.paths import get_sessions_dir
-from openharness.engine.messages import ConversationMessage, sanitize_conversation_messages
+from openharness.engine.messages import (
+    ToolResultBlock,
+    ConversationMessage,
+    sanitize_conversation_messages,
+)
 from openharness.utils.fs import atomic_write_text
 
 
 _PERSISTED_TOOL_METADATA_KEYS = (
-    "permission_mode", "invoked_skills", "compact_checkpoints", "compact_last",
-    "session_approvals", "context_budget",
+    "permission_mode",
+    "invoked_skills",
+    "compact_checkpoints",
+    "compact_last",
+    "session_approvals",
+    "context_budget",
 )
 
 
@@ -33,7 +42,7 @@ def _sanitize_metadata(value: Any) -> Any:
     return str(value)
 
 
-def _persistable_tool_metadata(tool_metadata: dict[str, object] | None) -> dict[str, Any]:
+def _persistable_tool_metadata(tool_metadata: Mapping[str, object] | None) -> ExecutionMetadata:
     if not isinstance(tool_metadata, dict):
         return {}
     payload: dict[str, Any] = {}
@@ -43,13 +52,15 @@ def _persistable_tool_metadata(tool_metadata: dict[str, object] | None) -> dict[
                 approvals = tool_metadata[key]
                 if isinstance(approvals, dict):
                     payload[key] = {
-                        scope: list(dict.fromkeys(item for item in items if isinstance(item, str) and item))
+                        scope: list(
+                            dict.fromkeys(item for item in items if isinstance(item, str) and item)
+                        )
                         for scope in ("tools", "edit_paths")
                         if isinstance(items := approvals.get(scope), list)
                     }
             else:
                 payload[key] = _sanitize_metadata(tool_metadata[key])
-    return payload
+    return cast(ExecutionMetadata, payload)
 
 
 def get_project_session_dir(cwd: str | Path) -> Path:
@@ -69,7 +80,7 @@ def save_session_snapshot(
     messages: list[ConversationMessage],
     usage: UsageSnapshot,
     session_id: str | None = None,
-    tool_metadata: dict[str, object] | None = None,
+    tool_metadata: Mapping[str, object] | None = None,
 ) -> Path:
     """Persist a session snapshot. Saves both by ID and as latest."""
     session_dir = get_project_session_dir(cwd)
@@ -138,7 +149,9 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
     seen_ids: set[str] = set()
 
     # Named session files
-    for path in sorted(session_dir.glob("session-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(
+        session_dir.glob("session-*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    ):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             sid = data.get("session_id", path.stem.replace("session-", ""))
@@ -148,17 +161,23 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
                 # Extract from first user message
                 for msg in data.get("messages", []):
                     if msg.get("role") == "user":
-                        texts = [b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text"]
+                        texts = [
+                            b.get("text", "")
+                            for b in msg.get("content", [])
+                            if b.get("type") == "text"
+                        ]
                         summary = " ".join(texts).strip()[:80]
                         if summary:
                             break
-            sessions.append({
-                "session_id": sid,
-                "summary": summary,
-                "message_count": data.get("message_count", len(data.get("messages", []))),
-                "model": data.get("model", ""),
-                "created_at": data.get("created_at", path.stat().st_mtime),
-            })
+            sessions.append(
+                {
+                    "session_id": sid,
+                    "summary": summary,
+                    "message_count": data.get("message_count", len(data.get("messages", []))),
+                    "model": data.get("model", ""),
+                    "created_at": data.get("created_at", path.stat().st_mtime),
+                }
+            )
         except (json.JSONDecodeError, OSError):
             continue
         if len(sessions) >= limit:
@@ -175,17 +194,23 @@ def list_session_snapshots(cwd: str | Path, limit: int = 20) -> list[dict[str, A
                 if not summary:
                     for msg in data.get("messages", []):
                         if msg.get("role") == "user":
-                            texts = [b.get("text", "") for b in msg.get("content", []) if b.get("type") == "text"]
+                            texts = [
+                                b.get("text", "")
+                                for b in msg.get("content", [])
+                                if b.get("type") == "text"
+                            ]
                             summary = " ".join(texts).strip()[:80]
                             if summary:
                                 break
-                sessions.append({
-                    "session_id": sid,
-                    "summary": summary or "(latest session)",
-                    "message_count": data.get("message_count", len(data.get("messages", []))),
-                    "model": data.get("model", ""),
-                    "created_at": data.get("created_at", latest_path.stat().st_mtime),
-                })
+                sessions.append(
+                    {
+                        "session_id": sid,
+                        "summary": summary or "(latest session)",
+                        "message_count": data.get("message_count", len(data.get("messages", []))),
+                        "model": data.get("model", ""),
+                        "created_at": data.get("created_at", latest_path.stat().st_mtime),
+                    }
+                )
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -225,9 +250,11 @@ def export_session_markdown(
         if text:
             parts.append(text)
         for block in message.tool_uses:
-            parts.append(f"\n```tool\n{block.name} {json.dumps(block.input, ensure_ascii=True)}\n```")
-        for block in message.content:
-            if getattr(block, "type", "") == "tool_result":
-                parts.append(f"\n```tool-result\n{block.content}\n```")
+            parts.append(
+                f"\n```tool\n{block.name} {json.dumps(block.input, ensure_ascii=True)}\n```"
+            )
+        for result_block in message.content:
+            if isinstance(result_block, ToolResultBlock):
+                parts.append(f"\n```tool-result\n{result_block.content}\n```")
     atomic_write_text(path, "\n".join(parts).strip() + "\n")
     return path

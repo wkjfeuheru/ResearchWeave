@@ -7,10 +7,12 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable
+from typing import Literal, AsyncGenerator, AsyncIterator, Awaitable, Callable
 from uuid import uuid4
+
+from openharness.engine.metadata import ExecutionMetadata
 
 from openharness.api.client import (
     ApiMessageCompleteEvent,
@@ -27,6 +29,7 @@ from openharness.engine.messages import (
     ImageBlock,
     TextBlock,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from openharness.engine.stream_events import (
     AssistantTextDelta,
@@ -40,8 +43,15 @@ from openharness.engine.stream_events import (
     ToolExecutionStarted,
 )
 from openharness.hooks import HookEvent, HookExecutor
+from openharness.permissions.capabilities import CapabilityContext
 from openharness.permissions.checker import PermissionChecker
 from openharness.services.context_budget import ContextBudgetError, prepare_request, request_budget
+from openharness.config.context_components import ContextComponentsSettings
+from openharness.services.context_sources import (
+    ContextSnapshot,
+    compose_research_context,
+    refresh_runtime_messages,
+)
 from openharness.services.tool_outputs import tool_output_inline_chars, tool_output_preview_chars
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.base import ToolRegistry
@@ -143,8 +153,14 @@ class QueryContext:
     ask_user_prompt: AskUserPrompt | None = None
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
-    tool_metadata: dict[str, object] | None = None
+    tool_metadata: ExecutionMetadata | None = None
     runtime_context_provider: Callable[[], str | None] | None = None
+    runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None
+    context_components: ContextComponentsSettings | None = None
+    current_user_message_id: str | None = None
+    research_memory_enabled: bool = True
+    capabilities: CapabilityContext = field(default_factory=CapabilityContext)
+    execution_session_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 def _tool_artifact_dir() -> Path:
@@ -173,6 +189,7 @@ def _offload_tool_output_if_needed(
         / f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"
     )
     from openharness.utils.fs import atomic_write_text
+
     atomic_write_text(artifact_path, output, mode=0o600)
     preview = output[: tool_output_preview_chars()]
     omitted = max(0, len(output) - len(preview))
@@ -275,7 +292,7 @@ async def _preprocess_images_in_messages(
 async def run_query(
     context: QueryContext,
     messages: list[ConversationMessage],
-) -> AsyncIterator[tuple[StreamEvent, UsageSnapshot | None]]:
+) -> AsyncGenerator[tuple[StreamEvent, UsageSnapshot | None], None]:
     """Run the conversation loop until the model stops requesting tools.
 
     Auto-compaction is checked at the start of each turn.  When the
@@ -289,6 +306,32 @@ async def run_query(
         auto_compact_if_needed,
     )
 
+    metadata = context.tool_metadata or {}
+    store = metadata.get("research_store")
+    runtime = metadata.get("research_runtime")
+    if (
+        store is not None
+        and not metadata.get("conflict_investigator")
+        and not metadata.get("subagent_child")
+    ):
+        if runtime is None:
+            from openharness.research.runtime import ResearchAgentRuntime
+
+            runtime = ResearchAgentRuntime(
+                store,
+                permission_checker=context.permission_checker,
+                workspace_root=metadata.get("research_workspace_root"),
+                memory_auto_inject_max_chars=metadata.get("memory_auto_inject_max_chars", 12000),
+            )
+            if context.tool_metadata is None:
+                context.tool_metadata = {}
+            context.tool_metadata["research_runtime"] = runtime
+        runtime.permission_checker = context.permission_checker
+
+    def pause_project(reason: str) -> None:
+        if runtime and runtime.store.load().project:
+            runtime.repository.suspend(reason)
+
     compact_state = AutoCompactState()
     reactive_compact_attempted = False
     last_compaction_result: tuple[list[ConversationMessage], bool] = (messages, False)
@@ -300,38 +343,46 @@ async def run_query(
     citation_repairs = 0
     verification_repairs = 0
     conflict_repairs = 0
+    completion_repairs = 0
 
     async def _stream_compaction(
         *,
-        trigger: str,
+        trigger: Literal["auto", "manual", "reactive"],
         force: bool = False,
-    ) -> AsyncIterator[tuple[StreamEvent, UsageSnapshot | None]]:
+        history_target: int | None = None,
+    ) -> AsyncGenerator[tuple[StreamEvent, UsageSnapshot | None], None]:
         nonlocal last_compaction_result
         progress_queue: asyncio.Queue[CompactProgressEvent] = asyncio.Queue()
 
         async def _progress(event: CompactProgressEvent) -> None:
             await progress_queue.put(event)
 
-        async def observed_compaction():
+        async def observed_compaction() -> tuple[list[ConversationMessage], bool]:
             from openharness.engine.observer import observer_for
 
-            with observer_for(context.tool_metadata).span("compaction", metadata={"trigger": trigger}):
+            with observer_for(context.tool_metadata).span(
+                "compaction", metadata={"trigger": trigger}
+            ):
                 return await auto_compact_if_needed(
-                messages,
-                api_client=context.api_client,
-                model=context.model,
-                system_prompt=context.system_prompt,
-                state=compact_state,
-                progress_callback=_progress,
-                force=force,
-                trigger=trigger,
-                hook_executor=context.hook_executor,
-                carryover_metadata=context.tool_metadata,
-                context_window_tokens=context.context_window_tokens,
-                auto_compact_threshold_tokens=context.auto_compact_threshold_tokens,
-                max_tokens=effective_max_tokens,
-                tools=request_tools,
-                runtime_context_provider=context.runtime_context_provider,
+                    request_messages,
+                    api_client=context.api_client,
+                    model=context.model,
+                    system_prompt=context.system_prompt,
+                    state=compact_state,
+                    progress_callback=_progress,
+                    force=force,
+                    trigger=trigger,
+                    hook_executor=context.hook_executor,
+                    carryover_metadata=context.tool_metadata,
+                    context_window_tokens=context.context_window_tokens,
+                    auto_compact_threshold_tokens=context.auto_compact_threshold_tokens,
+                    max_tokens=effective_max_tokens,
+                    tools=request_tools,
+                    runtime_context_provider=context.runtime_context_provider,
+                    runtime_snapshot_provider=context.runtime_snapshot_provider,
+                    history_target_tokens=history_target,
+                    context_components=context.context_components,
+                    current_user_message_id=context.current_user_message_id,
                 )
 
         task = asyncio.create_task(observed_compaction())
@@ -344,7 +395,9 @@ async def run_query(
                 pending_event = asyncio.create_task(progress_queue.get())
                 # wait_for(queue.get()) can swallow cancellation when the queue
                 # future completes concurrently on supported Python versions.
-                done, _ = await asyncio.wait((task, pending_event), return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(
+                    (task, pending_event), return_when=asyncio.FIRST_COMPLETED
+                )
                 if pending_event in done:
                     yield pending_event.result(), None
                 else:
@@ -363,6 +416,9 @@ async def run_query(
     turn_count = 0
     while context.max_turns is None or turn_count < context.max_turns:
         turn_count += 1
+        # Context transformations are staged. A rejected request/compaction must
+        # retain original user messages, images, results and source metadata.
+        request_messages = [message.model_copy(deep=True) for message in messages]
         if effective_max_tokens != context.max_tokens and not reported_token_clamp:
             reported_token_clamp = True
             yield (
@@ -378,43 +434,115 @@ async def run_query(
         # Reattach current context after compaction or a permission change.
         # Append a new user item only after all tool results are present; never
         # mutate a snapshot that has already been sent to the provider.
-        if context.runtime_context_provider is not None:
-            current = context.runtime_context_provider()
-            previous = next(
-                (m.runtime_context for m in reversed(messages) if m.runtime_context), None
+        if (
+            context.runtime_context_provider is not None
+            or context.runtime_snapshot_provider is not None
+            or runtime
+            or not context.research_memory_enabled
+        ):
+            from openharness.research.runtime import ResearchAgentRuntime
+            from openharness.research.errors import ResearchError
+
+            try:
+                if context.runtime_snapshot_provider:
+                    snapshot = context.runtime_snapshot_provider()
+                else:
+                    current = (
+                        context.runtime_context_provider()
+                        if context.runtime_context_provider
+                        else ""
+                    )
+                    current = ResearchAgentRuntime.strip_workspace_context(current or "")
+                    snapshot = compose_research_context(
+                        ContextSnapshot(current),
+                        store=store,
+                        runtime=runtime,
+                        model=context.model,
+                        output_tokens=effective_max_tokens,
+                        window=context.context_window_tokens,
+                        policy=context.context_components,
+                        legacy_budget=metadata.get("research_injection_budget", 6000),
+                        enabled=context.research_memory_enabled,
+                    )
+            except (ResearchError, OSError, ContextBudgetError) as exc:
+                pause_project(str(exc))
+                yield ErrorEvent(message=str(exc)), None
+                return
+            request_messages = refresh_runtime_messages(
+                request_messages, snapshot, strip_memory=not context.research_memory_enabled
             )
-            if current and current != previous:
-                messages.append(ConversationMessage(role="user", runtime_context=current))
         # ---------------------------------------------------------------
 
         # --- image preprocessing: convert ImageBlocks to text for non-vision models ---
-        async for event in _preprocess_images_in_messages(messages, context):
+        async for event in _preprocess_images_in_messages(request_messages, context):
             yield event, None
         # -----------------------------------------------------------------------------
 
         request_tools = context.tool_registry.to_api_schema()
 
-        def build_request(candidate=None):
-            return prepare_request(context.api_client, ApiMessageRequest(
-                model=context.model, messages=messages if candidate is None else candidate, system_prompt=context.system_prompt,
-                max_tokens=effective_max_tokens, tools=request_tools, effort=context.effort,
-                context_window_tokens=context.context_window_tokens))
+        def build_request(candidate: list[ConversationMessage] | None = None) -> ApiMessageRequest:
+            return prepare_request(
+                context.api_client,
+                ApiMessageRequest(
+                    model=context.model,
+                    messages=list(request_messages if candidate is None else candidate),
+                    system_prompt=context.system_prompt,
+                    max_tokens=effective_max_tokens,
+                    tools=request_tools,
+                    effort=context.effort,
+                    context_window_tokens=context.context_window_tokens,
+                    context_components=context.context_components,
+                    current_user_message_id=context.current_user_message_id,
+                ),
+            )
 
         try:
             # Validate configuration before attempting compaction or any main model call.
-            request_budget(build_request(), threshold=context.auto_compact_threshold_tokens)
-            async for event, usage in _stream_compaction(trigger="auto"):
+            initial = request_budget(
+                build_request(), threshold=context.auto_compact_threshold_tokens
+            )
+            if initial.component_policy_enabled and any(
+                initial.component_overflows[key]["hard_limit_exceeded"]
+                for key in ("system_prompt", "user_message", "other")
+            ):
+                # History summarization cannot repair immutable rules, user input
+                # or already preprocessed multimodal/protocol payloads.
+                if context.tool_metadata is not None:
+                    from dataclasses import asdict
+
+                    context.tool_metadata["context_budget"] = asdict(initial)
+                initial.require_fit()
+            history_target = (
+                min(
+                    initial.component_targets["conversation_history"],
+                    initial.component_max_tokens["conversation_history"],
+                )
+                if initial.component_policy_enabled
+                else None
+            )
+            async for event, usage in _stream_compaction(
+                trigger="auto", history_target=history_target
+            ):
                 yield event, usage
             compacted_messages, was_compacted = last_compaction_result
-            request = build_request(compacted_messages if was_compacted else messages)
+            selected = compacted_messages if was_compacted else request_messages
+            request = build_request(selected)
             budget = request_budget(request, threshold=context.auto_compact_threshold_tokens)
+            from openharness.services.context_budget import defer_optional_dynamic
+
+            deferred, omitted = defer_optional_dynamic(selected, budget)
+            if omitted:
+                request = build_request(deferred)
+                budget = request_budget(request, threshold=context.auto_compact_threshold_tokens)
             if context.tool_metadata is not None:
                 from dataclasses import asdict
+
                 context.tool_metadata["context_budget"] = asdict(budget)
+                context.tool_metadata["context_budget"]["deferred_dynamic_fragments"] = omitted
             budget.require_fit()
-            if was_compacted:
-                messages[:] = compacted_messages
+            messages[:] = selected
         except ContextBudgetError as exc:
+            pause_project(str(exc))
             yield ErrorEvent(message=str(exc)), None
             return
 
@@ -422,25 +550,25 @@ async def run_query(
         usage = UsageSnapshot()
 
         try:
-            async for event in context.api_client.stream_message(request):
-                if isinstance(event, ApiTextDeltaEvent):
-                    yield AssistantTextDelta(text=event.text), None
+            async for api_event in context.api_client.stream_message(request):
+                if isinstance(api_event, ApiTextDeltaEvent):
+                    yield AssistantTextDelta(text=api_event.text), None
                     continue
-                if isinstance(event, ApiRetryEvent):
+                if isinstance(api_event, ApiRetryEvent):
                     yield (
                         StatusEvent(
                             message=(
-                                f"Request failed; retrying in {event.delay_seconds:.1f}s "
-                                f"(attempt {event.attempt + 1} of {event.max_attempts}): {event.message}"
+                                f"Request failed; retrying in {api_event.delay_seconds:.1f}s "
+                                f"(attempt {api_event.attempt + 1} of {api_event.max_attempts}): {api_event.message}"
                             )
                         ),
                         None,
                     )
                     continue
 
-                if isinstance(event, ApiMessageCompleteEvent):
-                    final_message = event.message
-                    usage = event.usage
+                if isinstance(api_event, ApiMessageCompleteEvent):
+                    final_message = api_event.message
+                    usage = api_event.usage
         except Exception as exc:
             error_msg = str(exc)
             if _is_completion_token_limit_error(exc):
@@ -467,9 +595,14 @@ async def run_query(
                 compacted_messages, was_compacted = last_compaction_result
                 if was_compacted:
                     retry_budget = request_budget(build_request(compacted_messages))
-                    if retry_budget.fits and retry_budget.input_tokens < budget.input_tokens:
+                    if (
+                        retry_budget.fits
+                        and retry_budget.components_fit
+                        and retry_budget.input_tokens < budget.input_tokens
+                    ):
                         messages[:] = compacted_messages
                         continue
+            pause_project(error_msg)
             if (
                 "connect" in error_msg.lower()
                 or "timeout" in error_msg.lower()
@@ -486,9 +619,11 @@ async def run_query(
             return
 
         if final_message is None:
+            pause_project("Model stream finished without a final message")
             raise RuntimeError("Model stream finished without a final message")
 
         if final_message.role == "assistant" and final_message.is_effectively_empty():
+            pause_project("Model returned an empty assistant message")
             log.warning("dropping empty assistant message from provider response")
             yield (
                 ErrorEvent(
@@ -502,23 +637,48 @@ async def run_query(
             return
 
         store = (context.tool_metadata or {}).get("research_store")
-        if store is not None and not final_message.tool_uses and not (context.tool_metadata or {}).get("conflict_investigator"):
+        if (
+            store is not None
+            and not final_message.tool_uses
+            and not (context.tool_metadata or {}).get("conflict_investigator")
+        ):
             state = store.load()
-            actionable = [item for item in state.conflicts.values()
-                          if item.core and item.plan_id == state.research_state.current_plan_id
-                          and (item.status == "awaiting_review" or (item.status == "open"
-                               and item.last_attempt_fingerprint != store.conflict_fingerprint(state, item)))]
-            if (actionable and conflict_repairs < 2
-                    and (context.max_turns is None or turn_count < context.max_turns)):
+            actionable = [
+                item
+                for item in state.conflicts.values()
+                if item.core
+                and item.plan_id == state.research_state.current_plan_id
+                and (
+                    item.status == "awaiting_review"
+                    or (
+                        item.status == "open"
+                        and item.last_attempt_fingerprint != store.conflict_fingerprint(state, item)
+                    )
+                )
+            ]
+            if (
+                actionable
+                and conflict_repairs < 2
+                and (context.max_turns is None or turn_count < context.max_turns)
+            ):
                 conflict_repairs += 1
-                messages.append(ConversationMessage(role="user", runtime_context="<research_conflict_check>\n"
-                    + json.dumps({"conflict_ids": [item.id for item in actionable],
-                                  "draft": final_message.text,
-                                  "required_action": "Investigate open core conflicts using investigate_conflict. "
-                                  "Read completed reports, review original evidence, and submit resolve_conflict. "
-                                  "Allow conditional or unresolved decisions. Do not present disputed claims as certain. "
-                                  "On timeout or failure retain uncertainty and continue independent work."}, ensure_ascii=False)
-                    + "\n</research_conflict_check>"))
+                messages.append(
+                    ConversationMessage.from_runtime_context(
+                        "<research_conflict_check>\n"
+                        + json.dumps(
+                            {
+                                "conflict_ids": [item.id for item in actionable],
+                                "draft": final_message.text,
+                                "required_action": "Investigate open core conflicts using investigate_conflict. "
+                                "Read completed reports, review original evidence, and submit resolve_conflict. "
+                                "Allow conditional or unresolved decisions. Do not present disputed claims as certain. "
+                                "On timeout or failure retain uncertainty and continue independent work.",
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n</research_conflict_check>",
+                    )
+                )
                 yield StatusEvent(message="正在核查影响核心结论的争议…", discard_draft=True), usage
                 continue
             invalid = store.invalid_citations(final_message.text)
@@ -542,9 +702,8 @@ async def run_query(
                     "Return the complete corrected answer using [E:ev_ID] markers; the backend builds the source list.",
                 }
                 messages.append(
-                    ConversationMessage(
-                        role="user",
-                        runtime_context="<research_answer_check>\n"
+                    ConversationMessage.from_runtime_context(
+                        "<research_answer_check>\n"
                         + json.dumps(note, ensure_ascii=False)
                         + "\n</research_answer_check>",
                     )
@@ -553,10 +712,12 @@ async def run_query(
                 continue
             state = store.load()
             plan = state.plans.get(state.research_state.current_plan_id or "")
-            ready_to_finalize = bool(plan) and all(
+            ready_to_finalize = plan is not None and all(
                 task.status in {"completed", "blocked", "cancelled"} for task in plan.tasks
             )
-            candidates = store.verification_candidates(final_message.text) if ready_to_finalize else []
+            candidates = (
+                store.verification_candidates(final_message.text) if ready_to_finalize else []
+            )
             if (
                 candidates
                 and verification_repairs < 3
@@ -582,15 +743,55 @@ async def run_query(
                     ),
                 }
                 messages.append(
-                    ConversationMessage(
-                        role="user",
-                        runtime_context="<research_verification_check>\n"
+                    ConversationMessage.from_runtime_context(
+                        "<research_verification_check>\n"
                         + json.dumps(note, ensure_ascii=False)
                         + "\n</research_verification_check>",
                     )
                 )
                 yield StatusEvent(message="正在核对引用原文与计算依据…", discard_draft=True), usage
                 continue
+
+        runtime = (context.tool_metadata or {}).get("research_runtime")
+        if runtime is not None and not final_message.tool_uses:
+            completion = await runtime.evaluate_stop()
+            memory = runtime.store.load()
+            if (
+                completion is not None
+                and completion.passed
+                and runtime.repository._project(memory).status == "running"
+            ):
+                await runtime.finalize(runtime.repository._project(memory).id)
+            elif completion is not None and not completion.passed:
+                if (
+                    completion_repairs < 2
+                    and runtime.repository._project(memory).status
+                    in {"planning", "replanning", "running"}
+                    and (context.max_turns is None or turn_count < context.max_turns)
+                ):
+                    completion_repairs += 1
+                    messages.append(
+                        ConversationMessage.from_runtime_context(
+                            "<research_completion_check>\n"
+                            + completion.model_dump_json()
+                            + "\nThe report is unfinished. Read research_project; plan, claim tasks, submit artifacts and validate. "
+                            "Final prose or successful tool calls cannot complete it.\n</research_completion_check>",
+                        )
+                    )
+                    yield (
+                        StatusEvent(
+                            message="研报尚未通过完成检查，正在补齐任务与产物…", discard_draft=True
+                        ),
+                        usage,
+                    )
+                    continue
+                if runtime.repository._project(memory).status not in {
+                    "suspended",
+                    "completed",
+                    "cancelled",
+                    "failed",
+                }:
+                    runtime.repository.suspend("Main agent stopped before completion checks passed")
 
         messages.append(final_message)
         yield AssistantTurnComplete(message=final_message, usage=usage), usage
@@ -638,7 +839,8 @@ async def run_query(
                 progress = (result.result_metadata or {}).get("research_progress")
                 yield (
                     ResearchProgressEvent(
-                        progress=progress or context.tool_metadata["research_store"].progress()
+                        progress=progress
+                        or (context.tool_metadata or {})["research_store"].progress()
                     ),
                     None,
                 )
@@ -651,7 +853,7 @@ async def run_query(
                     None,
                 )
 
-            async def _run(index, tc):
+            async def _run(index: int, tc: ToolUseBlock) -> tuple[int, ToolResultBlock]:
                 try:
                     result = await _execute_tool_call(context, tc.name, tc.id, tc.input)
                 except Exception as exc:
@@ -685,7 +887,8 @@ async def run_query(
                         progress = (result.result_metadata or {}).get("research_progress")
                         yield (
                             ResearchProgressEvent(
-                                progress=progress or context.tool_metadata["research_store"].progress()
+                                progress=progress
+                                or (context.tool_metadata or {})["research_store"].progress()
                             ),
                             None,
                         )
@@ -697,9 +900,12 @@ async def run_query(
                 await asyncio.gather(*pending_tools, return_exceptions=True)
             tool_results = [ordered_results[index] for index in range(len(tool_calls))]
 
-        messages.append(ConversationMessage(role="user", content=tool_results))
+        messages.append(ConversationMessage(role="user", content=[block for block in tool_results]))
 
     if context.max_turns is not None:
+        runtime = (context.tool_metadata or {}).get("research_runtime")
+        if runtime and runtime.store.load().project:
+            runtime.repository.suspend("Main agent turn budget exhausted")
         raise MaxTurnsExceeded(context.max_turns)
     raise RuntimeError("Query loop exited without a max_turns limit or final response")
 
@@ -713,17 +919,29 @@ async def _execute_tool_call(
     from openharness.engine.observer import observer_for
 
     with observer_for(context.tool_metadata).span(
-        tool_name, kind="tool", input=tool_input,
-        metadata={"tool_use_id": tool_use_id,
-                  "investigation": bool((context.tool_metadata or {}).get("conflict_investigator"))},
+        tool_name,
+        kind="tool",
+        input=tool_input,
+        metadata={
+            "tool_use_id": tool_use_id,
+            "investigation": bool((context.tool_metadata or {}).get("conflict_investigator")),
+        },
     ) as span:
         result = await _execute_tool_call_impl(context, tool_name, tool_use_id, tool_input)
         outcome = (result.result_metadata or {}).get("outcome")
-        span.update(output=result.content, status="denied" if outcome in {"denied", "evaluation_boundary"}
-                    else "error" if result.is_error else "ok",
-                    metadata={"tool_use_id": tool_use_id,
-                              "investigation": bool((context.tool_metadata or {}).get("conflict_investigator")),
-                              **(result.result_metadata or {})})
+        span.update(
+            output=result.content,
+            status="denied"
+            if outcome in {"denied", "evaluation_boundary"}
+            else "error"
+            if result.is_error
+            else "ok",
+            metadata={
+                "tool_use_id": tool_use_id,
+                "investigation": bool((context.tool_metadata or {}).get("conflict_investigator")),
+                **(result.result_metadata or {}),
+            },
+        )
         return result
 
 
@@ -733,219 +951,9 @@ async def _execute_tool_call_impl(
     tool_use_id: str,
     tool_input: dict[str, object],
 ) -> ToolResultBlock:
-    store = (context.tool_metadata or {}).get("research_store")
-    if (
-        store is not None
-        and store.load().research_state.replan_required
-        and tool_name not in {"research_memory", "ask_user_question", "skill", "investigate_conflict"}
-    ):
-        return ToolResultBlock(
-            tool_use_id=tool_use_id,
-            content="Research requires a new plan. Use research_memory to update context and create_plan before executing more tools.",
-            is_error=True,
-        )
-    if store is not None and tool_name not in {"research_memory", "ask_user_question", "skill", "investigate_conflict"}:
-        memory = store.load()
-        plan = memory.plans.get(memory.research_state.current_plan_id)
-        if plan and not memory.research_state.current_task_id:
-            return ToolResultBlock(
-                tool_use_id=tool_use_id,
-                is_error=True,
-                content="Start the current research task before collecting or calculating: use research_memory.update_task "
-                "with the actual task ID and status in_progress, then execute its work and update its result. "
-                "Do not collect the whole plan while leaving every task pending.",
-            )
-    if context.hook_executor is not None:
-        pre_hooks = await context.hook_executor.execute(
-            HookEvent.PRE_TOOL_USE,
-            {
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "event": HookEvent.PRE_TOOL_USE.value,
-            },
-        )
-        if pre_hooks.blocked:
-            return ToolResultBlock(
-                tool_use_id=tool_use_id,
-                content=pre_hooks.reason or f"pre_tool_use hook blocked {tool_name}",
-                is_error=True,
-            )
+    from openharness.services.tool_execution import ToolExecutionService
 
-    log.debug("tool_call start: %s id=%s", tool_name, tool_use_id)
-
-    tool = context.tool_registry.get(tool_name)
-    if tool is None:
-        log.warning("unknown tool: %s", tool_name)
-        return ToolResultBlock(
-            tool_use_id=tool_use_id,
-            content=f"Unknown tool: {tool_name}",
-            is_error=True,
-        )
-
-    try:
-        parsed_input = tool.input_model.model_validate(tool_input)
-    except Exception as exc:
-        log.warning("invalid input for %s: %s", tool_name, exc)
-        return ToolResultBlock(
-            tool_use_id=tool_use_id,
-            content=tool.validation_error_message(exc),
-            is_error=True,
-        )
-
-    # Normalize common tool inputs before permission checks so path rules apply
-    # consistently across built-in tools that use `file_path`, `path`, or
-    # directory-scoped roots such as `glob`/`grep`.
-    _file_path = _resolve_permission_file_path(context.cwd, tool_input, parsed_input)
-    _command = _extract_permission_command(tool_input, parsed_input)
-    log.debug(
-        "permission check: %s read_only=%s path=%s cmd=%s",
-        tool_name,
-        tool.is_read_only(parsed_input),
-        _file_path,
-        _command and _command[:80],
-    )
-    decision = context.permission_checker.evaluate(
-        tool_name,
-        is_read_only=tool.is_read_only(parsed_input),
-        file_path=_file_path,
-        command=_command,
-    )
-    if not decision.allowed:
-        if decision.requires_confirmation and context.permission_prompt is not None:
-            log.debug("permission prompt for %s: %s", tool_name, decision.reason)
-            if context.hook_executor is not None:
-                await context.hook_executor.execute(
-                    HookEvent.NOTIFICATION,
-                    {
-                        "event": HookEvent.NOTIFICATION.value,
-                        "notification_type": "permission_prompt",
-                        "tool_name": tool_name,
-                        "reason": decision.reason,
-                    },
-                )
-            confirmed = await context.permission_prompt(tool_name, decision.reason)
-            if not confirmed:
-                log.debug("permission denied by user for %s", tool_name)
-                return ToolResultBlock(
-                    tool_use_id=tool_use_id,
-                    content=decision.reason or f"Permission denied for {tool_name}",
-                    is_error=True,
-                    result_metadata={"outcome": "denied"},
-                )
-        else:
-            log.debug("permission blocked for %s: %s", tool_name, decision.reason)
-            return ToolResultBlock(
-                tool_use_id=tool_use_id,
-                content=decision.reason or f"Permission denied for {tool_name}",
-                is_error=True,
-                result_metadata={"outcome": "denied"},
-            )
-
-    log.debug("executing %s ...", tool_name)
-    t0 = time.monotonic()
-    result = await tool.execute(
-        parsed_input,
-        ToolExecutionContext(
-            cwd=context.cwd,
-            metadata={
-                "tool_registry": context.tool_registry,
-                "ask_user_prompt": context.ask_user_prompt,
-                **(context.tool_metadata or {}),
-                "query_context": context,
-            },
-            hook_executor=context.hook_executor,
-        ),
-    )
-    elapsed = time.monotonic() - t0
-    if store is not None and tool_name not in {"research_memory", "investigate_conflict"}:
-        source_specs = result.metadata.get("research_source_specs")
-        if source_specs is None:
-            source_specs = [{
-                "content": result.output,
-                "kind": "calculation"
-                if tool_name == "bash"
-                else "user"
-                if tool_name == "ask_user_question"
-                else "tool",
-                "title": tool_name,
-                "locator": f"tool:{tool_name}:{tool_use_id}",
-                "fragment": True,
-            }]
-        sources = []
-        for index, spec in enumerate(source_specs):
-            sources.append(
-                store.capture(
-                    origin_id=tool_use_id,
-                    index=index,
-                    content=spec["content"],
-                    kind=spec.get("kind", "tool"),
-                    title=spec.get("title", tool_name),
-                    locator=spec.get("locator", f"tool:{tool_name}:{tool_use_id}"),
-                    fragment=spec.get("fragment", False),
-                    published_at=spec.get("published_at"),
-                    is_error=result.is_error,
-                ).id
-            )
-        from dataclasses import replace
-
-        result = replace(
-            result,
-            metadata={
-                **{
-                    key: value
-                    for key, value in result.metadata.items()
-                    if key != "research_source_specs"
-                },
-                "research_sources": sources,
-            },
-        )
-    log.debug(
-        "executed %s in %.2fs err=%s output_len=%d",
-        tool_name,
-        elapsed,
-        result.is_error,
-        len(result.output or ""),
-    )
-    inline_output, artifact_path = _offload_tool_output_if_needed(
-        tool_name=tool_name,
-        tool_use_id=tool_use_id,
-        output=result.output,
-    )
-    tool_result = ToolResultBlock(
-        tool_use_id=tool_use_id,
-        content=inline_output,
-        is_error=result.is_error,
-        result_metadata={
-            key: value
-            for key, value in (result.metadata or {}).items()
-            if key != "research_source_specs"
-        },
-    )
-    if artifact_path is not None:
-        tool_result.result_metadata["tool_output_artifact"] = str(artifact_path)
-    if store is not None and result.metadata.get("research_sources"):
-        tool_result.content += "\n\nresearch_sources: " + json.dumps(
-            result.metadata["research_sources"]
-        )
-        tool_result.content += f"\nresearch_revision: {store.load().revision}"
-    if tool_name == "skill" and not tool_result.is_error:
-        skill_name = str(tool_input.get("name", "")).strip()
-        if skill_name and context.tool_metadata is not None:
-            skills = context.tool_metadata.setdefault("invoked_skills", [])
-            if skill_name not in skills:
-                skills.append(skill_name)
-    if context.hook_executor is not None:
-        await context.hook_executor.execute(
-            HookEvent.POST_TOOL_USE,
-            {
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "tool_output": tool_result.content,
-                "tool_is_error": tool_result.is_error,
-                "event": HookEvent.POST_TOOL_USE.value,
-            },
-        )
-    return tool_result
+    return await ToolExecutionService().execute(context, tool_name, tool_use_id, tool_input)
 
 
 def _resolve_permission_file_path(
@@ -953,7 +961,7 @@ def _resolve_permission_file_path(
     raw_input: dict[str, object],
     parsed_input: object,
 ) -> str | None:
-    for key in ("file_path", "path", "root"):
+    for key in ("file_path", "path", "root", "image_path"):
         value = raw_input.get(key)
         if isinstance(value, str) and value.strip():
             path = Path(value).expanduser()
@@ -961,7 +969,7 @@ def _resolve_permission_file_path(
                 path = cwd / path
             return str(path.resolve())
 
-    for attr in ("file_path", "path", "root"):
+    for attr in ("file_path", "path", "root", "image_path"):
         value = getattr(parsed_input, attr, None)
         if isinstance(value, str) and value.strip():
             path = Path(value).expanduser()

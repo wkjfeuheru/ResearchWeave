@@ -4,15 +4,20 @@ Production compaction never uses the legacy destructive truncation helpers.
 """
 
 from __future__ import annotations
+from openharness.config.context_components import ContextComponentsSettings
+from openharness.api.client import SupportsStreamingMessages
+from openharness.engine.metadata import ExecutionMetadata
+from openharness.services.context_budget import RequestBudget
+from openharness.services.context_sources import ContextSnapshot, refresh_runtime_messages
 
 import asyncio
 import inspect
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal
+from typing import Mapping, Any, Awaitable, Callable, Literal
 from uuid import uuid4
 
 from openharness.engine.messages import (
@@ -30,7 +35,11 @@ from openharness.research.prompt import RESEARCH_COMPACT_PROMPT as BASE_COMPACT_
 from openharness.services.tool_outputs import is_microcompactable_tool_result
 from openharness.services.token_estimation import estimate_tokens
 from openharness.services.context_budget import (
-    ContextBudgetError, budget_limits, get_context_window as get_context_window, prepare_request, request_budget,
+    ContextBudgetError,
+    budget_limits,
+    get_context_window as get_context_window,
+    prepare_request,
+    request_budget,
 )
 from openharness.services.context_snapshots import save_context_snapshot, save_tool_content
 
@@ -186,7 +195,7 @@ def _sanitize_metadata(value: Any) -> Any:
 
 
 def _record_compact_checkpoint(
-    carryover_metadata: dict[str, Any] | None,
+    carryover_metadata: ExecutionMetadata | None,
     *,
     checkpoint: str,
     trigger: CompactTrigger,
@@ -229,7 +238,7 @@ async def _emit_progress(
     message: str | None = None,
     attempt: int | None = None,
     checkpoint: str | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> None:
     if callback is None:
         return
@@ -356,7 +365,10 @@ def truncate_head_for_ptl_retry(
     if not retained:
         return None
     if retained[0].role == "assistant":
-        return [ConversationMessage.from_user_text(PTL_RETRY_MARKER), *retained]
+        return [
+            ConversationMessage.from_user_text(PTL_RETRY_MARKER, context_origin="continuation"),
+            *retained,
+        ]
     return retained
 
 
@@ -402,7 +414,7 @@ def _extract_discovered_tools(messages: list[ConversationMessage]) -> list[str]:
 
 
 def _create_attachment(
-    kind: str, title: str, lines: list[str], *, metadata: dict[str, Any] | None = None
+    kind: str, title: str, lines: list[str], *, metadata: Mapping[str, object] | None = None
 ) -> CompactAttachment | None:
     filtered = [line.rstrip() for line in lines if line and line.strip()]
     if not filtered:
@@ -419,7 +431,9 @@ def render_compact_attachment(attachment: CompactAttachment) -> ConversationMess
     """Serialize a structured compact attachment into a conversation message."""
     header = f"[Compact attachment: {attachment.kind}] {attachment.title}".strip()
     text = f"{header}\n{attachment.body}".strip()
-    return ConversationMessage.from_user_text(text)
+    return ConversationMessage.from_user_text(
+        text, context_origin="compaction", context_component="dynamic_context"
+    )
 
 
 def create_compact_boundary_message(metadata: dict[str, Any]) -> ConversationMessage:
@@ -455,7 +469,9 @@ def create_compact_boundary_message(metadata: dict[str, Any]) -> ConversationMes
     anchor = str(metadata.get("preserved_segment_anchor") or "").strip()
     if anchor:
         lines.append(f"Preserved segment anchor: {anchor}")
-    return ConversationMessage.from_user_text("\n".join(lines))
+    return ConversationMessage.from_user_text(
+        "\n".join(lines), context_origin="compaction", context_component="dynamic_context"
+    )
 
 
 def build_post_compact_messages(result: CompactionResult) -> list[ConversationMessage]:
@@ -577,7 +593,7 @@ def _create_hook_attachments(hook_note: str | None) -> list[CompactAttachment]:
 def _build_compact_attachments(
     messages: list[ConversationMessage],
     *,
-    metadata: dict[str, Any] | None,
+    metadata: ExecutionMetadata | None,
     model: str = "",
 ) -> list[CompactAttachment]:
     metadata = metadata or {}
@@ -588,7 +604,9 @@ def _build_compact_attachments(
             CompactAttachment(
                 kind="research_memory",
                 title="Current research checkpoint",
-                body=store.prompt(int(metadata.get("research_injection_budget", 6000)), model=model),
+                body=store.prompt(
+                    int(metadata.get("research_injection_budget", 6000)), model=model
+                ),
             )
         )
     skills = create_invoked_skills_attachment_if_needed(metadata.get("invoked_skills"))
@@ -611,7 +629,7 @@ def _finalize_compaction_result(result: CompactionResult) -> CompactionResult:
     return result
 
 
-def _metadata_has_checkpoint(metadata: dict[str, Any] | None, checkpoint: str) -> bool:
+def _metadata_has_checkpoint(metadata: ExecutionMetadata | None, checkpoint: str) -> bool:
     if metadata is None:
         return False
     checkpoints = metadata.get("compact_checkpoints")
@@ -627,7 +645,7 @@ def _build_passthrough_compaction_result(
     *,
     trigger: CompactTrigger,
     compact_kind: CompactionKind,
-    metadata: dict[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> CompactionResult:
     compact_metadata = {
         "trigger": trigger,
@@ -679,31 +697,49 @@ def _collect_compactable_tool_ids(messages: list[ConversationMessage]) -> list[s
 
 
 def microcompact_messages(
-    messages: list[ConversationMessage], *, keep_recent: int = DEFAULT_KEEP_RECENT,
+    messages: list[ConversationMessage],
+    *,
+    keep_recent: int = DEFAULT_KEEP_RECENT,
     snapshot_path: str | None = None,
 ) -> tuple[list[ConversationMessage], int]:
     """Replace archived results on a copy; always retain recoverable references."""
     result = [m.model_copy(deep=True) for m in messages]
     ids = _collect_compactable_tool_ids(result)
-    clear = set(ids[:-max(1, keep_recent)])
+    clear = set(ids[: -max(1, keep_recent)])
     protected = _latest_user_index(result)
-    eligible = [(i, j, b) for i, m in enumerate(result) if i < protected and m.role == "user"
-                for j, b in enumerate(m.content) if isinstance(b, ToolResultBlock)
-                and b.tool_use_id in clear and not b.result_metadata.get("context_artifact")]
+    eligible = [
+        (i, j, b)
+        for i, m in enumerate(result)
+        if i < protected and m.role == "user"
+        for j, b in enumerate(m.content)
+        if isinstance(b, ToolResultBlock)
+        and b.tool_use_id in clear
+        and not b.result_metadata.get("context_artifact")
+    ]
     if not eligible:
         return result, 0
     snapshot_path = snapshot_path or str(save_context_snapshot(messages))
     for i, j, block in eligible:
         artifact = save_tool_content(block.content)
         sources = block.result_metadata.get("research_sources", [])
-        reference = (f"[Archived tool result] tool_use_id={block.tool_use_id}; is_error={block.is_error}\n"
-                     f"Full output: {artifact}\nresearch_sources: {sources}\nSnapshot: {snapshot_path}")
+        reference = (
+            f"[Archived tool result] tool_use_id={block.tool_use_id}; is_error={block.is_error}\n"
+            f"Full output: {artifact}\nresearch_sources: {sources}\nSnapshot: {snapshot_path}"
+        )
         if block.result_metadata.get("tool_output_artifact"):
             reference += f"\nOriginal tool output: {block.result_metadata['tool_output_artifact']}"
         if estimate_tokens(reference) >= estimate_tokens(block.content):
             continue
-        result[i].content[j] = block.model_copy(update={"content": reference, "result_metadata": {
-            **block.result_metadata, "context_artifact": str(artifact), "context_snapshot": snapshot_path}})
+        result[i].content[j] = block.model_copy(
+            update={
+                "content": reference,
+                "result_metadata": {
+                    **block.result_metadata,
+                    "context_artifact": str(artifact),
+                    "context_snapshot": snapshot_path,
+                },
+            }
+        )
     return result, max(0, estimate_message_tokens(messages) - estimate_message_tokens(result))
 
 
@@ -794,8 +830,11 @@ class AutoCompactState:
 
 
 def get_autocompact_threshold(
-    model: str, *, context_window_tokens: int | None = None,
-    auto_compact_threshold_tokens: int | None = None, max_tokens: int = 4096,
+    model: str,
+    *,
+    context_window_tokens: int | None = None,
+    auto_compact_threshold_tokens: int | None = None,
+    max_tokens: int = 4096,
 ) -> int:
     return budget_limits(model, max_tokens, context_window_tokens, auto_compact_threshold_tokens)[3]
 
@@ -840,47 +879,113 @@ async def compact_conversation(
     progress_callback: CompactProgressCallback | None = None,
     emit_hooks_start: bool = True,
     hook_executor: HookExecutor | None = None,
-    carryover_metadata: dict[str, Any] | None = None,
+    carryover_metadata: ExecutionMetadata | None = None,
     context_window_tokens: int | None = None,
     max_tokens: int = 4096,
     tools: list[dict[str, Any]] | None = None,
     auto_compact_threshold_tokens: int | None = None,
     snapshot_path: str | None = None,
     runtime_context_provider: Callable[[], str | None] | None = None,
+    runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None,
+    context_components: ContextComponentsSettings | None = None,
+    target_input_tokens: int | None = None,
 ) -> CompactionResult:
     """Build and validate a candidate without modifying the original history."""
     from openharness.api.client import ApiMessageRequest, ApiMessageCompleteEvent
 
     original = [m.model_copy(deep=True) for m in messages]
-    before = _conversation_budget(original, api_client=api_client, model=model,
-        system_prompt=system_prompt, max_tokens=max_tokens, tools=tools,
-        context_window_tokens=context_window_tokens, threshold=auto_compact_threshold_tokens)
+    before = _conversation_budget(
+        original,
+        api_client=api_client,
+        model=model,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        tools=tools,
+        context_window_tokens=context_window_tokens,
+        threshold=auto_compact_threshold_tokens,
+    )
+    if target_input_tokens is not None:
+        before = replace(before, target_tokens=min(before.input_limit, target_input_tokens))
     older, newer = _protected_split(original, preserve_recent)
     if not older:
-        return _build_passthrough_compaction_result(original, trigger=trigger,
-            compact_kind="full", metadata={"reason": "no completed history available"})
-    snapshot_path = snapshot_path or str(save_context_snapshot(original, model=model, metadata=carryover_metadata))
-    metadata = {"trigger": trigger, "compact_kind": "full", "snapshot_path": snapshot_path,
-                "pre_compact_message_count": len(original), "pre_compact_token_count": before.input_tokens}
+        return _build_passthrough_compaction_result(
+            original,
+            trigger=trigger,
+            compact_kind="full",
+            metadata={"reason": "no completed history available"},
+        )
+    snapshot_path = snapshot_path or str(
+        save_context_snapshot(original, model=model, metadata=carryover_metadata)
+    )
+    metadata = {
+        "trigger": trigger,
+        "compact_kind": "full",
+        "snapshot_path": snapshot_path,
+        "pre_compact_message_count": len(original),
+        "pre_compact_token_count": before.input_tokens,
+    }
     if emit_hooks_start:
-        await _emit_progress(progress_callback, phase="hooks_start", trigger=trigger,
-                             message="Preparing conversation compaction.")
+        await _emit_progress(
+            progress_callback,
+            phase="hooks_start",
+            trigger=trigger,
+            message="Preparing conversation compaction.",
+        )
     if hook_executor is not None:
-        hook = await hook_executor.execute(HookEvent.PRE_COMPACT, {
-            **(carryover_metadata or {}), "event": HookEvent.PRE_COMPACT.value,
-            "trigger": trigger, "model": model, "message_count": len(original),
-            "token_count": before.input_tokens, "snapshot_path": snapshot_path})
+        hook = await hook_executor.execute(
+            HookEvent.PRE_COMPACT,
+            {
+                **(carryover_metadata or {}),
+                "event": HookEvent.PRE_COMPACT.value,
+                "trigger": trigger,
+                "model": model,
+                "message_count": len(original),
+                "token_count": before.input_tokens,
+                "snapshot_path": snapshot_path,
+            },
+        )
         if hook.blocked:
-            return _build_passthrough_compaction_result(original, trigger=trigger,
-                compact_kind="full", metadata={"reason": hook.reason or "pre-compact hook blocked", "status": "failed"})
-    await _emit_progress(progress_callback, phase="compact_start", trigger=trigger,
-        message="Compacting conversation memory.", checkpoint="compact_start")
+            return _build_passthrough_compaction_result(
+                original,
+                trigger=trigger,
+                compact_kind="full",
+                metadata={"reason": hook.reason or "pre-compact hook blocked", "status": "failed"},
+            )
+    await _emit_progress(
+        progress_callback,
+        phase="compact_start",
+        trigger=trigger,
+        message="Compacting conversation memory.",
+        checkpoint="compact_start",
+    )
     _validate_tool_pairs(older)
-    summary_request = prepare_request(api_client, ApiMessageRequest(
-        model=model, messages=_replace_images_with_compaction_placeholders(older) + [
-            ConversationMessage.from_user_text(get_compact_prompt(custom_instructions))],
-        system_prompt=system_prompt or "You are a conversation summarizer.",
-        max_tokens=min(4096, before.window // 10), context_window_tokens=before.window))
+    from openharness.config.context_components import ContextComponentsSettings
+
+    # The summarizer must see the complete archived history to reduce H. It is
+    # an internal transformation, so retain its existing global-only safety
+    # check; applying the main H cap here would prevent recovery from H overflow.
+    summary_policy = (context_components or ContextComponentsSettings()).model_copy(
+        update={"enabled": False}
+    )
+    summary_request = prepare_request(
+        api_client,
+        ApiMessageRequest(
+            model=model,
+            messages=_replace_images_with_compaction_placeholders(older)
+            + [
+                ConversationMessage.from_user_text(
+                    get_compact_prompt(custom_instructions),
+                    context_origin="continuation",
+                    context_component="system_prompt",
+                )
+            ],
+            system_prompt=system_prompt or "You are a conversation summarizer.",
+            max_tokens=min(4096, before.window // 10),
+            context_window_tokens=before.window,
+            current_user_message_id="",
+            context_components=summary_policy,
+        ),
+    )
     # Never discard older rounds to make a summarizer request fit.
     request_budget(summary_request).require_fit()
 
@@ -890,10 +995,13 @@ async def compact_conversation(
             stream = await stream
         async for event in stream:
             if isinstance(event, ApiMessageCompleteEvent):
-                if (event.stop_reason in {"length", "max_tokens", "incomplete", "error", "cancelled", "tool_use"}
-                        or event.message.tool_uses
-                        or event.usage.output_tokens >= summary_request.max_tokens
-                        or estimate_tokens(event.message.text, model) > summary_request.max_tokens):
+                if (
+                    event.stop_reason
+                    in {"length", "max_tokens", "incomplete", "error", "cancelled", "tool_use"}
+                    or event.message.tool_uses
+                    or event.usage.output_tokens >= summary_request.max_tokens
+                    or estimate_tokens(event.message.text, model) > summary_request.max_tokens
+                ):
                     raise ContextBudgetError("摘要未完整生成；原始内容已保留")
                 match = re.search(r"<summary>([\s\S]*?)</summary>", event.message.text)
                 if match and match.group(1).strip():
@@ -905,79 +1013,160 @@ async def compact_conversation(
             summary = await asyncio.wait_for(collect(), COMPACT_TIMEOUT_SECONDS)
             break
         except Exception as exc:
-            if isinstance(exc, ContextBudgetError) or _is_prompt_too_long_error(exc) or attempt == MAX_COMPACT_STREAMING_RETRIES:
+            if (
+                isinstance(exc, ContextBudgetError)
+                or _is_prompt_too_long_error(exc)
+                or attempt == MAX_COMPACT_STREAMING_RETRIES
+            ):
                 raise
-            await _emit_progress(progress_callback, phase="compact_retry", trigger=trigger,
-                                 attempt=attempt + 1, message=str(exc))
+            await _emit_progress(
+                progress_callback,
+                phase="compact_retry",
+                trigger=trigger,
+                attempt=attempt + 1,
+                message=str(exc),
+            )
     _validate_summary_ids(summary, original, carryover_metadata)
     hook_attachments = []
     if hook_executor is not None:
-        hook = await hook_executor.execute(HookEvent.POST_COMPACT, {
-            **(carryover_metadata or {}), "event": HookEvent.POST_COMPACT.value,
-            "trigger": trigger, "model": model, "snapshot_path": snapshot_path,
-            "pre_compact_tokens": before.input_tokens})
+        hook = await hook_executor.execute(
+            HookEvent.POST_COMPACT,
+            {
+                **(carryover_metadata or {}),
+                "event": HookEvent.POST_COMPACT.value,
+                "trigger": trigger,
+                "model": model,
+                "snapshot_path": snapshot_path,
+                "pre_compact_tokens": before.input_tokens,
+            },
+        )
         if hook.blocked:
             raise ContextBudgetError(hook.reason or "post-compact hook blocked")
-        hook_attachments = _create_hook_attachments(hook.reason or "\n".join(
-            r.output.strip() for r in hook.results if r.output.strip()))
-    result = CompactionResult(trigger=trigger, compact_kind="full",
+        hook_attachments = _create_hook_attachments(
+            hook.reason or "\n".join(r.output.strip() for r in hook.results if r.output.strip())
+        )
+    result = CompactionResult(
+        trigger=trigger,
+        compact_kind="full",
         boundary_marker=create_compact_boundary_message(metadata),
-        summary_messages=[ConversationMessage.from_user_text(build_compact_summary_message(
-            summary, suppress_follow_up=suppress_follow_up, recent_preserved=bool(newer)))],
-        messages_to_keep=newer, attachments=_build_compact_attachments(older, metadata=carryover_metadata, model=model),
-        hook_results=hook_attachments, compact_metadata=metadata)
+        summary_messages=[
+            ConversationMessage.from_user_text(
+                build_compact_summary_message(
+                    summary, suppress_follow_up=suppress_follow_up, recent_preserved=bool(newer)
+                ),
+                context_origin="compaction",
+            )
+        ],
+        messages_to_keep=newer,
+        attachments=_build_compact_attachments(older, metadata=carryover_metadata, model=model),
+        hook_results=hook_attachments,
+        compact_metadata=metadata,
+    )
     candidate = build_post_compact_messages(result)
-    _refresh_runtime(candidate, runtime_context_provider)
+    _refresh_runtime(candidate, runtime_context_provider, runtime_snapshot_provider)
     # Keep any refreshed runtime item in the exact candidate we validate and return.
-    result.runtime_messages = candidate[len(build_post_compact_messages(result)): ]
+    result.runtime_messages = candidate[len(build_post_compact_messages(result)) :]
     candidate = build_post_compact_messages(result)
     _validate_tool_pairs(candidate)
-    after = _conversation_budget(candidate, api_client=api_client, model=model,
-        system_prompt=system_prompt, max_tokens=max_tokens, tools=tools,
-        context_window_tokens=before.window, threshold=auto_compact_threshold_tokens)
+    after = _conversation_budget(
+        candidate,
+        api_client=api_client,
+        model=model,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        tools=tools,
+        context_window_tokens=before.window,
+        threshold=auto_compact_threshold_tokens,
+    )
     if after.input_tokens > before.target_tokens or after.input_tokens >= before.input_tokens:
         raise ContextBudgetError("压缩候选未达到目标预算；原始内容已保留")
-    result.compact_metadata.update(post_compact_message_count=len(candidate),
-                                   post_compact_token_count=after.input_tokens)
+    result.compact_metadata.update(
+        post_compact_message_count=len(candidate), post_compact_token_count=after.input_tokens
+    )
     # Metadata is diagnostic only: do not change the already-validated boundary text.
-    await _emit_progress(progress_callback, phase="compact_end", trigger=trigger,
-        message="Conversation compaction complete.", checkpoint="compact_end",
-        metadata=_record_compact_checkpoint(carryover_metadata, checkpoint="compact_end",
-            trigger=trigger, message_count=len(candidate), token_count=after.input_tokens,
-            details={"snapshot_path": snapshot_path, "tokens_saved": before.input_tokens - after.input_tokens}))
+    await _emit_progress(
+        progress_callback,
+        phase="compact_end",
+        trigger=trigger,
+        message="Conversation compaction complete.",
+        checkpoint="compact_end",
+        metadata=_record_compact_checkpoint(
+            carryover_metadata,
+            checkpoint="compact_end",
+            trigger=trigger,
+            message_count=len(candidate),
+            token_count=after.input_tokens,
+            details={
+                "snapshot_path": snapshot_path,
+                "tokens_saved": before.input_tokens - after.input_tokens,
+            },
+        ),
+    )
     return result
 
 
-def _conversation_budget(messages, *, api_client, model, system_prompt="", max_tokens=4096,
-                         tools=None, context_window_tokens=None, threshold=None):
+def _conversation_budget(
+    messages: list[ConversationMessage],
+    *,
+    api_client: SupportsStreamingMessages,
+    model: str,
+    system_prompt: str = "",
+    max_tokens: int = 4096,
+    tools: list[dict[str, Any]] | None = None,
+    context_window_tokens: int | None = None,
+    threshold: int | None = None,
+    context_components: ContextComponentsSettings | None = None,
+    current_user_message_id: str | None = None,
+) -> RequestBudget:
     from openharness.api.client import ApiMessageRequest
-    request = prepare_request(api_client, ApiMessageRequest(model=model, messages=messages,
-        system_prompt=system_prompt, max_tokens=max_tokens, tools=tools or [],
-        context_window_tokens=context_window_tokens))
+
+    request = prepare_request(
+        api_client,
+        ApiMessageRequest(
+            model=model,
+            messages=messages,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            tools=tools or [],
+            context_window_tokens=context_window_tokens,
+            context_components=context_components,
+            current_user_message_id=current_user_message_id,
+        ),
+    )
     return request_budget(request, threshold=threshold)
 
 
-def _latest_user_index(messages):
-    return next((i for i in range(len(messages) - 1, -1, -1)
-                 if messages[i].role == "user" and any(isinstance(b, (TextBlock, ImageBlock))
-                    for b in messages[i].content)
-                 and not any(isinstance(b, ToolResultBlock) for b in messages[i].content)), len(messages))
+def _latest_user_index(messages: list[ConversationMessage]) -> int:
+    from openharness.services.context_sources import latest_user_index
+
+    index, _ = latest_user_index(messages)
+    return index if index is not None else len(messages)
 
 
-def _protected_split(messages, preserve_recent):
+def _protected_split(
+    messages: list[ConversationMessage], preserve_recent: int
+) -> tuple[list[ConversationMessage], list[ConversationMessage]]:
     index = min(max(0, len(messages) - max(1, preserve_recent)), _latest_user_index(messages))
-    uses = {b.id: i for i, m in enumerate(messages) for b in m.content if isinstance(b, ToolUseBlock)}
+    uses = {
+        b.id: i for i, m in enumerate(messages) for b in m.content if isinstance(b, ToolUseBlock)
+    }
     while True:
-        crossings = [uses[b.tool_use_id] for i, m in enumerate(messages) if i >= index
-                     for b in m.content if isinstance(b, ToolResultBlock)
-                     and b.tool_use_id in uses and uses[b.tool_use_id] < index]
+        crossings = [
+            uses[b.tool_use_id]
+            for i, m in enumerate(messages)
+            if i >= index
+            for b in m.content
+            if isinstance(b, ToolResultBlock)
+            and b.tool_use_id in uses
+            and uses[b.tool_use_id] < index
+        ]
         if not crossings:
             break
         index = min(crossings)
     return messages[:index], messages[index:]
 
 
-def _validate_tool_pairs(messages):
+def _validate_tool_pairs(messages: list[ConversationMessage]) -> None:
     pending = set()
     for message in messages:
         for block in message.content:
@@ -990,10 +1179,14 @@ def _validate_tool_pairs(messages):
                     raise ContextBudgetError("Unpaired tool result in compact candidate")
                 pending.remove(block.tool_use_id)
     if pending:
-        raise ContextBudgetError("Unfinished tool calls must be preserved, not discarded during compaction")
+        raise ContextBudgetError(
+            "Unfinished tool calls must be preserved, not discarded during compaction"
+        )
 
 
-def _validate_summary_ids(summary, messages, metadata):
+def _validate_summary_ids(
+    summary: str, messages: list[ConversationMessage], metadata: ExecutionMetadata | None
+) -> None:
     pattern = r"\bev_[A-Za-z0-9_]+\b"
     store = (metadata or {}).get("research_store")
     if store is not None:
@@ -1006,63 +1199,159 @@ def _validate_summary_ids(summary, messages, metadata):
         raise ContextBudgetError("摘要包含无效证据 ID；原始内容已保留")
 
 
-def _refresh_runtime(messages, provider):
+def _refresh_runtime(
+    messages: list[ConversationMessage],
+    provider: Callable[[], str | None] | None,
+    snapshot_provider: Callable[[], ContextSnapshot] | None = None,
+) -> None:
+    if snapshot_provider is not None:
+        messages[:] = refresh_runtime_messages(messages, snapshot_provider())
+        return
     if provider is not None:
         current = provider()
         previous = next((m.runtime_context for m in reversed(messages) if m.runtime_context), None)
         if current and current != previous:
-            messages.append(ConversationMessage(role="user", runtime_context=current))
+            messages.append(
+                ConversationMessage(role="user", context_origin="runtime", runtime_context=current)
+            )
 
 
 async def auto_compact_if_needed(
-    messages: list[ConversationMessage], *, api_client: Any, model: str,
-    system_prompt: str = "", state: AutoCompactState, preserve_recent: int = 6,
-    progress_callback: CompactProgressCallback | None = None, force: bool = False,
-    trigger: CompactTrigger = "auto", hook_executor: HookExecutor | None = None,
-    carryover_metadata: dict[str, Any] | None = None, context_window_tokens: int | None = None,
-    auto_compact_threshold_tokens: int | None = None, max_tokens: int = 4096,
+    messages: list[ConversationMessage],
+    *,
+    api_client: Any,
+    model: str,
+    system_prompt: str = "",
+    state: AutoCompactState,
+    preserve_recent: int = 6,
+    progress_callback: CompactProgressCallback | None = None,
+    force: bool = False,
+    trigger: CompactTrigger = "auto",
+    hook_executor: HookExecutor | None = None,
+    carryover_metadata: ExecutionMetadata | None = None,
+    context_window_tokens: int | None = None,
+    auto_compact_threshold_tokens: int | None = None,
+    max_tokens: int = 4096,
     tools: list[dict[str, Any]] | None = None,
     runtime_context_provider: Callable[[], str | None] | None = None,
+    history_target_tokens: int | None = None,
+    runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None,
+    context_components: ContextComponentsSettings | None = None,
+    current_user_message_id: str | None = None,
 ) -> tuple[list[ConversationMessage], bool]:
-    kwargs = dict(api_client=api_client, model=model, system_prompt=system_prompt,
-                  max_tokens=max_tokens, tools=tools, context_window_tokens=context_window_tokens,
-                  threshold=auto_compact_threshold_tokens)
+    kwargs = dict(
+        api_client=api_client,
+        model=model,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        tools=tools,
+        context_window_tokens=context_window_tokens,
+        threshold=auto_compact_threshold_tokens,
+        context_components=context_components,
+        current_user_message_id=current_user_message_id,
+    )
     before = _conversation_budget(messages, **kwargs)
+    history_over = (
+        history_target_tokens is not None
+        and before.component_tokens["conversation_history"] > history_target_tokens
+    )
+    if (
+        history_over
+        and history_target_tokens is not None
+        and before.input_tokens < before.trigger_tokens
+    ):
+        # Existing compaction still accepts only a smaller, globally safe candidate.
+        # H is an extra trigger; do not use force=True to bypass failure backoff.
+        before = replace(
+            before,
+            target_tokens=min(
+                before.input_limit,
+                before.input_tokens
+                - before.component_tokens["conversation_history"]
+                + history_target_tokens,
+            ),
+        )
     state.last_status = "unchanged"
-    if not force and (state.consecutive_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
-                      or before.input_tokens < before.trigger_tokens):
+    if not force and (
+        state.consecutive_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
+        or before.input_tokens < before.trigger_tokens
+        and not history_over
+    ):
         return messages, False
-    _record_compact_checkpoint(carryover_metadata, checkpoint=f"query_{trigger}_triggered",
-        trigger=trigger, message_count=len(messages), token_count=before.input_tokens)
+    _record_compact_checkpoint(
+        carryover_metadata,
+        checkpoint=f"query_{trigger}_triggered",
+        trigger=trigger,
+        message_count=len(messages),
+        token_count=before.input_tokens,
+    )
     snapshot = None
     try:
         snapshot = str(save_context_snapshot(messages, model=model, metadata=carryover_metadata))
-        _record_compact_checkpoint(carryover_metadata, checkpoint="compact_snapshot_saved",
-            trigger=trigger, message_count=len(messages), token_count=before.input_tokens,
-            details={"snapshot_path": snapshot})
+        _record_compact_checkpoint(
+            carryover_metadata,
+            checkpoint="compact_snapshot_saved",
+            trigger=trigger,
+            message_count=len(messages),
+            token_count=before.input_tokens,
+            details={"snapshot_path": snapshot},
+        )
         candidate, saved = microcompact_messages(messages, snapshot_path=snapshot)
-        _refresh_runtime(candidate, runtime_context_provider)
+        _refresh_runtime(candidate, runtime_context_provider, runtime_snapshot_provider)
         after = _conversation_budget(candidate, **kwargs)
-        _record_compact_checkpoint(carryover_metadata, checkpoint="query_microcompact_end",
-            trigger=trigger, message_count=len(candidate), token_count=after.input_tokens,
-            details={"snapshot_path": snapshot, "tokens_freed": saved})
-        if saved > 0 and after.input_tokens <= before.target_tokens and after.input_tokens < before.input_tokens:
+        _record_compact_checkpoint(
+            carryover_metadata,
+            checkpoint="query_microcompact_end",
+            trigger=trigger,
+            message_count=len(candidate),
+            token_count=after.input_tokens,
+            details={"snapshot_path": snapshot, "tokens_freed": saved},
+        )
+        if (
+            saved > 0
+            and after.input_tokens <= before.target_tokens
+            and after.input_tokens < before.input_tokens
+            and after.fits
+            and after.components_fit
+        ):
             _validate_tool_pairs(candidate)
-            _record_compact_checkpoint(carryover_metadata, checkpoint="compact_end", trigger=trigger,
-                message_count=len(candidate), token_count=after.input_tokens, details={"snapshot_path": snapshot})
+            _record_compact_checkpoint(
+                carryover_metadata,
+                checkpoint="compact_end",
+                trigger=trigger,
+                message_count=len(candidate),
+                token_count=after.input_tokens,
+                details={"snapshot_path": snapshot},
+            )
         else:
             # Deliberately use ORIGINAL messages, not cleared results, for summarization.
-            result = await compact_conversation(messages, api_client=api_client, model=model,
-                system_prompt=system_prompt, preserve_recent=preserve_recent, trigger=trigger,
-                progress_callback=progress_callback, hook_executor=hook_executor,
-                carryover_metadata=carryover_metadata, context_window_tokens=context_window_tokens,
-                max_tokens=max_tokens, tools=tools, auto_compact_threshold_tokens=auto_compact_threshold_tokens,
-                snapshot_path=snapshot, runtime_context_provider=runtime_context_provider)
+            result = await compact_conversation(
+                messages,
+                api_client=api_client,
+                model=model,
+                system_prompt=system_prompt,
+                preserve_recent=preserve_recent,
+                trigger=trigger,
+                progress_callback=progress_callback,
+                hook_executor=hook_executor,
+                carryover_metadata=carryover_metadata,
+                context_window_tokens=context_window_tokens,
+                max_tokens=max_tokens,
+                tools=tools,
+                auto_compact_threshold_tokens=auto_compact_threshold_tokens,
+                snapshot_path=snapshot,
+                runtime_context_provider=runtime_context_provider,
+                runtime_snapshot_provider=runtime_snapshot_provider,
+                context_components=context_components,
+                target_input_tokens=before.target_tokens,
+            )
             if result.status != "success":
                 state.last_status = result.status
                 state.consecutive_failures += 1
                 return messages, False
             candidate = build_post_compact_messages(result)
+        final_budget = _conversation_budget(candidate, **kwargs)
+        final_budget.require_fit()
         state.compacted = True
         state.turn_counter += 1
         state.turn_id = uuid4().hex
@@ -1072,11 +1361,21 @@ async def auto_compact_if_needed(
     except Exception as exc:
         state.consecutive_failures += 1
         state.last_status = "failed"
-        checkpoint = _record_compact_checkpoint(carryover_metadata, checkpoint=f"query_{trigger}_failed",
-            trigger=trigger, message_count=len(messages), token_count=before.input_tokens,
-            details={"reason": str(exc), "snapshot_path": snapshot})
-        await _emit_progress(progress_callback, phase="compact_failed", trigger=trigger,
-                             message=str(exc), metadata=checkpoint)
+        checkpoint = _record_compact_checkpoint(
+            carryover_metadata,
+            checkpoint=f"query_{trigger}_failed",
+            trigger=trigger,
+            message_count=len(messages),
+            token_count=before.input_tokens,
+            details={"reason": str(exc), "snapshot_path": snapshot},
+        )
+        await _emit_progress(
+            progress_callback,
+            phase="compact_failed",
+            trigger=trigger,
+            message=str(exc),
+            metadata=checkpoint,
+        )
         log.warning("Compaction rejected; original history retained: %s", exc)
         return messages, False
 

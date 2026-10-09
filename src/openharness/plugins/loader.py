@@ -1,6 +1,11 @@
 """Plugin discovery and loading."""
 
 from __future__ import annotations
+from openharness.config import Settings
+from openharness.hooks.schemas import HookDefinition
+from openharness.mcp.types import McpServerConfig
+from pydantic import BaseModel, TypeAdapter
+from openharness.tools.base import BaseTool
 
 import importlib
 import importlib.util
@@ -8,6 +13,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -71,7 +77,7 @@ def discover_plugin_paths(
 
 
 def discover_plugin_paths_for_settings(
-    settings,
+    settings: Settings,
     cwd: str | Path,
     extra_roots: Iterable[str | Path] | None = None,
 ) -> list[Path]:
@@ -97,7 +103,11 @@ def discover_plugin_paths_for_settings(
 
 
 def load_plugins(
-    settings, cwd: str | Path, extra_roots: Iterable[str | Path] | None = None
+    settings: Settings,
+    cwd: str | Path,
+    extra_roots: Iterable[str | Path] | None = None,
+    *,
+    metadata_only: bool = False,
 ) -> list[LoadedPlugin]:
     """Load plugins from disk."""
     project_plugins_dir = get_project_plugins_dir(cwd)
@@ -112,13 +122,24 @@ def load_plugins(
         )
     plugins: dict[str, LoadedPlugin] = {}
     for path in discover_plugin_paths_for_settings(settings, cwd, extra_roots=extra_roots):
-        plugin = load_plugin(path, settings.enabled_plugins)
+        plugin = load_plugin(
+            path,
+            settings.enabled_plugins,
+            enabled_skills=getattr(settings, "enabled_skills", {}),
+            metadata_only=metadata_only,
+        )
         if plugin is not None:
             plugins[plugin.name] = plugin
     return list(plugins.values())
 
 
-def load_plugin(path: Path, enabled_plugins: dict[str, bool]) -> LoadedPlugin | None:
+def load_plugin(
+    path: Path,
+    enabled_plugins: dict[str, bool],
+    *,
+    enabled_skills: dict[str, bool] | None = None,
+    metadata_only: bool = False,
+) -> LoadedPlugin | None:
     """Load one plugin directory."""
     manifest_path = _find_manifest(path)
     if manifest_path is None:
@@ -131,21 +152,29 @@ def load_plugin(path: Path, enabled_plugins: dict[str, bool]) -> LoadedPlugin | 
     enabled = enabled_plugins.get(manifest.name, manifest.enabled_by_default)
 
     skills = _load_plugin_skills(path / manifest.skills_dir)
+    skills = [
+        replace(
+            skill,
+            plugin_name=manifest.name,
+            enabled=enabled and skill_enabled(skill, enabled_plugins, enabled_skills or {}),
+        )
+        for skill in skills
+    ]
     diagnostics = []
     for contribution in ("commands", "agents"):
         if getattr(manifest, contribution, None) or (path / contribution).exists():
             diagnostics.append(
                 f"Retired {contribution} contributions are ignored; use research skills, tools, MCP or hooks."
             )
-    tools = _load_plugin_tools(path, manifest) if enabled else []
-    hooks = _load_plugin_hooks(path / manifest.hooks_file)
+    tools = _load_plugin_tools(path, manifest) if enabled and not metadata_only else []
+    hooks = _load_plugin_hooks(path / manifest.hooks_file) if not metadata_only else {}
     hooks_dir_file = path / "hooks" / "hooks.json"
-    if not hooks and hooks_dir_file.exists():
+    if not metadata_only and not hooks and hooks_dir_file.exists():
         hooks = _load_plugin_hooks_structured(hooks_dir_file, path)
 
-    mcp = _load_plugin_mcp(path / manifest.mcp_file)
+    mcp = _load_plugin_mcp(path / manifest.mcp_file) if not metadata_only else {}
     mcp_json = path / ".mcp.json"
-    if not mcp and mcp_json.exists():
+    if not metadata_only and not mcp and mcp_json.exists():
         mcp = _load_plugin_mcp(mcp_json)
 
     return LoadedPlugin(
@@ -158,6 +187,27 @@ def load_plugin(path: Path, enabled_plugins: dict[str, bool]) -> LoadedPlugin | 
         mcp_servers=mcp,
         tools=tools,
     )
+
+
+LEGACY_SKILL_PLUGINS = {
+    "financial-statement-analysis",
+    "company-event-monitor",
+    "research-report-digest",
+    "deep-investment-report",
+}
+
+
+def skill_enabled(
+    skill: SkillDefinition, enabled_plugins: dict[str, bool], enabled_skills: dict[str, bool]
+) -> bool:
+    """Explicit Skill settings take precedence over legacy one-Skill plugin settings."""
+    key = skill.metadata.skill_id or skill.command_name or skill.name
+    names = (key, skill.command_name, skill.name)
+    for name in names:
+        if name in enabled_skills:
+            return enabled_skills[name]
+    legacy = next((name for name in names if name in LEGACY_SKILL_PLUGINS), None)
+    return enabled_plugins.get(legacy, True) if legacy else True
 
 
 def _parse_frontmatter(content: str, path: Path) -> tuple[dict[str, Any], str]:
@@ -220,7 +270,7 @@ def _load_plugin_skills(path: Path) -> list[SkillDefinition]:
     return load_skills_from_dirs([path], source="plugin", create_missing=False)
 
 
-def _load_plugin_hooks(path: Path) -> dict[str, list]:
+def _load_plugin_hooks(path: Path) -> dict[str, list[HookDefinition]]:
     """Load hooks from a flat hooks.json file."""
     if not path.exists():
         return {}
@@ -232,7 +282,7 @@ def _load_plugin_hooks(path: Path) -> dict[str, list]:
     )
 
     raw = json.loads(path.read_text(encoding="utf-8"))
-    parsed: dict[str, list] = {}
+    parsed: dict[str, list[HookDefinition]] = {}
     for event, hooks in raw.items():
         parsed[event] = []
         for hook in hooks:
@@ -248,7 +298,7 @@ def _load_plugin_hooks(path: Path) -> dict[str, list]:
     return parsed
 
 
-def _load_plugin_hooks_structured(path: Path, plugin_root: Path) -> dict[str, list]:
+def _load_plugin_hooks_structured(path: Path, plugin_root: Path) -> dict[str, list[HookDefinition]]:
     """Load hooks from structured hooks.json format."""
     if not path.exists():
         return {}
@@ -259,7 +309,7 @@ def _load_plugin_hooks_structured(path: Path, plugin_root: Path) -> dict[str, li
     hooks_data = raw.get("hooks", raw)
     if not isinstance(hooks_data, dict):
         return {}
-    parsed: dict[str, list] = {}
+    parsed: dict[str, list[HookDefinition]] = {}
     for event, entries in hooks_data.items():
         if not isinstance(entries, list):
             continue
@@ -271,17 +321,19 @@ def _load_plugin_hooks_structured(path: Path, plugin_root: Path) -> dict[str, li
                 cmd = hook.get("command", "")
                 cmd = cmd.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
                 parsed[event].append(
-                    {
-                        "type": hook.get("type", "command"),
-                        "command": cmd,
-                        "matcher": matcher,
-                        "timeout": hook.get("timeout"),
-                    }
+                    TypeAdapter(HookDefinition).validate_python(
+                        {
+                            "type": hook.get("type", "command"),
+                            "command": cmd,
+                            "matcher": matcher,
+                            "timeout_seconds": hook.get("timeout") or 30,
+                        }
+                    )
                 )
     return parsed
 
 
-def _load_plugin_mcp(path: Path) -> dict[str, object]:
+def _load_plugin_mcp(path: Path) -> dict[str, McpServerConfig]:
     """Load MCP server configuration from a JSON file."""
     if not path.exists():
         return {}
@@ -292,7 +344,7 @@ def _load_plugin_mcp(path: Path) -> dict[str, object]:
     return parsed.mcpServers
 
 
-def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list:
+def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list[BaseTool[BaseModel]]:
     """Discover and instantiate BaseTool subclasses from a plugin's tools/ directory."""
     from openharness.tools.base import BaseTool
 
@@ -300,7 +352,7 @@ def _load_plugin_tools(path: Path, manifest: PluginManifest) -> list:
     if not tools_dir.is_dir():
         return []
 
-    tools: list[BaseTool] = []
+    tools: list[BaseTool[BaseModel]] = []
     for py_file in sorted(tools_dir.glob("*.py")):
         if py_file.name.startswith("_"):
             continue

@@ -1,6 +1,11 @@
 """FastAPI app for a local, single-user financial research workspace."""
 
 from __future__ import annotations
+from typing import Callable, Awaitable, AsyncIterator
+from starlette.types import ASGIApp, Scope, Receive, Send, Message
+from starlette.responses import Response
+from starlette.datastructures import UploadFile
+from openharness.web.types import WebSessionRecord, BrowserRow
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
@@ -16,13 +21,15 @@ from pydantic import ValidationError
 from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest
 from openharness.auth.manager import AuthManager
 from openharness.engine.messages import ConversationMessage
-from openharness.research.store import ResearchError, ResearchStore
+from openharness.research.errors import ResearchError
+from openharness.research.store import ResearchStore
 from openharness.runtime import _resolve_api_client_from_settings
 from openharness.web.catalog import (
     models_list,
     profile_settings,
     save_model,
     skills_list,
+    skill_detail,
     toggle_skill,
 )
 from openharness.web.models import ModelInput, SessionInput, SkillToggle, SocketRequest
@@ -37,16 +44,20 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 class AttachmentBodyLimit:
     """Bound multipart body bytes before Starlette spools uploads to disk."""
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["method"] != "POST" or not scope["path"].endswith("/attachments"):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or not scope["path"].endswith("/attachments")
+        ):
             return await self.app(scope, receive, send)
         limit = 10 * MAX_DOCUMENT_BYTES + 1024 * 1024
         seen = 0
 
-        async def bounded_receive():
+        async def bounded_receive() -> Message:
             nonlocal seen
             message = await receive()
             seen += len(message.get("body", b""))
@@ -79,7 +90,7 @@ def allowed_origin(origin: str | None, host: str) -> bool:
 
 
 class Workspace:
-    def __init__(self, cwd: str):
+    def __init__(self, cwd: str) -> None:
         self.cwd = str(Path(cwd).resolve())
         self.store = WebSessionBackend(self.cwd)
         self.lock = asyncio.Lock()
@@ -87,7 +98,7 @@ class Workspace:
         self.deleting: set[str] = set()
         self.file_operations: set[str] = set()
 
-    def record(self, session_id: str) -> dict:
+    def record(self, session_id: str) -> WebSessionRecord:
         try:
             if session_id in self.deleting or not self.store._path(session_id).is_file():
                 raise HTTPException(404, "会话不存在")
@@ -96,6 +107,9 @@ class Workspace:
             if idle:
                 ResearchStore(self.cwd, session_id).recover_pending_steers()
                 ResearchStore(self.cwd, session_id).recover_investigations()
+                from openharness.research.repository import ResearchRepository
+
+                ResearchRepository(ResearchStore(self.cwd, session_id)).recover()
             record = self.store.load_by_id(self.cwd, session_id)
             if record is not None:
                 # Acceptance is authoritative even if the process stopped
@@ -115,8 +129,11 @@ class Workspace:
                                 row["status"] = "interrupted"
                             recovered = True
                 known = {row["id"] for row in rows}
-                missing = [{"id": key, "role": "user", "text": item["text"]}
-                           for key, item in pending.items() if key not in known]
+                missing: list[BrowserRow] = [
+                    {"id": key, "role": "user", "text": item["text"]}
+                    for key, item in pending.items()
+                    if key not in known
+                ]
                 if missing or recovered:
                     record["display_messages"] = rows + missing
                     self.store.write(record)
@@ -133,7 +150,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
     workspace = Workspace(cwd or str(Path.cwd()))
 
     @asynccontextmanager
-    async def lifespan(app):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
         for connection in list(workspace.connections.values()):
             await connection.cancel()
@@ -143,7 +160,9 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
     app.state.workspace = workspace
 
     @app.middleware("http")
-    async def guard(request: Request, call_next):
+    async def guard(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         host = request.headers.get("host", "")
         if not local_host(host) or not allowed_origin(request.headers.get("origin"), host):
             return JSONResponse({"detail": "仅允许本机工作台访问"}, status_code=403)
@@ -155,44 +174,44 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         return response
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error(request, exc):
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         # Pydantic's default payload echoes inputs, including API keys.
         return JSONResponse({"detail": "请求字段无效，请检查表单内容"}, status_code=422)
 
     @app.get("/api/health")
-    async def health():
+    async def health() -> dict[str, object]:
         return {"status": "ok", "busy": workspace.lock.locked()}
 
     @app.get("/api/models")
-    async def get_models():
-        return models_list()
+    async def get_models() -> dict[str, object]:
+        return dict(models_list())
 
     @app.post("/api/models", status_code=201)
-    async def add_model(data: ModelInput):
+    async def add_model(data: ModelInput) -> dict[str, object]:
         return {"id": save_model(data)}
 
     @app.put("/api/models/{profile_id}")
-    async def edit_model(profile_id: str, data: ModelInput):
+    async def edit_model(profile_id: str, data: ModelInput) -> dict[str, object]:
         return {"id": save_model(data, profile_id)}
 
     @app.post("/api/models/{profile_id}/activate")
-    async def activate_model(profile_id: str):
+    async def activate_model(profile_id: str) -> dict[str, object]:
         profile_settings(profile_id)
         AuthManager().use_profile(profile_id)
         return {"ok": True}
 
     @app.delete("/api/models/{profile_id}/credential")
-    async def clear_credential(profile_id: str):
+    async def clear_credential(profile_id: str) -> dict[str, object]:
         profile_settings(profile_id)
         AuthManager().clear_profile_credential(profile_id)
         return {"ok": True}
 
     @app.delete("/api/models/{profile_id}")
-    async def delete_model(profile_id: str):
+    async def delete_model(profile_id: str) -> dict[str, object]:
         profile_settings(profile_id)
         if any(
             r["profile_id"] == profile_id
-            for r in workspace.store.list_snapshots(workspace.cwd, limit=None)
+            for r in workspace.store.list_snapshots(workspace.cwd, limit=1000000)
         ):
             raise HTTPException(409, "此配置正在被会话使用，请先切换会话的模型")
         manager = AuthManager()
@@ -208,7 +227,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         return {"ok": True}
 
     @app.post("/api/models/{profile_id}/test")
-    async def test_model(profile_id: str):
+    async def test_model(profile_id: str) -> dict[str, object]:
         settings = profile_settings(profile_id)
         try:
             settings.resolve_auth()
@@ -217,16 +236,20 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         client = _resolve_api_client_from_settings(settings)
         try:
 
-            async def probe():
+            async def probe() -> None:
                 complete = False
                 from openharness.services.context_budget import checked_request
+
                 async for event in client.stream_message(
-                    checked_request(client, ApiMessageRequest(
-                        model=settings.model,
-                        max_tokens=64,
-                        context_window_tokens=settings.context_window_tokens,
-                        messages=[ConversationMessage.from_user_text("Reply with OK.")],
-                    ))
+                    checked_request(
+                        client,
+                        ApiMessageRequest(
+                            model=settings.model,
+                            max_tokens=64,
+                            context_window_tokens=settings.context_window_tokens,
+                            messages=[ConversationMessage.from_user_text("Reply with OK.")],
+                        ),
+                    )
                 ):
                     if isinstance(event, ApiMessageCompleteEvent):
                         complete = True
@@ -235,7 +258,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
 
             await asyncio.wait_for(probe(), timeout=30)
             return {"ok": True, "message": "连接成功，模型可正常响应"}
-        except TimeoutError:
+        except asyncio.TimeoutError:
             return {"ok": False, "message": "连接超时，请检查接口地址和网络"}
         except Exception as exc:  # noqa: BLE001 -- redact upstream exception bodies
             from openharness.api.errors import AuthenticationFailure, RateLimitFailure
@@ -250,19 +273,25 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
                 message = "上下文预算配置不可用，请填写真实的上下文窗口（context_window_tokens），并核对输出额度。"
             return {"ok": False, "message": message}
         finally:
-            await client.close()
+            close = getattr(client, "close", None)
+            if close:
+                await close()
 
     @app.get("/api/skills")
-    async def get_skills():
+    async def get_skills() -> dict[str, object]:
         return {"items": skills_list(workspace.cwd)}
 
     @app.patch("/api/skills/{plugin_id}")
-    async def patch_skill(plugin_id: str, data: SkillToggle):
+    async def patch_skill(plugin_id: str, data: SkillToggle) -> dict[str, object]:
         toggle_skill(workspace.cwd, plugin_id, data.enabled)
         return {"ok": True}
 
+    @app.get("/api/skills/{plugin_id}/{skill_name}")
+    async def get_skill_detail(plugin_id: str, skill_name: str) -> dict[str, object]:
+        return skill_detail(workspace.cwd, plugin_id, skill_name)
+
     @app.get("/api/sessions")
-    async def get_sessions():
+    async def get_sessions() -> dict[str, object]:
         return {
             "items": Redactor().clean(
                 [
@@ -273,31 +302,33 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         }
 
     @app.post("/api/sessions", status_code=201)
-    async def add_session(data: SessionInput):
+    async def add_session(data: SessionInput) -> dict[str, object]:
         profile_id = data.profile_id or models_list()["active_profile"]
         # Allow an unconfigured API profile so first-use UI can guide the user.
         profile_settings(profile_id)
-        return session_view(workspace.store.create(profile_id))
+        return dict(session_view(workspace.store.create(profile_id)))
 
     @app.get("/api/sessions/{session_id}")
-    async def get_session(session_id: str):
-        return Redactor().clean(session_view(workspace.record(session_id)))
+    async def get_session(session_id: str) -> dict[str, object]:
+        return Redactor().clean(dict(session_view(workspace.record(session_id))))
 
     def session_files(session_id: str) -> SessionFiles:
         workspace.record(session_id)
         return SessionFiles(ResearchStore(workspace.cwd, session_id).directory)
 
-    def require_idle_files(session_id: str):
+    def require_idle_files(session_id: str) -> None:
         connection = workspace.connections.get(session_id)
-        if session_id in workspace.file_operations or (connection and connection.task and not connection.task.done()):
+        if session_id in workspace.file_operations or (
+            connection and connection.task and not connection.task.done()
+        ):
             raise HTTPException(409, "请等待文件操作或当前生成完成")
 
     @app.get("/api/sessions/{session_id}/attachments")
-    async def list_attachments(session_id: str):
+    async def list_attachments(session_id: str) -> dict[str, object]:
         return {"items": session_files(session_id).list("attachments")}
 
     @app.post("/api/sessions/{session_id}/attachments", status_code=201)
-    async def upload_attachments(session_id: str, request: Request):
+    async def upload_attachments(session_id: str, request: Request) -> dict[str, object]:
         storage = session_files(session_id)
         require_idle_files(session_id)
         # Multipart is bounded both in file count and in actual streamed bytes.
@@ -305,7 +336,11 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         created = []
         try:
             async with request.form(max_files=10, max_fields=0) as form:
-                uploads = [item for key, item in form.multi_items() if key == "files" and hasattr(item, "read")]
+                uploads = [
+                    item
+                    for key, item in form.multi_items()
+                    if key == "files" and isinstance(item, UploadFile)
+                ]
                 if not uploads or len(uploads) != len(form.multi_items()):
                     raise HTTPException(422, "请通过files字段上传1至10个PDF、TXT或MD文件")
                 for upload in uploads:
@@ -315,7 +350,9 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
                         if len(content) > MAX_DOCUMENT_BYTES:
                             raise HTTPException(413, "每个文件最多30 MB")
                     try:
-                        meta = await asyncio.to_thread(storage.upload, upload.filename or "", bytes(content))
+                        meta = await asyncio.to_thread(
+                            storage.upload, upload.filename or "", bytes(content)
+                        )
                     except ValueError as exc:
                         raise HTTPException(422, str(exc)) from None
                     created.append(meta)
@@ -328,7 +365,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
             workspace.file_operations.discard(session_id)
 
     @app.delete("/api/sessions/{session_id}/attachments/{file_id}")
-    async def delete_attachment(session_id: str, file_id: str):
+    async def delete_attachment(session_id: str, file_id: str) -> dict[str, object]:
         storage = session_files(session_id)
         require_idle_files(session_id)
         try:
@@ -338,11 +375,11 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         return {"ok": True}
 
     @app.get("/api/sessions/{session_id}/artifacts")
-    async def list_artifacts(session_id: str):
+    async def list_artifacts(session_id: str) -> dict[str, object]:
         return {"items": session_files(session_id).list("artifacts")}
 
     @app.get("/api/sessions/{session_id}/artifacts/{file_id}/download")
-    async def download_artifact(session_id: str, file_id: str):
+    async def download_artifact(session_id: str, file_id: str) -> FileResponse:
         try:
             meta, path = session_files(session_id).artifact(file_id)
         except (ValueError, FileNotFoundError):
@@ -350,7 +387,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         return FileResponse(path, filename=meta["name"], media_type="application/octet-stream")
 
     @app.delete("/api/sessions/{session_id}")
-    async def delete_session(session_id: str):
+    async def delete_session(session_id: str) -> dict[str, object]:
         try:
             path = workspace.store._path(session_id)
         except ValueError:
@@ -376,12 +413,16 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
             raise HTTPException(500, "删除失败，请检查本地存储后重试") from None
         finally:
             workspace.deleting.discard(session_id)
-            if not path.exists() and connection and workspace.connections.get(session_id) is connection:
+            if (
+                not path.exists()
+                and connection
+                and workspace.connections.get(session_id) is connection
+            ):
                 workspace.connections.pop(session_id, None)
         return {"ok": True}
 
     @app.patch("/api/sessions/{session_id}")
-    async def change_session_model(session_id: str, data: SessionInput):
+    async def change_session_model(session_id: str, data: SessionInput) -> dict[str, object]:
         connection = workspace.connections.get(session_id)
         if connection and connection.task and not connection.task.done():
             raise HTTPException(409, "请先停止当前生成，再切换模型")
@@ -391,10 +432,10 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         record = workspace.record(session_id)
         record["profile_id"] = data.profile_id
         workspace.store.write(record)
-        return Redactor().clean(session_view(record))
+        return Redactor().clean(dict(session_view(record)))
 
     @app.websocket("/api/sessions/{session_id}/ws")
-    async def socket(websocket: WebSocket, session_id: str):
+    async def socket(websocket: WebSocket, session_id: str) -> None:
         host = websocket.headers.get("host", "")
         origin = websocket.headers.get("origin")
         if not local_host(host) or not origin or not allowed_origin(origin, host):
@@ -425,7 +466,10 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
                 except (ValidationError, ValueError):
                     await connection.emit("error", message="请求格式无效")
                     continue
-                if session_id in workspace.deleting or not workspace.store._path(session_id).is_file():
+                if (
+                    session_id in workspace.deleting
+                    or not workspace.store._path(session_id).is_file()
+                ):
                     break
                 if request.type == "submit":
                     if connection.task and not connection.task.done():
@@ -440,7 +484,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
                 elif request.type == "steer":
                     await connection.steer(request)
                 elif request.type == "response" and request.request_id == connection.request_id:
-                    connection.respond(request.request_id, request.prompt_id, request.answer)
+                    connection.respond(request.request_id, request.prompt_id or "", request.answer)
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass
         finally:
@@ -456,7 +500,7 @@ def create_app(cwd: str | None = None, static_dir: Path | None = None) -> FastAP
         app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
 
     @app.get("/{path:path}")
-    async def frontend(path: str):
+    async def frontend(path: str) -> FileResponse:
         if path.startswith("api/"):
             raise HTTPException(404, "接口不存在")
         if path in {"", "chat", "models", "skills"} and (static_dir / "index.html").is_file():

@@ -1,0 +1,74 @@
+E402 Module level import not at top of file
+   --> tests/test_services/test_context_budget.py:392:1
+    |
+391 | # Six logical categories supplement, rather than replace, the wire statistics.
+392 | from openharness.config.context_components import ContextComponentsSettings, COMPONENT_KEYS
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+393 | from openharness.config.settings import Settings, save_settings, load_settings
+394 | from openharness.engine.messages import ContextSpan
+    |
+help: Move module level imports to top of file
+
+E402 Module level import not at top of file
+   --> tests/test_services/test_context_budget.py:393:1
+    |
+391 | # Six logical categories supplement, rather than replace, the wire statistics.
+392 | from openharness.config.context_components import ContextComponentsSettings, COMPONENT_KEYS
+393 | from openharness.config.settings import Settings, save_settings, load_settings
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+394 | from openharness.engine.messages import ContextSpan
+395 | from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+    |
+help: Move module level imports to top of file
+
+E402 Module level import not at top of file
+   --> tests/test_services/test_context_budget.py:394:1
+    |
+392 | from openharness.config.context_components import ContextComponentsSettings, COMPONENT_KEYS
+393 | from openharness.config.settings import Settings, save_settings, load_settings
+394 | from openharness.engine.messages import ContextSpan
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+395 | from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+396 | from pydantic import ValidationError
+    |
+help: Move module level imports to top of file
+
+F401 [*] `openharness.engine.messages.ContextSpan` imported but unused
+   --> tests/test_services/test_context_budget.py:394:41
+    |
+392 | from openharness.config.context_components import ContextComponentsSettings, COMPONENT_KEYS
+393 | from openharness.config.settings import Settings, save_settings, load_settings
+394 | from openharness.engine.messages import ContextSpan
+    |                                         ^^^^^^^^^^^
+395 | from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+396 | from pydantic import ValidationError
+    |
+help: Remove unused import: `openharness.engine.messages.ContextSpan`
+    |
+393 | from openharness.config.settings import Settings, save_settings, load_settings
+    - from openharness.engine.messages import ContextSpan
+394 | from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+    |
+
+E402 Module level import not at top of file
+   --> tests/test_services/test_context_budget.py:395:1
+    |
+393 | from openharness.config.settings import Settings, save_settings, load_settings
+394 | from openharness.engine.messages import ContextSpan
+395 | from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+396 | from pydantic import ValidationError
+    |
+help: Move module level imports to top of file
+
+E402 Module level import not at top of file
+   --> tests/test_services/test_context_budget.py:396:1
+    |
+394 | from openharness.engine.messages import ContextSpan
+395 | from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+396 | from pydantic import ValidationError
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: Move module level imports to top of file
+
+Found 6 errors.
+[*] 1 fixable with the `--fix` option.

@@ -1,6 +1,7 @@
 """Skill registry."""
 
 from __future__ import annotations
+from typing import Callable
 
 from openharness.skills.types import SkillDefinition
 
@@ -20,6 +21,10 @@ class SkillRegistry:
     def get(self, name: str) -> SkillDefinition | None:
         """Return a skill by name."""
         return self._skills.get(name)
+
+    def retain(self, predicate: Callable[[SkillDefinition], bool]) -> None:
+        """Filter final definitions without re-registering and changing alias precedence."""
+        self._skills = {key: skill for key, skill in self._skills.items() if predicate(skill)}
 
     def list_skills(self) -> list[SkillDefinition]:
         """Return all skills sorted by name."""

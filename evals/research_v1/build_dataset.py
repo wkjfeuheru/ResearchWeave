@@ -11,7 +11,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
-from recipes import BROKERS, REAL, SKILLS, SOURCES, SYNTHETIC
+from recipes import BROKERS, FORECAST_SKILL, REAL, SKILLS, SOURCES, SYNTHETIC
 
 from openharness.evaluation.models import (
     Budget,
@@ -24,10 +24,65 @@ from openharness.evaluation.models import (
 )
 from openharness.evaluation.calibration import calibration_cases
 
+from typing import Literal
+from typing_extensions import TypedDict
+from openharness.evaluation.models import Category
+
+Material = Literal["synthetic", "snapshot", "live"]
+Difficulty = Literal["basic", "intermediate", "complex"]
+ConflictKind = Literal["scope", "fact", "calculation", "interpretation"]
+CONFLICT_KINDS: tuple[ConflictKind, ...] = ("scope", "fact", "calculation", "interpretation")
+
+
+class SyntheticFixture(TypedDict, total=False):
+    synthetic: bool
+    case: str
+    company: dict[str, str | bool]
+    period: str
+    currency: str | None
+    unit: str
+    scope: str
+    revenue: str
+    cost: str
+    profit: str
+    parent_profit: str
+    prior_revenue: str
+    assets: str
+    liabilities: str
+    equity: str
+    begin_parent_equity: str
+    end_parent_equity: str
+    current_assets: str
+    current_liabilities: str
+    pretax_profit: str
+    tax: str
+    operating_cash: str
+    investing_cash: str
+    financing_cash: str
+    fx_cash: str
+    cash_increase: str
+    published_at: str
+    notes: list[str]
+    events: list[dict[str, str | None]]
+    reports: list[dict[str, str | None]]
+    forecast: dict[str, str | int | None | dict[str, str]]
+    declared_gaps: list[str]
+    disagreement: dict[str, object]
+
+
 ROOT = Path(__file__).resolve().parent
 
 
-def source_asset(path, identifier, url, title, family, provenance, date, page=None):
+def source_asset(
+    path: Path,
+    identifier: str,
+    url: str,
+    title: str,
+    family: str,
+    provenance: Literal["synthetic", "official_snapshot", "live"],
+    date: str,
+    page: int | None = None,
+) -> SourceAsset:
     return SourceAsset(
         id=identifier,
         path=str(path.relative_to(ROOT)),
@@ -41,8 +96,9 @@ def source_asset(path, identifier, url, title, family, provenance, date, page=No
     )
 
 
-def freeze_sources(pdf_dir):
-    result, catalog = {}, {}
+def freeze_sources(pdf_dir: Path) -> dict[str, list[SourceAsset]]:
+    result: dict[str, list[SourceAsset]] = {}
+    catalog: dict[str, object] = {}
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     for name, info in SOURCES.items():
         raw = pdf_dir / (name + ".pdf")
@@ -75,7 +131,10 @@ def freeze_sources(pdf_dir):
         raw_text = "".join(chunks).replace(",", "").replace(" ", "").replace("\n", "")
         factor = D(1000) if name in {"catl", "sany", "midea"} else D(1)
         for key in ("revenue", "profit", "cash", "prior_revenue"):
-            displayed = format(D(info[key]) / factor, "f")
+            metric_value = info.get(key)
+            if not isinstance(metric_value, str):
+                raise ValueError(f"Source recipe has no numeric field: {key}")
+            displayed = format(D(metric_value) / factor, "f")
             if displayed not in raw_text:
                 raise ValueError(f"{name} {key} 未能在原文核对：{displayed}")
         catalog[name] = {
@@ -113,9 +172,11 @@ def freeze_sources(pdf_dir):
     return result
 
 
-def synthetic(category, i, identifier):
+def synthetic(
+    category: Category, i: int, identifier: str
+) -> tuple[list[SourceAsset], dict[str, str], list[str], ConflictKind | None]:
     revenue, cost, profit = D(100 + i * 7), D(60 + i * 3), D(21 + i)
-    data = dict(
+    data: SyntheticFixture = dict(
         synthetic=True,
         case=identifier,
         company=dict(
@@ -292,7 +353,7 @@ def synthetic(category, i, identifier):
         or (category == "deep" and 8 <= i <= 14)
         or (category == "cross" and (i < 8 or i in {10, 15}))
     )
-    kind = ("scope", "fact", "calculation", "interpretation")[i % 4] if has_conflict else None
+    kind = CONFLICT_KINDS[i % 4] if has_conflict else None
     if category == "financial" and i == 15:
         kind = "calculation"
     if category == "digest" and i in {8, 9, 14}:
@@ -304,7 +365,8 @@ def synthetic(category, i, identifier):
     if category == "cross" and i == 10:
         kind = "interpretation"
     if has_conflict:
-        sides = {
+        assert kind is not None
+        disagreements: dict[ConflictKind, list[dict[str, object]]] = {
             "scope": [
                 dict(scope="合并", revenue=str(revenue)),
                 dict(scope="母公司", revenue=str(revenue - 15)),
@@ -318,9 +380,10 @@ def synthetic(category, i, identifier):
                 dict(assumption="需求改善", view="条件性利润上升"),
                 dict(assumption="竞争压价", view="条件性利润下降"),
             ],
-        }[kind]
+        }
+        sides = disagreements[kind]
         if category == "events":
-            sides = {
+            event_disagreements: dict[int, list[dict[str, object]]] = {
                 8: [
                     dict(type="订单意向", amount="200万元"),
                     dict(type="正式合同", amount="120万元"),
@@ -334,7 +397,8 @@ def synthetic(category, i, identifier):
                     dict(view="扩产带来增长", assumption="需求足够"),
                     dict(view="扩产增加风险", assumption="需求不足"),
                 ],
-            }.get(i, sides)
+            }
+            sides = event_disagreements.get(i, sides)
         if category == "digest":
             sides = [{"report": report} for report in data["reports"]]
             if i == 15:
@@ -403,20 +467,22 @@ def synthetic(category, i, identifier):
     return [asset], values, gaps, kind
 
 
-def level(material, i):
+def level(material: Material, i: int) -> Difficulty:
     basic, middle = {"synthetic": (6, 14), "snapshot": (4, 12), "live": (2, 6)}[material]
     return "basic" if i < basic else "intermediate" if i < middle else "complex"
 
 
-def build(pdf_dir):
+def build(pdf_dir: Path) -> list[EvalCase]:
     (ROOT / "assets").mkdir(exist_ok=True)
     frozen = freeze_sources(pdf_dir)
     cases = []
-    for ci, category in enumerate(("financial", "events", "digest", "deep", "cross")):
-        for material, count in (("synthetic", 16), ("snapshot", 16), ("live", 8)):
+    categories: tuple[Category, ...] = ("financial", "events", "digest", "deep", "cross")
+    materials: tuple[tuple[Material, int], ...] = (("synthetic", 16), ("snapshot", 16), ("live", 8))
+    for ci, category in enumerate(categories):
+        for material, count in materials:
             for i in range(count):
                 identifier = f"{category}-{'syn' if material == 'synthetic' else 'real' if material == 'snapshot' else 'live'}-{i + 1:02d}"
-                split = (
+                split: Literal["dev", "holdout"] = (
                     "dev"
                     if i < (6 if ci < 3 else 5)
                     else "holdout"
@@ -426,8 +492,13 @@ def build(pdf_dir):
                 if material != "live":
                     split = "dev" if i < (12 if ci == 0 else 11) else "holdout"
                 difficulty = level(material, i)
-                assets, urls, tags, faults, facts = [], [], [], [], []
-                numeric, kind = None, None
+                assets: list[SourceAsset] = []
+                urls: list[str] = []
+                tags: list[str] = []
+                faults: list[Fault] = []
+                facts: list[str] = []
+                numeric: Requirement | None = None
+                kind: ConflictKind | None = None
                 cutoff = "2026-10-06T12:00:00+08:00"
                 if material == "synthetic":
                     title, goal, key = SYNTHETIC[category][i]
@@ -558,7 +629,7 @@ def build(pdf_dir):
                         or category == "cross"
                         and i < 8
                     ):
-                        kind = ("scope", "fact", "calculation", "interpretation")[i % 4]
+                        kind = CONFLICT_KINDS[i % 4]
                     if category == "cross" and material == "live" and i == 6:
                         kind = "interpretation"
                     if category == "cross" and material == "live" and i == 5:
@@ -638,7 +709,9 @@ def build(pdf_dir):
                                 recovery="保留未解决争议",
                             )
                         ]
-                conflict = "detect" if kind else "none"
+                conflict: Literal["none", "detect", "resolve", "unresolved", "reopen"] = (
+                    "detect" if kind else "none"
+                )
                 if kind and material == "synthetic":
                     conflict = (
                         "unresolved"
@@ -669,7 +742,7 @@ def build(pdf_dir):
                     path.tool_groups = [["read_file", "web_fetch", "web_search", "bash"]]
                 disabled_plugins = []
                 if category == "cross":
-                    needs = {
+                    skill_requirements: dict[int, tuple[Category, ...]] = {
                         0: ("financial", "digest"),
                         1: ("financial", "events"),
                         2: ("financial", "digest"),
@@ -685,11 +758,15 @@ def build(pdf_dir):
                         12: ("financial",),
                         13: ("financial",),
                         15: ("financial", "events"),
-                    }.get(i, ())
+                    }
+                    needs = skill_requirements.get(i, ())
                     path.skills = [SKILLS[k][0] for k in needs]
                     path.scripts = [SKILLS[k][1] for k in needs]
                     if i == 14:
-                        disabled_plugins = [v[0] for v in SKILLS.values()]
+                        disabled_plugins = ["analysis-modeling", "report-generation"]
+                if "deep-investment-report" in path.skills:
+                    path.skills.append(FORECAST_SKILL[0])
+                    path.scripts.append(FORECAST_SKILL[1])
                 requirements = [
                     Requirement(id="delivery", description=goal),
                     Requirement(
@@ -754,7 +831,13 @@ def build(pdf_dir):
                     prompt += f" 数值统一用{numeric.unit}，期间{numeric.period}，口径{numeric.scope or '按原文'}。"
                 turns = [Turn(prompt=prompt)]
                 if category == "cross" and material != "live" and i in {11, 12, 13, 15}:
-                    action = {11: "cancel_resume", 12: "steer", 13: "restart", 15: "submit"}[i]
+                    actions: dict[int, Literal["cancel_resume", "steer", "restart", "submit"]] = {
+                        11: "cancel_resume",
+                        12: "steer",
+                        13: "restart",
+                        15: "submit",
+                    }
+                    action = actions[i]
                     follow = (
                         "范围改为现金流质量：先更新目标和计划，只分析现金流与归母利润。"
                         if i == 12
@@ -834,6 +917,8 @@ def build(pdf_dir):
                     revenue = D(inputs["base_revenue"])
                     year = int(inputs["base_year"])
                 else:
+                    if base.value is None:
+                        raise ValueError("Forecast numeric requirement has no value")
                     revenue = D(base.value) / D("1.1")
                     year = int(base.period) - 1
                 scenarios = (
@@ -845,12 +930,12 @@ def build(pdf_dir):
                 for scenario, growth in scenarios.items():
                     for offset in years:
                         forecast_revenue = revenue * (1 + growth) ** offset
-                        values = [("revenue", "收入", forecast_revenue)]
+                        forecast_values = [("revenue", "收入", forecast_revenue)]
                         if synthetic_forecast and index in {1, 8}:
-                            values.append(
+                            forecast_values.append(
                                 ("profit", "合并净利润", forecast_revenue * D("0.25") * D("0.75"))
                             )
-                        for metric, label, value in values:
+                        for metric, label, value in forecast_values:
                             case.requirements.append(
                                 Requirement(
                                     id=f"forecast_{scenario}_{offset}_{metric}",
@@ -1006,9 +1091,7 @@ def build(pdf_dir):
                 ("prior_revenue", "上年营业收入"),
             ):
                 year = source["year"] - 1 if key == "prior_revenue" else source["year"]
-                fact = (
-                    f"{source['name']} {year}年{label}为{source[key]}人民币元，原表头单位已换算。"
-                )
+                fact = f"{source['name']} {year}年{label}为{source.get(key)}人民币元，原表头单位已换算。"
                 case.reference_facts.append(fact)
                 case.reference_locations[fact] = [location]
         for requirement in case.requirements:
@@ -1025,7 +1108,7 @@ def build(pdf_dir):
     (ROOT / "cases.jsonl").write_text(
         "\n".join(c.model_dump_json() for c in cases) + "\n", encoding="utf-8"
     )
-    calibration = []
+    calibration: list[dict[str, object]] = []
     for c in calibration_cases(cases):
         calibration.extend(
             dict(

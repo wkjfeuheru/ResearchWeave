@@ -2,24 +2,28 @@
 
 from __future__ import annotations
 
+from pydantic import AnyUrl
+from openharness.utils.async_timeout import timeout as async_timeout
 import asyncio
 import contextlib
 from contextlib import AsyncExitStack
-from typing import Any
-
+from typing import TypeVar, Coroutine, Any
 import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult, ReadResourceResult
-
 from openharness.mcp.types import (
+    McpServerConfig,
     McpConnectionStatus,
     McpHttpServerConfig,
     McpResourceInfo,
     McpStdioServerConfig,
     McpToolInfo,
 )
+
+
+RequestT = TypeVar("RequestT")
 
 
 class McpServerNotConnectedError(Exception):
@@ -29,7 +33,7 @@ class McpServerNotConnectedError(Exception):
 class McpToolReturnedError(Exception):
     """The connected MCP server failed to return a usable tool result."""
 
-    def __init__(self, message: str, *, code: str = "tool_error"):
+    def __init__(self, message: str, *, code: str = "tool_error") -> None:
         super().__init__(message)
         self.code = code
 
@@ -37,7 +41,7 @@ class McpToolReturnedError(Exception):
 class McpClientManager:
     """Manage MCP connections and expose tools/resources."""
 
-    def __init__(self, server_configs: dict[str, object]) -> None:
+    def __init__(self, server_configs: dict[str, McpServerConfig]) -> None:
         self._server_configs = server_configs
         self._statuses: dict[str, McpConnectionStatus] = {
             name: McpConnectionStatus(
@@ -49,7 +53,7 @@ class McpClientManager:
         }
         self._sessions: dict[str, ClientSession] = {}
         self._stacks: dict[str, AsyncExitStack] = {}
-        self._owners: dict[str, asyncio.Task] = {}
+        self._owners: dict[str, asyncio.Task[None]] = {}
         self._shutdown: dict[str, asyncio.Event] = {}
 
     async def connect_all(self) -> None:
@@ -67,7 +71,9 @@ class McpClientManager:
                 await self.close()
                 raise
 
-    async def _own_connection(self, name: str, config: object, ready: asyncio.Event) -> None:
+    async def _own_connection(
+        self, name: str, config: McpServerConfig, ready: asyncio.Event
+    ) -> None:
         """Keep transport cancel scopes off the caller's research task."""
         try:
             if isinstance(config, McpStdioServerConfig):
@@ -105,16 +111,18 @@ class McpClientManager:
         """Reconnect all configured servers."""
         await self.close()
         self._statuses = {
-            name: McpConnectionStatus(name=name, state="pending", transport=getattr(config, "type", "unknown"))
+            name: McpConnectionStatus(
+                name=name, state="pending", transport=getattr(config, "type", "unknown")
+            )
             for name, config in self._server_configs.items()
         }
         await self.connect_all()
 
-    def update_server_config(self, name: str, config: object) -> None:
+    def update_server_config(self, name: str, config: McpServerConfig) -> None:
         """Replace one server config in memory."""
         self._server_configs[name] = config
 
-    def get_server_config(self, name: str) -> object | None:
+    def get_server_config(self, name: str) -> McpServerConfig | None:
         """Return one configured server object if present."""
         return self._server_configs.get(name)
 
@@ -129,7 +137,7 @@ class McpClientManager:
     def _mark_connection_failed(
         self,
         name: str,
-        config: object,
+        config: McpServerConfig,
         *,
         auth_configured: bool,
         exc: BaseException,
@@ -177,7 +185,9 @@ class McpClientManager:
             resources.extend(status.resources)
         return resources
 
-    async def _request(self, server_name: str, awaitable):
+    async def _request(
+        self, server_name: str, awaitable: Coroutine[object, object, RequestT]
+    ) -> RequestT:
         owner = self._owners.get(server_name)
         if owner is None:
             return await awaitable
@@ -205,9 +215,11 @@ class McpClientManager:
             )
         timeout = getattr(self._server_configs.get(server_name), "request_timeout", 60.0)
         try:
-            async with asyncio.timeout(timeout):
-                result: CallToolResult = await self._request(server_name, session.call_tool(tool_name, arguments))
-        except TimeoutError as exc:
+            async with async_timeout(timeout):
+                result: CallToolResult = await self._request(
+                    server_name, session.call_tool(tool_name, arguments)
+                )
+        except asyncio.TimeoutError as exc:
             raise McpToolReturnedError(
                 f"MCP tool '{server_name}/{tool_name}' timed out after {timeout:g}s. "
                 "No result was received; do not treat this as evidence or retry unchanged.",
@@ -216,8 +228,12 @@ class McpClientManager:
         except RuntimeError as exc:
             # The MCP SDK raises RuntimeError for output-schema validation failures.
             # Keep validation enabled and do not coerce missing financial data.
-            if not (str(exc).startswith(("Invalid structured content", "Invalid schema for tool", "Unresolvable"))
-                    or "has an output schema but did not return structured content" in str(exc)):
+            if not (
+                str(exc).startswith(
+                    ("Invalid structured content", "Invalid schema for tool", "Unresolvable")
+                )
+                or "has an output schema but did not return structured content" in str(exc)
+            ):
                 raise McpServerNotConnectedError(
                     f"MCP server '{server_name}' call failed: transport closed or unavailable"
                 ) from exc
@@ -256,9 +272,11 @@ class McpClientManager:
             )
         timeout = getattr(self._server_configs.get(server_name), "request_timeout", 60.0)
         try:
-            async with asyncio.timeout(timeout):
-                result: ReadResourceResult = await self._request(server_name, session.read_resource(uri))
-        except TimeoutError as exc:
+            async with async_timeout(timeout):
+                result: ReadResourceResult = await self._request(
+                    server_name, session.read_resource(AnyUrl(uri))
+                )
+        except asyncio.TimeoutError as exc:
             raise McpServerNotConnectedError(
                 f"MCP resource read from '{server_name}' timed out after {timeout:g}s. No result was received."
             ) from exc
@@ -351,7 +369,7 @@ class McpClientManager:
         self,
         *,
         name: str,
-        config: object,
+        config: McpServerConfig,
         stack: AsyncExitStack,
         read_stream: Any,
         write_stream: Any,

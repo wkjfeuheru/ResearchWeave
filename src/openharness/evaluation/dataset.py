@@ -1,5 +1,9 @@
 """Read and audit complete cases without running a model or uploading data."""
 
+from __future__ import annotations
+from typing import Iterable
+from openharness.evaluation.models import SourceAsset
+
 import hashlib
 import json
 from decimal import Decimal, InvalidOperation
@@ -14,7 +18,7 @@ DEFAULT_DATASET = (
 )
 
 
-def load_cases(directory=DEFAULT_DATASET):
+def load_cases(directory: str | Path = DEFAULT_DATASET) -> list[EvalCase]:
     directory = Path(directory).resolve()
     return [
         EvalCase.model_validate(json.loads(line))
@@ -23,7 +27,7 @@ def load_cases(directory=DEFAULT_DATASET):
     ]
 
 
-def asset_path(directory, asset):
+def asset_path(directory: str | Path, asset: SourceAsset) -> Path:
     root = Path(directory).resolve()
     candidate = (root / asset.path).resolve()
     if not candidate.is_relative_to(root / "assets") or not candidate.is_file():
@@ -31,12 +35,12 @@ def asset_path(directory, asset):
     return candidate
 
 
-def dataset_version(cases):
+def dataset_version(cases: Iterable[EvalCase]) -> str:
     content = "\n".join(case.model_dump_json() for case in cases)
     return "research-v1-" + hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def directory_version(directory, cases):
+def directory_version(directory: str | Path, cases: Iterable[EvalCase]) -> str:
     """A frozen run keeps its original schema version while optional fields evolve."""
     root = Path(directory)
     manifest = root / "manifest.json"
@@ -44,11 +48,11 @@ def directory_version(directory, cases):
         saved = json.loads(manifest.read_text())
         if saved["cases_sha256"] != hashlib.sha256((root / "cases.jsonl").read_bytes()).hexdigest():
             raise ValueError("归档任务集内容已经变更")
-        return saved["version"]
+        return str(saved["version"])
     return dataset_version(cases)
 
 
-def validate_dataset(directory=DEFAULT_DATASET):
+def validate_dataset(directory: str | Path = DEFAULT_DATASET) -> dict[str, object]:
     try:
         cases = load_cases(directory)
     except (OSError, ValueError):
@@ -86,8 +90,8 @@ def validate_dataset(directory=DEFAULT_DATASET):
     for kind in ("scope", "fact", "calculation", "interpretation"):
         if sum(c.path.conflict_kind == kind for c in cases) < 1:
             errors.append(f"没有覆盖 {kind} 冲突")
-    splits = defaultdict(set)
-    inputs = Counter()
+    splits: dict[str, set[str]] = defaultdict(set)
+    inputs: Counter[str] = Counter()
     for case in cases:
         splits[case.family].add(case.split)
         inputs[json.dumps(case.agent_input()["turns"], ensure_ascii=False)] += 1
@@ -112,7 +116,7 @@ def validate_dataset(directory=DEFAULT_DATASET):
             if requirement.check == "numeric":
                 try:
                     if (
-                        not Decimal(requirement.value).is_finite()
+                        not Decimal(requirement.value or "NaN").is_finite()
                         or Decimal(requirement.atol) < 0
                         or Decimal(requirement.rtol) < 0
                         or not requirement.unit

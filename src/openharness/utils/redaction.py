@@ -60,13 +60,19 @@ def memory_credentials() -> set[str]:
 
 def evaluation_credentials(cwd: str | Path | None = None) -> set[str]:
     """Langfuse credentials join output redaction without importing its SDK."""
-    values = {value for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
-              if (value := os.environ.get(key, ""))}
+    values = {
+        value
+        for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+        if (value := os.environ.get(key, ""))
+    }
     path = Path(cwd or Path.cwd()) / ".openharness" / "evaluation.local.json"
     try:
         config = json.loads(path.read_text()).get("langfuse", {})
-        values.update(config[key] for key in ("public_key", "secret_key")
-                      if isinstance(config.get(key), str) and config[key])
+        values.update(
+            config[key]
+            for key in ("public_key", "secret_key")
+            if isinstance(config.get(key), str) and config[key]
+        )
     except (OSError, ValueError, AttributeError):
         pass
     return values

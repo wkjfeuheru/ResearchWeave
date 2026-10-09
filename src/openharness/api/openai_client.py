@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import asyncio
 import json
 import logging
 import os
 import re
-from typing import Any, AsyncIterator
+from typing import Sequence, Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
 from openai import AsyncOpenAI
@@ -17,7 +16,6 @@ from openai import AsyncOpenAI
 from openharness.api.client import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
-    ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
 )
@@ -69,14 +67,16 @@ def _convert_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]
     """
     result = []
     for tool in tools:
-        result.append({
-            "type": "function",
-            "function": {
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {}),
-            },
-        })
+        result.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {}),
+                },
+            }
+        )
     return result
 
 
@@ -109,11 +109,13 @@ def _convert_messages_to_openai(
             if tool_results:
                 # Each tool result becomes a separate message with role="tool"
                 for tr in tool_results:
-                    openai_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tr.tool_use_id,
-                        "content": tr.content,
-                    })
+                    openai_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tr.tool_use_id,
+                            "content": tr.content,
+                        }
+                    )
             if user_blocks:
                 content = _convert_user_content_to_openai(user_blocks)
                 if isinstance(content, str):
@@ -128,7 +130,7 @@ def _convert_messages_to_openai(
     return openai_messages
 
 
-def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[dict[str, Any]]:
+def _convert_user_content_to_openai(blocks: Sequence[ContentBlock]) -> str | list[dict[str, Any]]:
     """Convert user text/image blocks into OpenAI chat content."""
     has_image = any(isinstance(block, ImageBlock) for block in blocks)
     if not has_image:
@@ -139,12 +141,14 @@ def _convert_user_content_to_openai(blocks: list[ContentBlock]) -> str | list[di
         if isinstance(block, TextBlock) and block.text:
             content.append({"type": "text", "text": block.text})
         elif isinstance(block, ImageBlock):
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{block.media_type};base64,{block.data}",
-                },
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{block.media_type};base64,{block.data}",
+                    },
+                }
+            )
     return content
 
 
@@ -234,11 +238,13 @@ def _parse_assistant_response(response: Any) -> ConversationMessage:
                 args = json.loads(tc.function.arguments)
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            content.append(ToolUseBlock(
-                id=tc.id,
-                name=tc.function.name,
-                input=args,
-            ))
+            content.append(
+                ToolUseBlock(
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=args,
+                )
+            )
 
     return ConversationMessage(role="assistant", content=content)
 
@@ -266,9 +272,12 @@ class OpenAICompatibleClient:
     so it can be used as a drop-in replacement in the agent loop.
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None, timeout: float | None = None) -> None:
+    def __init__(
+        self, api_key: str, *, base_url: str | None = None, timeout: float | None = None
+    ) -> None:
         kwargs: dict[str, Any] = {
             "api_key": api_key,
+            "max_retries": 0,
             "default_headers": {"Authorization": f"Bearer {api_key}"},
         }
         normalized_base_url = _normalize_openai_base_url(base_url)
@@ -285,36 +294,17 @@ class OpenAICompatibleClient:
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final message, matching the Anthropic client interface."""
         from openharness.services.context_budget import checked_request
+
         request = checked_request(self, request)
-        last_error: Exception | None = None
+        from openharness.api.retry import stream_with_retry
 
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                async for event in self._stream_once(request):
-                    yield event
-                return
-            except OpenHarnessApiError:
-                raise
-            except Exception as exc:
-                last_error = exc
-                if attempt >= MAX_RETRIES or not self._is_retryable(exc):
-                    raise self._translate_error(exc) from exc
-
-                delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
-                log.warning(
-                    "OpenAI API request failed (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt + 1, MAX_RETRIES + 1, delay, exc,
-                )
-                yield ApiRetryEvent(
-                    message=str(exc),
-                    attempt=attempt + 1,
-                    max_attempts=MAX_RETRIES + 1,
-                    delay_seconds=delay,
-                )
-                await asyncio.sleep(delay)
-
-        if last_error is not None:
-            raise self._translate_error(last_error) from last_error
+        async for event in stream_with_retry(
+            self._stream_once,
+            request,
+            translate=self._translate_error,
+            max_attempts=MAX_RETRIES + 1,
+        ):
+            yield event
 
     def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
         """Build once for both budgeting and transmission."""
@@ -339,7 +329,9 @@ class OpenAICompatibleClient:
         return replace(request, prepared_payload=params)
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
-        params = (request if request.prepared_payload is not None else self.prepare_request(request)).prepared_payload
+        params = (
+            request if request.prepared_payload is not None else self.prepare_request(request)
+        ).prepared_payload
         # Collect full response while streaming text deltas
         collected_content = ""
         collected_reasoning = ""
@@ -349,7 +341,10 @@ class OpenAICompatibleClient:
         # Buffer to strip inline <think>…</think> blocks across streaming chunks.
         _think_buf = ""
 
-        stream = await self._client.chat.completions.create(**params)
+        assert params is not None
+        params = dict(params)
+        params.pop("stream", None)
+        stream = await self._client.chat.completions.create(stream=True, **params)
         async for chunk in stream:
             if not chunk.choices:
                 # Usage-only chunk (some providers send this at the end)
@@ -413,11 +408,13 @@ class OpenAICompatibleClient:
                 args = json.loads(tc["arguments"])
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            content.append(ToolUseBlock(
-                id=tc["id"],
-                name=tc["name"],
-                input=args,
-            ))
+            content.append(
+                ToolUseBlock(
+                    id=tc["id"],
+                    name=tc["name"],
+                    input=args,
+                )
+            )
 
         final_message = ConversationMessage(role="assistant", content=content)
 
@@ -434,12 +431,9 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:
-        status = getattr(exc, "status_code", None)
-        if status and status in {429, 500, 502, 503}:
-            return True
-        if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
-            return True
-        return False
+        from openharness.api.retry import classify_error
+
+        return classify_error(exc) in {"transport", "rate_limit", "unavailable"}
 
     @staticmethod
     def _translate_error(exc: Exception) -> OpenHarnessApiError:

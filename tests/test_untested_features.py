@@ -156,7 +156,7 @@ Fetch the PR diff, review for bugs, style issues, and security problems.
         assert (
             commit is not None
             and review is not None
-            and "commit" in commit.content.lower()
+            and "commit" in commit.load_content().lower()
             and {"commit", "review-pr"}.issubset({item.name for item in reg.list_skills()})
         )
 

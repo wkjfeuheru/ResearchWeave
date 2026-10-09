@@ -3,7 +3,7 @@
 from urllib.parse import urlsplit, urlunsplit
 
 
-def describe_tool(name: str, arguments: dict) -> dict:
+def describe_tool(name: str, arguments: dict[str, object]) -> dict[str, str]:
     category, label, keys = {
         "read_file": ("read", "读取文件", ("path", "file_path")),
         "grep": ("search", "搜索文件", ("pattern",)),
@@ -15,6 +15,10 @@ def describe_tool(name: str, arguments: dict) -> dict:
         "edit_file": ("other", "编辑文件", ("path",)),
         "research_memory": ("other", "更新研究记录", ()),
         "investigate_conflict": ("other", "核查冲突原文", ()),
+        "dispatch_subagents": ("other", "并行委托研究", ()),
+        "planner": ("other", "规划研究任务", ()),
+        "replanner": ("other", "调整研究计划", ()),
+        "research_project": ("other", "更新研报项目", ()),
         "ask_user_question": ("other", "补充研究信息", ()),
         "notebook_edit": ("other", "编辑笔记本", ("notebook_path",)),
         "image_generation": ("other", "生成图像", ()),
@@ -28,11 +32,14 @@ def describe_tool(name: str, arguments: dict) -> dict:
     if name == "research_memory":
         operation = arguments.get("operation", {})
         if isinstance(operation, dict):
-            label = {"add_conflict": "发现结论冲突", "resolve_conflict": "提交争议裁决",
-                     "reopen_conflict": "重新核查争议"}.get(operation.get("action"), label)
+            label = {
+                "add_conflict": "发现结论冲突",
+                "resolve_conflict": "提交争议裁决",
+                "reopen_conflict": "重新核查争议",
+            }.get(str(operation.get("action", "")), label)
     if name.startswith("mcp__"):
         label = "外部工具 · " + name.removeprefix("mcp__").replace("__", " / ", 1)
-    target = next((arguments[key] for key in keys if isinstance(arguments.get(key), str)), "")
+    target = next((str(arguments[key]) for key in keys if isinstance(arguments.get(key), str)), "")
     if category == "fetch" and target:
         try:
             url = urlsplit(target)

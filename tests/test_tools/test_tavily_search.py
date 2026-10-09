@@ -24,8 +24,11 @@ def install(monkeypatch, data=None, status=200):
 
     async def fetch(url, **kwargs):
         calls.append((url, kwargs))
-        return httpx.Response(status, json=data if data is not None else {"results": []},
-                              request=httpx.Request("POST", url))
+        return httpx.Response(
+            status,
+            json=data if data is not None else {"results": []},
+            request=httpx.Request("POST", url),
+        )
 
     monkeypatch.setattr(tavily, "fetch_public_http_response", fetch)
     return calls
@@ -36,22 +39,35 @@ def item(url, title="资料"):
 
 
 async def execute(tmp_path, **kwargs):
-    return await WebSearchTool().execute(WebSearchToolInput(query="光伏 装机 累计 同比", **kwargs),
-                                         ToolExecutionContext(cwd=tmp_path))
+    return await WebSearchTool().execute(
+        WebSearchToolInput(query="光伏 装机 累计 同比", **kwargs),
+        ToolExecutionContext(cwd=tmp_path),
+    )
 
 
 @pytest.mark.asyncio
 async def test_default_tavily_filters_sorts_deduplicates_before_limit(monkeypatch, tmp_path):
-    calls = install(monkeypatch, {"request_id": "req-1", "results": [
-        item("https://outside.example/x"), item("https://nea.gov.cn.evil.org/x"),
-        item("https://reuters.com/news"), item("https://iea.org/data"),
-        item("https://www.nea.gov.cn/solar"), item("https://www.nea.gov.cn/solar#copy"),
-        item("https://stats.gov.cn/data"),
-    ]})
+    calls = install(
+        monkeypatch,
+        {
+            "request_id": "req-1",
+            "results": [
+                item("https://outside.example/x"),
+                item("https://nea.gov.cn.evil.org/x"),
+                item("https://reuters.com/news"),
+                item("https://iea.org/data"),
+                item("https://www.nea.gov.cn/solar"),
+                item("https://www.nea.gov.cn/solar#copy"),
+                item("https://stats.gov.cn/data"),
+            ],
+        },
+    )
     result = await execute(tmp_path, max_results=2)
     assert not result.is_error and result.metadata["search_provider"] == "tavily"
     assert [s["locator"] for s in result.metadata["research_source_specs"]] == [
-        "https://www.nea.gov.cn/solar", "https://stats.gov.cn/data"]
+        "https://www.nea.gov.cn/solar",
+        "https://stats.gov.cn/data",
+    ]
     assert result.metadata["request_ids"] == ["req-1"]
     assert result.metadata["research_source_specs"][0]["published_at"] == "2026-10-01"
     url, args = calls[0]
@@ -77,8 +93,17 @@ async def test_macro_domains_and_explicit_web(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(401,"authentication"), (429,"rate_limit"), (432,"quota"),
-                                         (433,"quota"), (422,"invalid_request"), (500,"upstream")])
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        (401, "authentication"),
+        (429, "rate_limit"),
+        (432, "quota"),
+        (433, "quota"),
+        (422, "invalid_request"),
+        (500, "upstream"),
+    ],
+)
 async def test_http_failure_is_safe_explicit_and_not_retried(monkeypatch, tmp_path, status, code):
     calls = install(monkeypatch, {"detail": "test-tavily-secret upstream echo"}, status)
     result = await execute(tmp_path)
@@ -112,7 +137,7 @@ async def test_missing_key_and_precedence(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_batch_deadline_keeps_results_and_cancels_requests(monkeypatch):
-    monkeypatch.setattr(tavily, "SEARCH_TIMEOUT", .04)
+    monkeypatch.setattr(tavily, "SEARCH_TIMEOUT", 0.04)
     calls, cancelled = [], []
     active = peak = 0
 
@@ -131,7 +156,9 @@ async def test_batch_deadline_keeps_results_and_cancels_requests(monkeypatch):
             cancelled.append(group[0])
 
     monkeypatch.setattr(tavily, "fetch_public_http_response", fetch)
-    results = await tavily.search_tavily("topic", domains=[f"site{i}.example" for i in range(1000)], category="all")
+    results = await tavily.search_tavily(
+        "topic", domains=[f"site{i}.example" for i in range(1000)], category="all"
+    )
     assert len(results) == 4 and results[0].candidates
     assert all(b.error_code == "timeout" for b in results[1:])
     assert peak == 2 and active == 0 and len(calls) == len(cancelled) == 3
@@ -144,7 +171,11 @@ async def test_custom_html_endpoint_never_receives_tavily_credentials(monkeypatc
 
     async def fetch(url, **kwargs):
         calls.append(kwargs)
-        return httpx.Response(200, text='<div class="no-results">No results found</div>', request=httpx.Request("GET", url))
+        return httpx.Response(
+            200,
+            text='<div class="no-results">No results found</div>',
+            request=httpx.Request("GET", url),
+        )
 
     monkeypatch.setattr("openharness.tools.web_search_tool.fetch_public_http_response", fetch)
     result = await execute(tmp_path, search_url="https://custom.example/search", scope="web")
@@ -156,6 +187,7 @@ async def test_custom_html_endpoint_never_receives_tavily_credentials(monkeypatc
 async def test_html_challenge_is_not_reported_as_empty(monkeypatch, tmp_path):
     async def fetch(url, **kwargs):
         return httpx.Response(200, text="captcha challenge", request=httpx.Request("GET", url))
+
     monkeypatch.setattr("openharness.tools.web_search_tool.fetch_public_http_response", fetch)
     result = await execute(tmp_path, search_url="https://custom.example/search", scope="web")
     assert result.is_error and result.metadata["error_codes"] == ["invalid_response"]

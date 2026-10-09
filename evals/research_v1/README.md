@@ -23,3 +23,8 @@ oh eval validate --dataset evals/research_v1
 日常评测只读冻结素材。`build_dataset.py` 与 `recipes.py` 是显式数据集编写工具，重新生成需要原始 PDF；生成后必须重新校验并使用新版本，不能修改旧实验归档。`source_checked` 表示标注已绑定并核对原文，不表示专家人工评分已完成。
 
 运行、配置、Langfuse 补传及四维评分见[评测文档](../../docs/agent-evaluation.md)。正式基线需要冻结代码、完成真实执行及独立评分，另行完成 40 条人工校准；本任务集不包含虚构的达标结果。
+
+Skill 包迁移后，公司深度路径要求先调用 `earnings-forecast` 生成预测，再由
+`deep-investment-report/scripts/assemble_report.py` 消费结果；原 `forecast.py` 名称
+仍指向预测计算。全业务禁用场景使用两个包 ID，旧单项 ID 的配置兼容由 Loader 保留。
+本次仅更新执行路径与禁用配置，固定素材和数值金标保持原值；数据集版本将据此改变。

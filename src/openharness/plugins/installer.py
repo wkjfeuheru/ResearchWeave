@@ -27,6 +27,15 @@ def install_plugin_from_path(source: str | Path) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
+    # Installation is an explicit resource operation, separate from L0 discovery.
+    from openharness.skills.loader import load_skills_from_dirs
+    from openharness.skills.metadata import content_hash
+
+    for skill in load_skills_from_dirs([dest / "skills"], source="plugin", create_missing=False):
+        try:
+            content_hash(Path(skill.path or "."), verify=True)
+        except (OSError, ValueError):
+            pass  # A resource/hash issue must not break otherwise legitimate installation.
     return dest
 
 

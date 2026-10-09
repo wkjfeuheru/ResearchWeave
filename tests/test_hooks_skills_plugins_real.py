@@ -33,9 +33,12 @@ RESULTS: dict[str, tuple[bool, float]] = {}
 
 def collect(events):
     from openharness.engine.stream_events import (
-        AssistantTextDelta, AssistantTurnComplete,
-        ToolExecutionStarted, ToolExecutionCompleted,
+        AssistantTextDelta,
+        AssistantTurnComplete,
+        ToolExecutionStarted,
+        ToolExecutionCompleted,
     )
+
     r = {"text": "", "tools": [], "tool_errors": [], "turns": 0}
     for ev in events:
         if isinstance(ev, AssistantTextDelta):
@@ -57,7 +60,9 @@ def collect(events):
 # and switches to glob/grep instead. This tests that hooks actually
 # change model behavior in the loop.
 # ====================================================================
-@pytest.mark.skipif(not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent")
+@pytest.mark.skipif(
+    not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent"
+)
 async def task_hook_blocks_model_adapts():
     print("=" * 70)
     print("  Task 1: Hook blocks bash → model must adapt to glob/grep")
@@ -82,16 +87,24 @@ async def task_hook_blocks_model_adapts():
 
     # Hook: BLOCK all bash usage
     hook_reg = HookRegistry()
-    hook_reg.register(HookEvent.PRE_TOOL_USE, CommandHookDefinition(
-        type="command",
-        command="exit 1",  # Always fails → blocks
-        matcher="bash",
-        block_on_failure=True,
-        timeout_seconds=5,
-    ))
-    hook_exec = HookExecutor(hook_reg, HookExecutionContext(
-        cwd=WORKSPACE, api_client=api, default_model=MODEL,
-    ))
+    hook_reg.register(
+        HookEvent.PRE_TOOL_USE,
+        CommandHookDefinition(
+            type="command",
+            command="exit 1",  # Always fails → blocks
+            matcher="bash",
+            block_on_failure=True,
+            timeout_seconds=5,
+        ),
+    )
+    hook_exec = HookExecutor(
+        hook_reg,
+        HookExecutionContext(
+            cwd=WORKSPACE,
+            api_client=api,
+            default_model=MODEL,
+        ),
+    )
 
     reg = ToolRegistry()
     for t in [BashTool(), FileReadTool(), GlobTool(), GrepTool()]:
@@ -99,8 +112,12 @@ async def task_hook_blocks_model_adapts():
     checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
 
     engine = QueryEngine(
-        api_client=api, tool_registry=reg, permission_checker=checker,
-        cwd=WORKSPACE, model=MODEL, max_tokens=2048,
+        api_client=api,
+        tool_registry=reg,
+        permission_checker=checker,
+        cwd=WORKSPACE,
+        model=MODEL,
+        max_tokens=2048,
         system_prompt=(
             "You are a code explorer. You have bash, read_file, glob, and grep tools. "
             "If a tool fails or is blocked, try a different tool to accomplish the same goal. "
@@ -127,7 +144,9 @@ async def task_hook_blocks_model_adapts():
     used_alternative = "glob" in r["tools"] or "grep" in r["tools"]
     has_answer = any(c.isdigit() for c in r["text"])  # found a count
 
-    print(f"\n  bash blocked: {bash_blocked}, used alternative: {used_alternative}, got answer: {has_answer}")
+    print(
+        f"\n  bash blocked: {bash_blocked}, used alternative: {used_alternative}, got answer: {has_answer}"
+    )
     ok = bash_blocked and used_alternative and has_answer
     print(f"  RESULT: {'PASS' if ok else 'FAIL'}")
     return ok
@@ -140,7 +159,9 @@ async def task_hook_blocks_model_adapts():
 # content drives what the model does next. This tests the full
 # skill tool → load → return content → model acts on it loop.
 # ====================================================================
-@pytest.mark.skipif(not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent")
+@pytest.mark.skipif(
+    not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent"
+)
 async def task_model_invokes_skill_tool():
     print("\n" + "=" * 70)
     print("  Task 2: Model invokes skill tool, then follows skill instructions")
@@ -192,8 +213,12 @@ When performing a code review, follow these exact steps:
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
 
         engine = QueryEngine(
-            api_client=api, tool_registry=reg, permission_checker=checker,
-            cwd=WORKSPACE, model=MODEL, max_tokens=2048,
+            api_client=api,
+            tool_registry=reg,
+            permission_checker=checker,
+            cwd=WORKSPACE,
+            model=MODEL,
+            max_tokens=2048,
             system_prompt=(
                 "You are a code reviewer. You have a 'skill' tool that provides review checklists. "
                 "ALWAYS start by invoking the skill tool with the relevant skill name to get instructions, "
@@ -233,7 +258,9 @@ When performing a code review, follow these exact steps:
 # A plugin is loaded with a custom skill. The model uses the skill
 # tool to access the plugin's skill content, then acts on it.
 # ====================================================================
-@pytest.mark.skipif(not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent")
+@pytest.mark.skipif(
+    not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent"
+)
 async def task_plugin_skill_in_agent_loop():
     print("\n" + "=" * 70)
     print("  Task 3: Plugin-provided skill used through skill tool in agent loop")
@@ -256,12 +283,16 @@ async def task_plugin_skill_in_agent_loop():
         # Create a plugin with a skill
         plugin_dir = Path(tmpdir) / "plugins" / "security-scanner"
         plugin_dir.mkdir(parents=True)
-        (plugin_dir / "plugin.json").write_text(json.dumps({
-            "name": "security-scanner",
-            "version": "1.0.0",
-            "description": "Security scanning plugin",
-            "skills_dir": "skills",
-        }))
+        (plugin_dir / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "security-scanner",
+                    "version": "1.0.0",
+                    "description": "Security scanning plugin",
+                    "skills_dir": "skills",
+                }
+            )
+        )
         plugin_skills = plugin_dir / "skills"
         scan_secrets_dir = plugin_skills / "scan-secrets"
         scan_secrets_dir.mkdir(parents=True)
@@ -283,6 +314,7 @@ To scan for hardcoded secrets:
 
         # Load plugin and make its skills available
         from openharness.plugins.loader import load_plugin
+
         plugin = load_plugin(plugin_dir, enabled_plugins={})
         print(f"  Plugin loaded: {plugin.name}, skills: {[s.name for s in plugin.skills]}")
 
@@ -297,8 +329,12 @@ To scan for hardcoded secrets:
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
 
         engine = QueryEngine(
-            api_client=api, tool_registry=reg, permission_checker=checker,
-            cwd=WORKSPACE, model=MODEL, max_tokens=2048,
+            api_client=api,
+            tool_registry=reg,
+            permission_checker=checker,
+            cwd=WORKSPACE,
+            model=MODEL,
+            max_tokens=2048,
             system_prompt=(
                 "You are a security analyst. You have a 'skill' tool that provides scanning procedures. "
                 "Start by loading the 'scan-secrets' skill, then follow its procedure to scan the autoagent/ codebase. "
@@ -322,9 +358,13 @@ To scan for hardcoded secrets:
 
         skill_invoked = "skill" in r["tools"]
         did_grep = "grep" in r["tools"]
-        has_findings = any(kw in r["text"].lower() for kw in ["password", "secret", "token", "api_key", "key"])
+        has_findings = any(
+            kw in r["text"].lower() for kw in ["password", "secret", "token", "api_key", "key"]
+        )
 
-        print(f"\n  skill invoked: {skill_invoked}, did grep: {did_grep}, has findings: {has_findings}")
+        print(
+            f"\n  skill invoked: {skill_invoked}, did grep: {did_grep}, has findings: {has_findings}"
+        )
         ok = skill_invoked and did_grep and has_findings
         print(f"  RESULT: {'PASS' if ok else 'FAIL'}")
         return ok
@@ -337,7 +377,9 @@ To scan for hardcoded secrets:
 # certain paths), skill provides a refactoring checklist, model follows
 # it, encounters hook block on protected path, adapts.
 # ====================================================================
-@pytest.mark.skipif(not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent")
+@pytest.mark.skipif(
+    not Path("/home/tangjiabin/AutoAgent").exists(), reason="Needs real API + AutoAgent"
+)
 async def task_hook_gates_writes_skill_guides():
     print("\n" + "=" * 70)
     print("  Task 4: Hook gates file writes + skill guides refactoring workflow")
@@ -384,7 +426,7 @@ description: Guide for safe refactoring
         # Create a file to refactor
         work_dir = Path(tmpdir) / "work"
         work_dir.mkdir()
-        (work_dir / "utils.py").write_text('''def process(data):
+        (work_dir / "utils.py").write_text("""def process(data):
     result = []
     for item in data:
         if item > 0:
@@ -397,7 +439,7 @@ def process_v2(data):
         if item > 0:
             result.append(item * 2)
     return result
-''')
+""")
         # Protected file that hook will block writes to
         (work_dir / "config.py").write_text('SECRET = "do-not-touch"\n')
 
@@ -408,33 +450,55 @@ def process_v2(data):
 
         # Hook: block writes to config.py
         hook_reg = HookRegistry()
-        hook_reg.register(HookEvent.PRE_TOOL_USE, CommandHookDefinition(
-            type="command",
-            command='echo "$TOOL_INPUT" | grep -q "config.py" && exit 1 || exit 0',
-            matcher="write_file",
-            block_on_failure=True,
-            timeout_seconds=5,
-        ))
-        hook_reg.register(HookEvent.PRE_TOOL_USE, CommandHookDefinition(
-            type="command",
-            command='echo "$TOOL_INPUT" | grep -q "config.py" && exit 1 || exit 0',
-            matcher="edit_file",
-            block_on_failure=True,
-            timeout_seconds=5,
-        ))
-        hook_exec = HookExecutor(hook_reg, HookExecutionContext(
-            cwd=work_dir, api_client=api, default_model=MODEL,
-        ))
+        hook_reg.register(
+            HookEvent.PRE_TOOL_USE,
+            CommandHookDefinition(
+                type="command",
+                command='echo "$TOOL_INPUT" | grep -q "config.py" && exit 1 || exit 0',
+                matcher="write_file",
+                block_on_failure=True,
+                timeout_seconds=5,
+            ),
+        )
+        hook_reg.register(
+            HookEvent.PRE_TOOL_USE,
+            CommandHookDefinition(
+                type="command",
+                command='echo "$TOOL_INPUT" | grep -q "config.py" && exit 1 || exit 0',
+                matcher="edit_file",
+                block_on_failure=True,
+                timeout_seconds=5,
+            ),
+        )
+        hook_exec = HookExecutor(
+            hook_reg,
+            HookExecutionContext(
+                cwd=work_dir,
+                api_client=api,
+                default_model=MODEL,
+            ),
+        )
 
         reg = ToolRegistry()
-        for t in [BashTool(), FileReadTool(), FileWriteTool(), FileEditTool(),
-                  GlobTool(), GrepTool(), SkillTool()]:
+        for t in [
+            BashTool(),
+            FileReadTool(),
+            FileWriteTool(),
+            FileEditTool(),
+            GlobTool(),
+            GrepTool(),
+            SkillTool(),
+        ]:
             reg.register(t)
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
 
         engine = QueryEngine(
-            api_client=api, tool_registry=reg, permission_checker=checker,
-            cwd=work_dir, model=MODEL, max_tokens=2048,
+            api_client=api,
+            tool_registry=reg,
+            permission_checker=checker,
+            cwd=work_dir,
+            model=MODEL,
+            max_tokens=2048,
             system_prompt=(
                 "You are a developer. Use the 'skill' tool to load refactoring instructions. "
                 "Follow them precisely. If a write is blocked by a hook, skip that file and explain why."
@@ -511,11 +575,12 @@ async def main():
             RESULTS[name] = (False, time.time() - t0)
             print(f"\n  EXCEPTION: {e}")
             import traceback
+
             traceback.print_exc()
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("  FINAL RESULTS — Hooks/Skills/Plugins in Real Agent Loops")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     passed = sum(1 for ok, _ in RESULTS.values() if ok)
     for name, (ok, elapsed) in RESULTS.items():
         print(f"  {'PASS' if ok else 'FAIL'}  {name}  [{elapsed:.1f}s]")

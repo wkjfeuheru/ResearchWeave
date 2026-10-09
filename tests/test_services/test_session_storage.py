@@ -61,7 +61,9 @@ def test_export_session_markdown(tmp_path: Path, monkeypatch):
     assert "world" in content
 
 
-def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(tmp_path: Path, monkeypatch):
+def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()

@@ -6,10 +6,12 @@ import asyncio
 import re
 import shutil
 from pathlib import Path
+from typing import Iterable
 
 from pydantic import BaseModel, Field
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.research.errors import ResearchError
 
 
 class GrepToolInput(BaseModel):
@@ -26,7 +28,7 @@ class GrepToolInput(BaseModel):
     timeout_seconds: int = Field(default=20, ge=1, le=120)
 
 
-class GrepTool(BaseTool):
+class GrepTool(BaseTool[GrepToolInput]):
     """Search text files for a regex pattern."""
 
     name = "grep"
@@ -38,7 +40,15 @@ class GrepTool(BaseTool):
         return True
 
     async def execute(self, arguments: GrepToolInput, context: ToolExecutionContext) -> ToolResult:
-        root = _resolve_path(context.cwd, arguments.root) if arguments.root else context.cwd
+        context = ToolExecutionContext.from_context(context)
+        try:
+            context.validate_search_pattern(arguments.file_glob)
+            if context.workspace_runtime() and Path(arguments.file_glob).is_absolute():
+                context.resolve_path(arguments.file_glob)
+                raise ResearchError("Research grep file_glob must be relative to its root")
+            root = context.resolve_path(arguments.root)
+        except (ResearchError, OSError) as exc:
+            return ToolResult(output=str(exc), is_error=True)
         if not root.exists():
             return ToolResult(
                 output=(
@@ -71,13 +81,17 @@ class GrepTool(BaseTool):
             )
 
         # Prefer ripgrep for performance; fallback to Python when unavailable.
-        matches = await _rg_grep(
-            root=root,
-            pattern=arguments.pattern,
-            file_glob=arguments.file_glob,
-            case_sensitive=arguments.case_sensitive,
-            limit=arguments.limit,
-            timeout_seconds=arguments.timeout_seconds,
+        matches = (
+            None
+            if context.metadata.get("subagent_output_dir")
+            else await _rg_grep(
+                root=root,
+                pattern=arguments.pattern,
+                file_glob=arguments.file_glob,
+                case_sensitive=arguments.case_sensitive,
+                limit=arguments.limit,
+                timeout_seconds=arguments.timeout_seconds,
+            )
         )
         if matches is not None:
             return _format_rg_result(matches, arguments.timeout_seconds)
@@ -85,7 +99,7 @@ class GrepTool(BaseTool):
         # Python fallback (kept for portability).
         return ToolResult(
             output=_python_grep_files(
-                paths=root.glob(arguments.file_glob),
+                paths=context.safe_search_paths(root.glob(arguments.file_glob)),
                 pattern=arguments.pattern,
                 case_sensitive=arguments.case_sensitive,
                 limit=arguments.limit,
@@ -104,7 +118,7 @@ def _display_base(path: Path, cwd: Path) -> Path:
 
 def _python_grep_files(
     *,
-    paths,
+    paths: Iterable[Path],
     pattern: str,
     case_sensitive: bool,
     limit: int,

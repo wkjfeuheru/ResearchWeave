@@ -60,7 +60,10 @@ def _load_creds_file() -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Invalid credentials record")
+        return data
     except (json.JSONDecodeError, OSError) as exc:
         log.warning("Failed to read credentials file: %s", exc)
         return {}
@@ -119,7 +122,9 @@ def _keyring_key(provider: str, key: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def store_credential(provider: str, key: str, value: str, *, use_keyring: bool | None = None) -> None:
+def store_credential(
+    provider: str, key: str, value: str, *, use_keyring: bool | None = None
+) -> None:
     """Persist a credential for *provider* under *key*.
 
     If *use_keyring* is not set, keyring is used when available.
@@ -160,7 +165,8 @@ def load_credential(provider: str, key: str, *, use_keyring: bool | None = None)
             log.warning("Keyring load failed, falling back to file: %s", exc)
 
     data = _load_creds_file()
-    return data.get(provider, {}).get(key)
+    value = data.get(provider, {}).get(key)
+    return value if isinstance(value, str) else None
 
 
 def clear_provider_credentials(provider: str, *, use_keyring: bool | None = None) -> None:

@@ -104,7 +104,7 @@ class EvalCase(Record):
     review_status: Literal["rule_checked", "source_checked", "human_reviewed"]
 
     @model_validator(mode="after")
-    def complete(self):
+    def complete(self) -> EvalCase:
         if self.environment == "fixed" and not self.assets:
             raise ValueError("Fixed cases need frozen assets")
         if self.environment == "live" and not self.live_urls:
@@ -122,7 +122,7 @@ class EvalCase(Record):
             raise ValueError("Unknown requirement source IDs")
         return self
 
-    def agent_input(self) -> dict:
+    def agent_input(self) -> dict[str, object]:
         """Only this projection may be passed to the agent."""
         return {
             "id": self.id,

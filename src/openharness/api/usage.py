@@ -1,4 +1,5 @@
 """Provider-neutral token accounting, including optional cache telemetry."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -43,23 +44,30 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
 
 def usage_from_provider(value: Any, provider: str) -> UsageSnapshot:
     """Normalize a final/cumulative provider snapshot; absent is distinct from zero."""
-    output = int(_field(value, 'output_tokens' if provider != 'openai' else 'completion_tokens', 0) or 0)
-    total = int(_field(value, 'input_tokens' if provider != 'openai' else 'prompt_tokens', 0) or 0)
-    if provider == 'anthropic':
-        read = _field(value, 'cache_read_input_tokens')
-        write = _field(value, 'cache_creation_input_tokens')
+    output = int(
+        _field(value, "output_tokens" if provider != "openai" else "completion_tokens", 0) or 0
+    )
+    total = int(_field(value, "input_tokens" if provider != "openai" else "prompt_tokens", 0) or 0)
+    if provider == "anthropic":
+        read = _field(value, "cache_read_input_tokens")
+        write = _field(value, "cache_creation_input_tokens")
         total += int(read or 0) + int(write or 0)
     else:
-        details = _field(value, 'input_tokens_details' if provider == 'responses' else 'prompt_tokens_details')
-        read = _field(details, 'cached_tokens')
-        if read is None and provider == 'openai':
-            read = _field(value, 'prompt_cache_hit_tokens')
-        write = _field(details, 'cache_write_tokens')
+        details = _field(
+            value, "input_tokens_details" if provider == "responses" else "prompt_tokens_details"
+        )
+        read = _field(details, "cached_tokens")
+        if read is None and provider == "openai":
+            read = _field(value, "prompt_cache_hit_tokens")
+        write = _field(details, "cache_write_tokens")
     return UsageSnapshot(
-        input_tokens=total, output_tokens=output,
-        usage_reported=value is not None and (
-            _field(value, 'prompt_tokens' if provider == 'openai' else 'input_tokens') is not None
-            or _field(value, 'completion_tokens' if provider == 'openai' else 'output_tokens') is not None
+        input_tokens=total,
+        output_tokens=output,
+        usage_reported=value is not None
+        and (
+            _field(value, "prompt_tokens" if provider == "openai" else "input_tokens") is not None
+            or _field(value, "completion_tokens" if provider == "openai" else "output_tokens")
+            is not None
         ),
         cache_read_input_tokens=int(read) if read is not None else None,
         cache_creation_input_tokens=int(write) if write is not None else None,

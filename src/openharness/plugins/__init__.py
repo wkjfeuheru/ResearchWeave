@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
+    from openharness.plugins.loader import (
+        discover_plugin_paths as discover_plugin_paths,
+        get_project_plugins_dir as get_project_plugins_dir,
+        get_user_plugins_dir as get_user_plugins_dir,
+        load_plugins as load_plugins,
+    )
     from openharness.plugins.schemas import PluginManifest
     from openharness.plugins.types import LoadedPlugin
 
@@ -20,8 +26,13 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
-    if name in {"discover_plugin_paths", "get_project_plugins_dir", "get_user_plugins_dir", "load_plugins"}:
+def __getattr__(name: str) -> object:
+    if name in {
+        "discover_plugin_paths",
+        "get_project_plugins_dir",
+        "get_user_plugins_dir",
+        "load_plugins",
+    }:
         from openharness.plugins.loader import (
             discover_plugin_paths,
             get_project_plugins_dir,

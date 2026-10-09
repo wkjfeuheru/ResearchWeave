@@ -1,5 +1,15 @@
 """Frozen external-tool adapters and evaluation-only workspace boundaries."""
 
+from __future__ import annotations
+
+from typing import TypeVar, TYPE_CHECKING, cast
+from pydantic import BaseModel
+from openharness.tools.base import ToolExecutionContext
+from openharness.tools.bash_tool import BashToolInput
+from openharness.tools.glob_tool import GlobToolInput
+from openharness.tools.grep_tool import GrepToolInput
+from openharness.tools.web_fetch_tool import WebFetchToolInput
+from openharness.evaluation.models import SourceAsset, Fault, EvalCase
 import asyncio
 import ast
 import json
@@ -7,12 +17,14 @@ import shlex
 import sys
 from dataclasses import replace
 from pathlib import Path
-
-
 from openharness.tools.base import BaseTool, ToolResult
 
+if TYPE_CHECKING:
+    from openharness.runtime import RuntimeBundle
+InputT = TypeVar("InputT", bound=BaseModel)
 
-def denied(message):
+
+def denied(message: str) -> ToolResult:
     return ToolResult(
         output=message,
         is_error=True,
@@ -20,8 +32,10 @@ def denied(message):
     )
 
 
-class FrozenExternalTool(BaseTool):
-    def __init__(self, original, assets, workspace):
+class FrozenExternalTool(BaseTool[InputT]):
+    def __init__(
+        self, original: BaseTool[InputT], assets: list[SourceAsset], workspace: Path
+    ) -> None:
         self.name, self.description, self.input_model = (
             original.name,
             original.description,
@@ -29,10 +43,10 @@ class FrozenExternalTool(BaseTool):
         )
         self.assets, self.workspace = assets, workspace
 
-    def is_read_only(self, arguments):
+    def is_read_only(self, arguments: InputT) -> bool:
         return True
 
-    async def execute(self, arguments, context):
+    async def execute(self, arguments: InputT, context: ToolExecutionContext) -> ToolResult:
         assets = [
             a for a in self.assets if (self.workspace / "materials" / Path(a.path).name).is_file()
         ]
@@ -64,7 +78,7 @@ class FrozenExternalTool(BaseTool):
         else:
             text = path.read_text(encoding="utf-8")
         if self.name == "web_fetch":
-            text = text[: arguments.max_chars]
+            text = text[: WebFetchToolInput.model_validate(arguments.model_dump()).max_chars]
         return ToolResult(
             output=text,
             metadata={
@@ -82,10 +96,12 @@ class FrozenExternalTool(BaseTool):
         )
 
 
-class WorkspaceTool(BaseTool):
+class WorkspaceTool(BaseTool[InputT]):
     """Limit data reads to staged inputs and skill resources; never expose gold."""
 
-    def __init__(self, original, workspace, resource_roots):
+    def __init__(
+        self, original: BaseTool[InputT], workspace: Path, resource_roots: list[Path]
+    ) -> None:
         self.original = original
         self.name, self.description, self.input_model = (
             original.name,
@@ -95,10 +111,10 @@ class WorkspaceTool(BaseTool):
         self.workspace = workspace.resolve()
         self.resource_roots = [Path(p).resolve() for p in resource_roots]
 
-    def is_read_only(self, arguments):
+    def is_read_only(self, arguments: InputT) -> bool:
         return self.original.is_read_only(arguments)
 
-    def allowed(self, value, *, write=False):
+    def allowed(self, value: str | Path, *, write: bool = False) -> bool:
         path = Path(value).expanduser()
         path = (self.workspace / path).resolve() if not path.is_absolute() else path.resolve()
         if write and (
@@ -118,15 +134,20 @@ class WorkspaceTool(BaseTool):
             not write and any(path.is_relative_to(root) for root in self.resource_roots)
         )
 
-    async def execute(self, arguments, context):
+    async def execute(self, arguments: InputT, context: ToolExecutionContext) -> ToolResult:
         if self.name == "glob":
             from openharness.tools.glob_tool import _resolve_glob_request
 
-            root, _ = _resolve_glob_request(self.workspace, arguments.root, arguments.pattern)
+            root, _ = _resolve_glob_request(
+                self.workspace,
+                GlobToolInput.model_validate(arguments.model_dump()).root,
+                GlobToolInput.model_validate(arguments.model_dump()).pattern,
+            )
             if not self.allowed(str(root)):
                 return denied("评测检索范围不能越过任务工作区与技能资源。")
         if self.name == "grep" and (
-            Path(arguments.file_glob).is_absolute() or ".." in Path(arguments.file_glob).parts
+            Path(GrepToolInput.model_validate(arguments.model_dump()).file_glob).is_absolute()
+            or ".." in Path(GrepToolInput.model_validate(arguments.model_dump()).file_glob).parts
         ):
             return denied("评测检索范围不能越过任务工作区与技能资源。")
         for field in ("path", "file_path", "notebook_path", "cwd", "root"):
@@ -138,14 +159,21 @@ class WorkspaceTool(BaseTool):
         return await self.original.execute(arguments, context)
 
 
-class RestrictedPythonTool(WorkspaceTool):
+class RestrictedPythonTool(WorkspaceTool[BashToolInput]):
     """No shell is launched in fixed evaluations: only validated deterministic Python."""
 
-    def __init__(self, original, workspace, resource_roots, *, allow_network=False):
+    def __init__(
+        self,
+        original: BaseTool[BashToolInput],
+        workspace: Path,
+        resource_roots: list[Path],
+        *,
+        allow_network: bool = False,
+    ) -> None:
         super().__init__(original, workspace, resource_roots)
         self.allow_network = allow_network
 
-    def _inline_allowed(self, code):
+    def _inline_allowed(self, code: str) -> bool:
         tree = ast.parse(code)
         safe_modules = {
             "json",
@@ -194,7 +222,7 @@ class RestrictedPythonTool(WorkspaceTool):
                     return False
         return True
 
-    async def execute(self, arguments, context):
+    async def execute(self, arguments: BashToolInput, context: ToolExecutionContext) -> ToolResult:
         try:
             tokens = shlex.split(arguments.command)
         except ValueError:
@@ -245,7 +273,8 @@ class RestrictedPythonTool(WorkspaceTool):
                     and self._inline_allowed(script.read_text())
                 )
                 if (
-                    not args
+                    script is None
+                    or not args
                     or not self.allowed(args[0])
                     or not (
                         generated
@@ -265,7 +294,10 @@ class RestrictedPythonTool(WorkspaceTool):
             code = bootstrap(
                 self.workspace, self.resource_roots, args, allow_network=self.allow_network
             )
-            # The bootstrap installs filesystem and socket audit restrictions before running code.
+            if context.workspace_runtime() is not None:
+                # Report runs must use the real owned OS sandbox, including fixed evaluations.
+                return await self.original.execute(arguments, context)
+            # Legacy evaluations retain the deterministic Python audit guard.
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",
@@ -277,10 +309,16 @@ class RestrictedPythonTool(WorkspaceTool):
                     "PATH": str(Path(sys.executable).parent),
                     "OPENHARNESS_RESEARCH_SESSION_DIR": str(
                         context.metadata["research_store"].directory
+                        if context.metadata.get("research_store")
+                        else self.workspace / "session-state"
                     ),
                     "OPENHARNESS_RESEARCH_TASK_ID": str(
-                        context.metadata["research_store"].load().research_state.current_task_id
-                        or ""
+                        (
+                            context.metadata["research_store"].load().research_state.current_task_id
+                            or ""
+                        )
+                        if context.metadata.get("research_store")
+                        else ""
                     ),
                 },
             )
@@ -305,8 +343,8 @@ class RestrictedPythonTool(WorkspaceTool):
             return denied("Python 调用格式无效。")
 
 
-class FaultTool(BaseTool):
-    def __init__(self, original, faults):
+class FaultTool(BaseTool[InputT]):
+    def __init__(self, original: BaseTool[InputT], faults: list[Fault]) -> None:
         self.original, self.faults = original, faults
         self.name, self.description, self.input_model = (
             original.name,
@@ -315,10 +353,10 @@ class FaultTool(BaseTool):
         )
         self.calls = 0
 
-    def is_read_only(self, arguments):
+    def is_read_only(self, arguments: InputT) -> bool:
         return self.original.is_read_only(arguments)
 
-    async def execute(self, arguments, context):
+    async def execute(self, arguments: InputT, context: ToolExecutionContext) -> ToolResult:
         self.calls += 1
         fault = next((f for f in self.faults if f.occurrence == self.calls), None)
         if fault and fault.kind == "investigation_timeout":
@@ -336,14 +374,16 @@ class FaultTool(BaseTool):
         return await self.original.execute(arguments, context)
 
 
-def configure_tools(bundle, case, workspace, resource_roots):
+def configure_tools(
+    bundle: RuntimeBundle, case: EvalCase, workspace: Path, resource_roots: list[Path]
+) -> None:
     registry = bundle.tool_registry
     if case.environment == "fixed":
         from openharness.mcp.types import McpToolInfo
         from openharness.tools.mcp_tool import McpToolAdapter
 
         class ReplayManager:
-            async def call_tool(self, server, name, arguments):
+            async def call_tool(self, server: str, name: str, arguments: dict[str, object]) -> str:
                 from openharness.mcp.client import McpToolReturnedError
 
                 selected = next((a for a in case.assets if a.locator == arguments.get("uri")), None)
@@ -403,8 +443,14 @@ def configure_tools(bundle, case, workspace, resource_roots):
             continue
         tool = original
         if original.name == "bash":
-            tool = RestrictedPythonTool(
-                original, workspace, resource_roots, allow_network=case.environment == "live"
+            tool = cast(
+                BaseTool[BaseModel],
+                RestrictedPythonTool(
+                    cast(BaseTool[BashToolInput], original),
+                    workspace,
+                    resource_roots,
+                    allow_network=case.environment == "live",
+                ),
             )
         elif original.name in {
             "read_file",
@@ -431,7 +477,12 @@ def configure_tools(bundle, case, workspace, resource_roots):
             ):
                 tool = FrozenExternalTool(original, case.assets, workspace)
             elif original.name == "bash":
-                tool = RestrictedPythonTool(original, workspace, resource_roots)
+                tool = cast(
+                    BaseTool[BaseModel],
+                    RestrictedPythonTool(
+                        cast(BaseTool[BashToolInput], original), workspace, resource_roots
+                    ),
+                )
             elif original.name in {"image_generate", "image_to_text"}:
                 registry.unregister(original.name)
                 continue
@@ -448,4 +499,7 @@ def configure_tools(bundle, case, workspace, resource_roots):
         faults = [f for f in case.faults if f.tool == original.name]
         if faults:
             tool = FaultTool(tool, faults)
-        registry.register(tool)
+        if tool is not original:
+            # Trusted evaluation adapters are an explicit host replacement, never a plugin override.
+            registry.unregister(original.name)
+            registry.register(tool)

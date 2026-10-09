@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "pydantic>=2.0.0", "pyyaml>=6.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -21,6 +21,7 @@ dependencies = [
     "typer>=0.12.0",
     "pydantic>=2.0.0",
     "httpx>=0.27.0",
+    "async-timeout>=4.0,<6; python_version < '3.11'",
     "websockets>=12.0",
     "mcp>=1.0.0,<2.0.0",
     "pyyaml>=6.0",
@@ -46,6 +47,13 @@ dev = [
     "pytest-cov>=5.0.0",
     "ruff>=0.5.0",
     "mypy>=1.10.0",
+    "types-PyYAML",
+    "types-openpyxl",
+    "types-python-dateutil",
+    "types-pexpect",
+    "distro",
+    "keyring",
+    "hatchling>=1.27",
 ]
 
 [project.scripts]

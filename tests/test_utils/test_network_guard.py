@@ -157,15 +157,27 @@ async def test_fetch_public_http_response_rejects_non_public_redirect_in_proxy_m
 @pytest.mark.asyncio
 async def test_bounded_download_decodes_once_and_checks_redirect_targets(monkeypatch):
     import gzip
-    transport = httpx.MockTransport(lambda req: httpx.Response(
-        302, headers={"location": "https://example.com/final"}, request=req
-    ) if req.url.path == "/start" else httpx.Response(
-        200, headers={"content-encoding": "gzip"}, content=gzip.compress(b"%PDF-test-content"), request=req
-    ))
+
+    transport = httpx.MockTransport(
+        lambda req: (
+            httpx.Response(302, headers={"location": "https://example.com/final"}, request=req)
+            if req.url.path == "/start"
+            else httpx.Response(
+                200,
+                headers={"content-encoding": "gzip"},
+                content=gzip.compress(b"%PDF-test-content"),
+                request=req,
+            )
+        )
+    )
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs))
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
+    )
+
     async def allowed(host, port):
         return {ipaddress.ip_address("8.8.8.8")}
+
     monkeypatch.setattr("openharness.utils.network_guard._resolve_host_addresses", allowed)
     response = await fetch_public_http_response("https://example.com/start", max_bytes=100)
     assert response.content == b"%PDF-test-content" and str(response.url).endswith("/final")
@@ -176,14 +188,22 @@ async def test_bounded_download_decodes_once_and_checks_redirect_targets(monkeyp
 @pytest.mark.asyncio
 async def test_bounded_download_rejects_private_redirect_before_fetch(monkeypatch):
     seen = []
+
     def respond(request):
         seen.append(str(request.url))
-        return httpx.Response(302, headers={"location": "http://127.0.0.1/private.pdf"}, request=request)
+        return httpx.Response(
+            302, headers={"location": "http://127.0.0.1/private.pdf"}, request=request
+        )
+
     transport = httpx.MockTransport(respond)
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs))
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport, **kwargs)
+    )
+
     async def allowed(host, port):
         return {ipaddress.ip_address("8.8.8.8")}
+
     monkeypatch.setattr("openharness.utils.network_guard._resolve_host_addresses", allowed)
     with pytest.raises(ValueError, match="non-public"):
         await fetch_public_http_response("https://example.com/start", max_bytes=100)
@@ -191,42 +211,53 @@ async def test_bounded_download_rejects_private_redirect_before_fetch(monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('status,body,limit,expected', [
-    (302, 'redirect', 1024, 'too many redirects'),
-    (200, 'x' * 100, 20, 'response exceeds'),
-    (200, '{"results": []}', 1024, None),
-])
-async def test_protected_post_rejects_redirects_and_limits_body(monkeypatch, status, body, limit, expected):
+@pytest.mark.parametrize(
+    "status,body,limit,expected",
+    [
+        (302, "redirect", 1024, "too many redirects"),
+        (200, "x" * 100, 20, "response exceeds"),
+        (200, '{"results": []}', 1024, None),
+    ],
+)
+async def test_protected_post_rejects_redirects_and_limits_body(
+    monkeypatch, status, body, limit, expected
+):
     calls = []
     original = httpx.AsyncClient
 
     async def handler(request):
         calls.append(request)
-        return httpx.Response(status, text=body, headers={'location': 'https://elsewhere.example/'})
+        return httpx.Response(status, text=body, headers={"location": "https://elsewhere.example/"})
 
     def client(**kwargs):
         return original(**kwargs, transport=httpx.MockTransport(handler))
 
     async def resolve(*args):
-        return {ipaddress.ip_address('8.8.8.8')}
+        return {ipaddress.ip_address("8.8.8.8")}
 
-    monkeypatch.setattr(httpx, 'AsyncClient', client)
-    monkeypatch.setattr('openharness.utils.network_guard._resolve_host_addresses', resolve)
-    request = fetch_public_http_response('https://api.tavily.com/search', method='POST',
-        json={'query': '光伏'}, headers={'Authorization': 'Bearer test-key'}, max_redirects=0, max_bytes=limit)
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    monkeypatch.setattr("openharness.utils.network_guard._resolve_host_addresses", resolve)
+    request = fetch_public_http_response(
+        "https://api.tavily.com/search",
+        method="POST",
+        json={"query": "光伏"},
+        headers={"Authorization": "Bearer test-key"},
+        max_redirects=0,
+        max_bytes=limit,
+    )
     if expected:
         with pytest.raises(ValueError, match=expected):
             await request
     else:
-        assert (await request).json() == {'results': []}
+        assert (await request).json() == {"results": []}
     assert len(calls) == 1
-    assert calls[0].method == 'POST' and calls[0].headers['authorization'] == 'Bearer test-key'
-    assert calls[0].url.host == 'api.tavily.com'
+    assert calls[0].method == "POST" and calls[0].headers["authorization"] == "Bearer test-key"
+    assert calls[0].url.host == "api.tavily.com"
 
 
 @pytest.mark.asyncio
 async def test_post_cannot_enable_redirects_or_access_private_hosts():
-    with pytest.raises(ValueError, match='disable redirects'):
-        await fetch_public_http_response('https://api.tavily.com/search', method='POST')
-    with pytest.raises(ValueError, match='non-public'):
-        await fetch_public_http_response('http://127.0.0.1/search', method='POST', max_redirects=0)
+    with pytest.raises(ValueError, match="disable redirects"):
+        await fetch_public_http_response("https://api.tavily.com/search", method="POST")
+    with pytest.raises(ValueError, match="non-public"):
+        await fetch_public_http_response("http://127.0.0.1/search", method="POST", max_redirects=0)

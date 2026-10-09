@@ -23,6 +23,7 @@ from openharness.mcp.types import McpServerConfig
 from openharness.permissions.modes import PermissionMode
 from openharness.utils.file_lock import exclusive_file_lock
 from openharness.utils.fs import atomic_write_text
+from openharness.config.context_components import ContextComponentsSettings
 
 
 # ANSI escape sequence pattern
@@ -57,8 +58,6 @@ class PermissionSettings(BaseModel):
     denied_commands: list[str] = Field(default_factory=list)
 
 
-
-
 class ResearchMemorySettings(BaseModel):
     """Independent per-conversation research memory policy."""
 
@@ -66,6 +65,11 @@ class ResearchMemorySettings(BaseModel):
     injection_budget_tokens: int = Field(default=6000, ge=256)
     conflict_max_turns: int = Field(default=12, ge=1, le=100)
     conflict_timeout_seconds: float = Field(default=180, gt=0, le=3600)
+    workspace_root: str | None = None
+    memory_auto_inject_max_chars: int = Field(default=12000, ge=256, le=200000)
+    subagent_max_concurrency: int = Field(default=3, ge=1, le=8)
+    subagent_max_calls: int = Field(default=12, ge=1, le=100)
+    subagent_timeout_seconds: float = Field(default=180, gt=0, le=3600)
 
 
 class SandboxNetworkSettings(BaseModel):
@@ -100,6 +104,7 @@ class SandboxSettings(BaseModel):
 
     enabled: bool = False
     backend: str = "srt"
+    required_srt_version: str | None = None
     fail_if_unavailable: bool = False
     enabled_platforms: list[str] = Field(default_factory=list)
     network: SandboxNetworkSettings = Field(default_factory=SandboxNetworkSettings)
@@ -126,11 +131,16 @@ class ResearchSiteConfig(BaseModel):
     def validate_domain(cls, value: str) -> str:
         domain = value.strip().rstrip(".").lower().encode("idna").decode("ascii")
         labels = domain.split(".")
-        if len(domain) > 253 or len(labels) < 2 or not all(
-            re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-            for label in labels
+        if (
+            len(domain) > 253
+            or len(labels) < 2
+            or not all(
+                re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels
+            )
         ):
-            raise ValueError("research site domain must be a hostname, without a URL, port or wildcard")
+            raise ValueError(
+                "research site domain must be a hostname, without a URL, port or wildcard"
+            )
         if domain.replace(".", "").isdigit():
             raise ValueError("research site domain must not be an IP address")
         return domain
@@ -211,7 +221,7 @@ def normalize_anthropic_model_name(model: str) -> str:
     normalized = model.strip()
     lower = normalized.lower()
     if lower.startswith("anthropic/"):
-        normalized = normalized[len("anthropic/"):]
+        normalized = normalized[len("anthropic/") :]
         lower = normalized.lower()
     if lower.startswith("claude-"):
         return normalized.replace(".", "-")
@@ -498,12 +508,11 @@ def _profile_from_flat_settings(settings: "Settings") -> tuple[str, ProviderProf
     defaults = default_provider_profiles()
     name = _infer_profile_name_from_flat_settings(settings)
     existing = defaults.get(name)
-    if existing is not None and (
-        existing.provider == settings.provider or not settings.provider
-    ) and (
-        existing.api_format == settings.api_format
-    ) and (
-        existing.base_url == settings.base_url
+    if (
+        existing is not None
+        and (existing.provider == settings.provider or not settings.provider)
+        and (existing.api_format == settings.api_format)
+        and (existing.base_url == settings.base_url)
     ):
         profile = existing.model_copy(
             update={
@@ -512,19 +521,27 @@ def _profile_from_flat_settings(settings: "Settings") -> tuple[str, ProviderProf
         )
         return name, profile
 
-    provider = settings.provider or ("copilot" if settings.api_format == "copilot" else ("openai" if settings.api_format == "openai" else "anthropic"))
+    provider = settings.provider or (
+        "copilot"
+        if settings.api_format == "copilot"
+        else ("openai" if settings.api_format == "openai" else "anthropic")
+    )
     profile = ProviderProfile(
         label=f"Imported {provider}",
         provider=provider,
         api_format=settings.api_format,
         auth_source=default_auth_source_for_provider(provider, settings.api_format),
-        default_model=settings.model or defaults.get("claude-api", ProviderProfile(
-            label="Claude API",
-            provider="anthropic",
-            api_format="anthropic",
-            auth_source="anthropic_api_key",
-            default_model="sonnet",
-        )).default_model,
+        default_model=settings.model
+        or defaults.get(
+            "claude-api",
+            ProviderProfile(
+                label="Claude API",
+                provider="anthropic",
+                api_format="anthropic",
+                auth_source="anthropic_api_key",
+                default_model="sonnet",
+            ),
+        ).default_model,
         last_model=settings.model or None,
         base_url=settings.base_url,
     )
@@ -551,9 +568,13 @@ class ImageGenerationConfig(BaseModel):
             or "gpt-image-2",
             api_key=os.environ.get("OPENHARNESS_IMAGE_GENERATION_API_KEY", "").strip(),
             base_url=os.environ.get("OPENHARNESS_IMAGE_GENERATION_BASE_URL", "").strip(),
-            codex_model=os.environ.get("OPENHARNESS_IMAGE_GENERATION_CODEX_MODEL", "gpt-5.4").strip()
+            codex_model=os.environ.get(
+                "OPENHARNESS_IMAGE_GENERATION_CODEX_MODEL", "gpt-5.4"
+            ).strip()
             or "gpt-5.4",
-            codex_base_url=os.environ.get("OPENHARNESS_IMAGE_GENERATION_CODEX_BASE_URL", "").strip(),
+            codex_base_url=os.environ.get(
+                "OPENHARNESS_IMAGE_GENERATION_CODEX_BASE_URL", ""
+            ).strip(),
         )
 
     @property
@@ -581,8 +602,11 @@ class VisionModelConfig(BaseModel):
             model=os.environ.get("OPENHARNESS_VISION_MODEL", "").strip(),
             api_key=os.environ.get("OPENHARNESS_VISION_API_KEY", "").strip(),
             base_url=os.environ.get("OPENHARNESS_VISION_BASE_URL", "").strip(),
-            context_window_tokens=(int(os.environ["OPENHARNESS_VISION_CONTEXT_WINDOW_TOKENS"])
-                if os.environ.get("OPENHARNESS_VISION_CONTEXT_WINDOW_TOKENS") else None),
+            context_window_tokens=(
+                int(os.environ["OPENHARNESS_VISION_CONTEXT_WINDOW_TOKENS"])
+                if os.environ.get("OPENHARNESS_VISION_CONTEXT_WINDOW_TOKENS")
+                else None
+            ),
         )
 
     @property
@@ -613,9 +637,11 @@ class Settings(BaseModel):
     permission: PermissionSettings = Field(default_factory=PermissionSettings)
     hooks: dict[str, list[HookDefinition]] = Field(default_factory=dict)
     research_memory: ResearchMemorySettings = Field(default_factory=ResearchMemorySettings)
+    context_components: ContextComponentsSettings = Field(default_factory=ContextComponentsSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     web: WebSettings = Field(default_factory=WebSettings)
     enabled_plugins: dict[str, bool] = Field(default_factory=dict)
+    enabled_skills: dict[str, bool] = Field(default_factory=dict)
     allow_project_plugins: bool = False
     allow_project_skills: bool = True
     project_skill_dirs: list[str] = Field(
@@ -637,7 +663,7 @@ class Settings(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def migrate_legacy_context_budget(cls, values):
+    def migrate_legacy_context_budget(cls, values: object) -> object:
         if not isinstance(values, dict):
             return values
         values = dict(values)
@@ -646,7 +672,9 @@ class Settings(BaseModel):
             return values
         profile = (values.get("profiles") or {}).get(values.get("active_profile", "claude-api"), {})
         for key in ("context_window_tokens", "auto_compact_threshold_tokens"):
-            configured = profile.get(key) if isinstance(profile, dict) else getattr(profile, key, None)
+            configured = (
+                profile.get(key) if isinstance(profile, dict) else getattr(profile, key, None)
+            )
             if values.get(key) is None and configured is None and legacy.get(key) is not None:
                 values[key] = legacy[key]
         return values
@@ -669,7 +697,9 @@ class Settings(BaseModel):
     def resolve_profile(self, name: str | None = None) -> tuple[str, ProviderProfile]:
         """Return the active provider profile."""
         profiles = self.merged_profiles()
-        profile_name = (name or self.active_profile or os.environ.get("OPENHARNESS_PROFILE") or "").strip() or "claude-api"
+        profile_name = (
+            name or self.active_profile or os.environ.get("OPENHARNESS_PROFILE") or ""
+        ).strip() or "claude-api"
         if profile_name not in profiles:
             fallback_name, fallback = _profile_from_flat_settings(self)
             profiles[fallback_name] = fallback
@@ -712,9 +742,21 @@ class Settings(BaseModel):
             and (self.api_format or "").strip() == profile.api_format
             and self.base_url == profile.base_url
         )
-        next_provider = profile.provider if flat_profile_fields_match_profile else (self.provider or "").strip() or profile.provider
-        next_api_format = profile.api_format if flat_profile_fields_match_profile else (self.api_format or "").strip() or profile.api_format
-        next_base_url = profile.base_url if flat_profile_fields_match_profile else (self.base_url if self.base_url is not None else profile.base_url)
+        next_provider = (
+            profile.provider
+            if flat_profile_fields_match_profile
+            else (self.provider or "").strip() or profile.provider
+        )
+        next_api_format = (
+            profile.api_format
+            if flat_profile_fields_match_profile
+            else (self.api_format or "").strip() or profile.api_format
+        )
+        next_base_url = (
+            profile.base_url
+            if flat_profile_fields_match_profile
+            else (self.base_url if self.base_url is not None else profile.base_url)
+        )
         next_context_window_tokens = (
             self.context_window_tokens
             if self.context_window_tokens is not None
@@ -733,10 +775,12 @@ class Settings(BaseModel):
             permission_mode=self.permission.mode.value,
         )
         if flat_model and flat_model != resolved_profile_model:
-            next_model = flat_model
+            next_model: str | None = flat_model
         else:
             next_model = profile.last_model
-        current_default_auth = default_auth_source_for_provider(profile.provider, profile.api_format)
+        current_default_auth = default_auth_source_for_provider(
+            profile.provider, profile.api_format
+        )
         next_auth_source = profile.auth_source
         if not next_auth_source or next_auth_source == current_default_auth:
             next_auth_source = default_auth_source_for_provider(next_provider, next_api_format)
@@ -800,7 +844,9 @@ class Settings(BaseModel):
         """Resolve auth for the current provider, including subscription bridges."""
         profile_name, profile = self.resolve_profile()
         provider = profile.provider.strip()
-        auth_source = profile.auth_source.strip() or default_auth_source_for_provider(provider, profile.api_format)
+        auth_source = profile.auth_source.strip() or default_auth_source_for_provider(
+            provider, profile.api_format
+        )
         if auth_source in {"codex_subscription", "claude_subscription"}:
             env_auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
             if auth_source == "claude_subscription" and env_auth_token:
@@ -817,7 +863,9 @@ class Settings(BaseModel):
             )
             from openharness.auth.storage import load_external_binding
 
-            if auth_source == "claude_subscription" and is_third_party_anthropic_endpoint(profile.base_url):
+            if auth_source == "claude_subscription" and is_third_party_anthropic_endpoint(
+                profile.base_url
+            ):
                 raise ValueError(
                     "Claude subscription auth only supports direct Anthropic/Claude endpoints. "
                     "Use an API-key-backed Anthropic-compatible profile for third-party base URLs."
@@ -925,7 +973,11 @@ class Settings(BaseModel):
         if "model" in updates and isinstance(updates["model"], str):
             updates["model"] = strip_ansi_escape_sequences(updates["model"])
         if "effort" in updates and isinstance(updates["effort"], str):
-            updates["effort"] = "xhigh" if updates["effort"].strip().lower() == "max" else updates["effort"].strip().lower()
+            updates["effort"] = (
+                "xhigh"
+                if updates["effort"].strip().lower() == "max"
+                else updates["effort"].strip().lower()
+            )
         merged = apply_permission_mode(self.model_copy(update=updates))
         if not updates:
             return merged
@@ -949,7 +1001,9 @@ class Settings(BaseModel):
                 for key, value in updates.items()
                 if key not in profile_keys or key in {"active_profile", "profiles"}
             }
-            switched = apply_permission_mode(self.model_copy(update=switch_updates)).materialize_active_profile()
+            switched = apply_permission_mode(
+                self.model_copy(update=switch_updates)
+            ).materialize_active_profile()
             remaining_profile_updates = {
                 key: value
                 for key, value in updates.items()
@@ -979,7 +1033,9 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     _, active_profile = settings.resolve_profile()
     profile_has_base_url = active_profile.base_url is not None
     profile_explicit_model = (active_profile.last_model or "").strip()
-    profile_has_explicit_model = bool(profile_explicit_model) and profile_explicit_model.lower() not in {"", "default"}
+    profile_has_explicit_model = bool(
+        profile_explicit_model
+    ) and profile_explicit_model.lower() not in {"", "default"}
 
     # --- model ---
     openharness_model = os.environ.get("OPENHARNESS_MODEL")
@@ -1067,9 +1123,7 @@ def _apply_env_overrides(settings: Settings) -> Settings:
     web_synthetic_dns_cidrs = os.environ.get("OPENHARNESS_WEB_SYNTHETIC_DNS_CIDRS")
     if web_synthetic_dns_cidrs:
         web_updates["synthetic_dns_cidrs"] = [
-            entry.strip()
-            for entry in web_synthetic_dns_cidrs.split(",")
-            if entry.strip()
+            entry.strip() for entry in web_synthetic_dns_cidrs.split(",") if entry.strip()
         ]
     if web_updates:
         updates["web"] = settings.web.model_copy(update=web_updates)

@@ -18,12 +18,12 @@ def test_load_skill_registry_includes_packaged_plugin(tmp_path: Path, monkeypatc
     names = [skill.name for skill in registry.list_skills()]
     assert "simplify" not in names
     assert "review" not in names
-    assert "skill-creator" in names
+    assert "skill-creator" not in names
+    assert "earnings-forecast" in names
 
-    skill_creator = registry.get("skill-creator")
-    assert skill_creator is not None
-    assert skill_creator.source == "plugin"
-    assert "Create, improve, and verify OpenHarness skills" in skill_creator.description
+    forecast = registry.get("earnings-forecast")
+    assert forecast is not None and forecast.source == "plugin"
+    assert forecast.content is None
 
 
 def _write_skill(root: Path, name: str, body: str | None = None) -> Path:
@@ -39,14 +39,16 @@ def test_load_skill_registry_includes_user_skills(tmp_path: Path, monkeypatch):
     skills_dir = get_user_skills_dir()
     deploy_dir = skills_dir / "deploy"
     deploy_dir.mkdir(parents=True)
-    (deploy_dir / "SKILL.md").write_text("# Deploy\nDeployment workflow guidance\n", encoding="utf-8")
+    (deploy_dir / "SKILL.md").write_text(
+        "# Deploy\nDeployment workflow guidance\n", encoding="utf-8"
+    )
 
     registry = load_skill_registry()
     deploy = registry.get("Deploy")
 
     assert deploy is not None
     assert deploy.source == "user"
-    assert "Deployment workflow guidance" in deploy.content
+    assert "Deployment workflow guidance" in deploy.load_content()
 
 
 def test_load_skill_registry_includes_user_compat_skill_dirs(tmp_path: Path, monkeypatch):
@@ -163,7 +165,9 @@ def test_project_skill_discovery_walks_up_to_git_root(tmp_path: Path, monkeypatc
 def test_project_skill_nearer_cwd_overrides_parent_and_user(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    _write_skill(tmp_path / "home" / ".claude" / "skills", "deploy", "# user deploy\nuser version\n")
+    _write_skill(
+        tmp_path / "home" / ".claude" / "skills", "deploy", "# user deploy\nuser version\n"
+    )
     repo = tmp_path / "repo"
     cwd = repo / "services" / "api"
     cwd.mkdir(parents=True)
@@ -176,7 +180,7 @@ def test_project_skill_nearer_cwd_overrides_parent_and_user(tmp_path: Path, monk
 
     assert skill is not None
     assert skill.source == "project"
-    assert "api version" in skill.content
+    assert "api version" in skill.load_content()
 
 
 def test_unsafe_project_skill_dirs_are_ignored(tmp_path: Path, monkeypatch):

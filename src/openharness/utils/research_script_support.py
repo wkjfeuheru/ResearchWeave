@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TypeVar, Callable
+from pydantic import BaseModel
 import argparse
 import hashlib
 import importlib
@@ -10,8 +12,10 @@ import json
 import os
 from pathlib import Path
 import sys
-
 from openharness.utils.fs import atomic_write_text
+
+T = TypeVar("T")
+ResultT = TypeVar("ResultT", bound=BaseModel)
 
 
 def script_package(filename: str) -> str:
@@ -30,6 +34,8 @@ def script_package(filename: str) -> str:
         spec = importlib.util.spec_from_file_location(
             package, directory / "__init__.py", submodule_search_locations=[str(directory)]
         )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load skill scripts: {directory}")
         module = importlib.util.module_from_spec(spec)
         sys.modules[package] = module
         try:
@@ -40,7 +46,7 @@ def script_package(filename: str) -> str:
     return package
 
 
-def guarded(operation):
+def guarded(operation: Callable[[], T]) -> T:
     """Return machine-readable, redacted errors from script operations."""
     try:
         return operation()
@@ -58,7 +64,11 @@ def guarded(operation):
         raise SystemExit(2) from None
 
 
-def processing_main(result_type, processor, argv=None):
+def processing_main(
+    result_type: type[ResultT],
+    processor: Callable[[ResultT], ResultT],
+    argv: list[str] | None = None,
+) -> None:
     """Supply JSON I/O to one skill's own validation and computation function."""
     parser = argparse.ArgumentParser(description=processor.__doc__ or processor.__name__)
     parser.add_argument("--schema", action="store_true", help="Print this skill's JSON schema")
@@ -73,15 +83,16 @@ def processing_main(result_type, processor, argv=None):
     if not args.input or not args.output:
         parser.error("--input and --output are required unless --schema is used")
 
-    def process():
+    def process() -> None:
         result = result_type.model_validate_json(Path(args.input).read_text(encoding="utf-8"))
         result = processor(result)
         output = Path(args.output).resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(output, result.model_dump_json(indent=2))
+        data = result.model_dump()
         print(
             json.dumps(
-                {"status": result.status, "gaps": result.gaps, "result": str(output)},
+                {"status": data["status"], "gaps": data["gaps"], "result": str(output)},
                 ensure_ascii=False,
             )
         )
@@ -89,7 +100,11 @@ def processing_main(result_type, processor, argv=None):
     guarded(process)
 
 
-def export_main(result_type, exporter, argv=None):
+def export_main(
+    result_type: type[ResultT],
+    exporter: Callable[[ResultT, Path, Path | None, str | None], dict[str, object]],
+    argv: list[str] | None = None,
+) -> None:
     """Supply artifact CLI arguments to a skill-owned report exporter."""
     parser = argparse.ArgumentParser(description="Export an already computed skill result")
     parser.add_argument("--input", required=True)
@@ -98,7 +113,7 @@ def export_main(result_type, exporter, argv=None):
     parser.add_argument("--task-id", default=os.environ.get("OPENHARNESS_RESEARCH_TASK_ID"))
     args = parser.parse_args(argv)
 
-    def export():
+    def export() -> None:
         result = result_type.model_validate_json(Path(args.input).read_text(encoding="utf-8"))
         exported = exporter(
             result,

@@ -70,20 +70,19 @@ def test_registry_contains_only_research_tools():
     assert names == {
         "ask_user_question",
         "bash",
-        "config",
         "edit_file",
         "read_file",
         "write_file",
         "glob",
         "grep",
-        "image_generation",
         "image_to_text",
-        "mcp_auth",
-        "notebook_edit",
         "research_memory",
         "investigate_conflict",
+        "planner",
+        "replanner",
+        "research_project",
+        "dispatch_subagents",
         "skill",
-        "sleep",
         "tool_search",
         "web_fetch",
         "web_search",
@@ -149,7 +148,9 @@ async def test_memory_disabled_ignores_retired_state_and_plugins_keep_hooks(tmp_
     )
     try:
         assert "research_memory" not in {tool.name for tool in bundle.tool_registry.list_tools()}
-        assert "investigate_conflict" not in {tool.name for tool in bundle.tool_registry.list_tools()}
+        assert "investigate_conflict" not in {
+            tool.name for tool in bundle.tool_registry.list_tools()
+        }
         assert "research_store" not in bundle.engine.tool_metadata
         assert not (
             {"research_mode", "long_term_memory_store", "task_focus_state"}
@@ -158,5 +159,64 @@ async def test_memory_disabled_ignores_retired_state_and_plugins_keep_hooks(tmp_
         assert not hasattr(bundle, "app_state") and not hasattr(bundle, "commands")
         result = await bundle.hook_executor.execute(HookEvent.SESSION_START, {"cwd": str(tmp_path)})
         assert any("RESEARCH_HOOK_OK" in item.output for item in result.results)
+    finally:
+        await close_runtime(bundle)
+
+
+async def test_runtime_filters_retired_plugin_tools_but_keeps_services_and_config(
+    tmp_path, monkeypatch
+):
+    from openharness.runtime import build_runtime, close_runtime
+    from openharness.tools import RESEARCH_EXCLUDED_TOOLS
+    from tests.test_engine.test_query_engine import StaticApiClient
+
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    plugin = tmp_path / "plugins/research"
+    (plugin / "tools").mkdir(parents=True)
+    (plugin / "plugin.json").write_text(
+        json.dumps({"name": "research", "version": "1"}), encoding="utf-8"
+    )
+    classes = []
+    for index, name in enumerate(sorted(RESEARCH_EXCLUDED_TOOLS) + ["plugin_research_reader"]):
+        classes.append(f"""class PluginTool{index}(BaseTool):
+    name = {name!r}
+    description = "Plugin compatibility fixture"
+    input_model = PluginInput
+    async def execute(self, arguments, context):
+        return ToolResult(output="ok")
+""")
+    (plugin / "tools/fixtures.py").write_text(
+        "from openharness.tools.base import BaseTool, ToolResult\nfrom pydantic import BaseModel\nclass PluginInput(BaseModel):\n    pass\n"
+        + "\n".join(classes),
+        encoding="utf-8",
+    )
+    bundle = await build_runtime(
+        cwd=str(tmp_path),
+        session_id="b" * 12,
+        api_client=StaticApiClient("ok"),
+        extra_plugin_roots=[plugin.parent],
+        connect_mcp=False,
+        settings_override=Settings(
+            research_memory={
+                "subagent_max_concurrency": 2,
+                "subagent_max_calls": 4,
+                "subagent_timeout_seconds": 20,
+            }
+        ),
+    )
+    try:
+        names = {tool.name for tool in bundle.tool_registry.list_tools()}
+        assert RESEARCH_EXCLUDED_TOOLS.isdisjoint(names)
+        assert {
+            "plugin_research_reader",
+            "dispatch_subagents",
+            "list_mcp_resources",
+            "read_mcp_resource",
+        } <= names
+        assert bundle.mcp_manager is not None
+        assert bundle.engine.tool_metadata["subagent_max_concurrency"] == 2
+        assert bundle.engine.tool_metadata["subagent_max_calls"] == 4
+        assert bundle.engine.tool_metadata["subagent_timeout_seconds"] == 20
     finally:
         await close_runtime(bundle)

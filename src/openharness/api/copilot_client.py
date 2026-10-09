@@ -126,6 +126,7 @@ class CopilotClient:
 
     def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
         from openharness.services.context_budget import prepare_request
+
         return prepare_request(self._inner, replace(request, model=self._model or request.model))
 
     async def close(self) -> None:

@@ -57,7 +57,9 @@ class FakeClient:
                     ToolUseBlock(name=names[last.text], input=arguments[last.text]),
                 ],
             )
-        elif any(str(getattr(block, "content", "")).startswith("invoke-skill") for block in last.content):
+        elif any(
+            str(getattr(block, "content", "")).startswith("invoke-skill") for block in last.content
+        ):
             message = ConversationMessage(
                 role="assistant",
                 content=[
@@ -348,7 +350,7 @@ def test_research_skill_enable_invoke_and_disable_next_turn(workspace):
     client, _, requests, _, _ = workspace
     cards = client.get("/api/skills").json()["items"]
     research = [item for item in cards if item["category"] != "技能管理"]
-    assert len(research) == 4 and all(s["enabled"] for s in research)
+    assert len(research) == 2 and all(s["enabled"] for s in research)
     assert all("sample" not in card for card in cards)
     sample = "financial-statement-analysis"
     assert client.patch(f"/api/skills/{sample}", json={"enabled": True}).status_code == 200
@@ -359,34 +361,51 @@ def test_research_skill_enable_invoke_and_disable_next_turn(workspace):
         events = collect(socket)
         assert not events[-1]["failed"]
         assert "financial-statement-analysis" in requests[-1].system_prompt
-        assert events[-1]["session"]["messages"][0]["text"] == "/financial-statement-analysis 测试公司"
+        assert (
+            events[-1]["session"]["messages"][0]["text"] == "/financial-statement-analysis 测试公司"
+        )
         client.patch(f"/api/skills/{sample}", json={"enabled": False})
         submit(socket, "下一轮", request_id="r2")
         collect(socket)
         assert "**financial-statement-analysis**" not in requests[-1].system_prompt
-    card = next(item for item in client.get("/api/skills").json()["items"] if item["id"] == sample)
-    assert not card["enabled"]
+    card = next(
+        item
+        for item in client.get("/api/skills").json()["items"]
+        if item["id"] == "analysis-modeling"
+    )
+    assert card["enabled"]
+    assert not next(s for s in card["skills"] if s["name"] == sample)["enabled"]
 
 
 def test_packaged_skill_plugin_disable_and_enable_next_turn(workspace):
     client, _, requests, _, _ = workspace
-    card = next(item for item in client.get("/api/skills").json()["items"] if item["id"] == "skill-authoring")
+    card = next(
+        item
+        for item in client.get("/api/skills").json()["items"]
+        if item["id"] == "analysis-modeling"
+    )
     assert card["enabled"] and "sample" not in card
-    assert [skill["name"] for skill in card["skills"]] == ["skill-creator"]
+    assert len(card["skills"]) == 4
+    assert all("content" not in skill for skill in card["skills"])
     sid = add_session(client, add_model(client))
     with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
         socket.receive_json()
-        submit(socket, "创建技能")
+        submit(socket, "分析财报")
         collect(socket)
-        assert "**skill-creator**" in requests[-1].system_prompt
-        assert client.patch("/api/skills/skill-authoring", json={"enabled": False}).status_code == 200
+        assert "**financial-statement-analysis**" in requests[-1].system_prompt
+        assert (
+            client.patch("/api/skills/analysis-modeling", json={"enabled": False}).status_code
+            == 200
+        )
         submit(socket, "下一轮", request_id="r2")
         collect(socket)
-        assert "**skill-creator**" not in requests[-1].system_prompt
-        assert client.patch("/api/skills/skill-authoring", json={"enabled": True}).status_code == 200
+        assert "**financial-statement-analysis**" not in requests[-1].system_prompt
+        assert (
+            client.patch("/api/skills/analysis-modeling", json={"enabled": True}).status_code == 200
+        )
         submit(socket, "再下一轮", request_id="r3")
         collect(socket)
-        assert "**skill-creator**" in requests[-1].system_prompt
+        assert "**financial-statement-analysis**" in requests[-1].system_prompt
 
 
 def test_unconfigured_model_and_api_failures_are_recoverable(workspace):
@@ -404,7 +423,7 @@ def test_unconfigured_model_and_api_failures_are_recoverable(workspace):
                 "label": "Test",
                 "api_format": "openai",
                 "model": "test-model",
-            "context_window_tokens": 200_000,
+                "context_window_tokens": 200_000,
                 "api_key": SECRET,
             },
         )
@@ -442,7 +461,11 @@ def test_question_response_and_stale_request_id(workspace):
         events = collect(socket)
         record = client.app.state.workspace.store.load_by_id(client.app.state.workspace.cwd, sid)
         assert "最近一年" in json.dumps(record["messages"], ensure_ascii=False)
-        operations = [e["message"] for e in events if e["type"] == "message" and e["message"]["role"] == "activity"]
+        operations = [
+            e["message"]
+            for e in events
+            if e["type"] == "message" and e["message"]["role"] == "activity"
+        ]
         assert operations and all("tool_input" not in row and not row["text"] for row in operations)
         assert "错误回复" not in json.dumps(events, ensure_ascii=False)
 
@@ -525,7 +548,11 @@ def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
         record = client.app.state.workspace.store.load_by_id(client.app.state.workspace.cwd, sid)
         output = json.dumps(record["messages"], ensure_ascii=False)
         assert "简化ROE不是加权平均ROE" in output
-        operations = [e["message"] for e in events if e["type"] == "message" and e["message"]["role"] == "activity"]
+        operations = [
+            e["message"]
+            for e in events
+            if e["type"] == "message" and e["message"]["role"] == "activity"
+        ]
         assert operations and all("tool_input" not in row and not row["text"] for row in operations)
         submit(socket, "下一轮", request_id="r2")
         collect(socket)
@@ -533,14 +560,24 @@ def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
 
 
 @pytest.mark.parametrize("profile_id", ["codex", "claude-subscription", "copilot"])
-def test_subscription_profiles_selectable_without_api_key_conversion(workspace, monkeypatch, profile_id):
+def test_subscription_profiles_selectable_without_api_key_conversion(
+    workspace, monkeypatch, profile_id
+):
     from openharness.config.settings import ResolvedAuth
     from openharness.web.catalog import profile_settings
     from types import SimpleNamespace
 
     client, _, _, _, _ = workspace
-    monkeypatch.setattr(Settings, "resolve_auth", lambda self: ResolvedAuth(
-        provider=self.provider, auth_kind="oauth", value="subscription-test-token", source="external:test"))
+    monkeypatch.setattr(
+        Settings,
+        "resolve_auth",
+        lambda self: ResolvedAuth(
+            provider=self.provider,
+            auth_kind="oauth",
+            value="subscription-test-token",
+            source="external:test",
+        ),
+    )
     monkeypatch.setattr("openharness.api.copilot_auth.load_copilot_auth", lambda: SimpleNamespace())
     profiles = client.get("/api/models").json()["items"]
     profile = next(item for item in profiles if item["id"] == profile_id)
@@ -550,44 +587,76 @@ def test_subscription_profiles_selectable_without_api_key_conversion(workspace, 
     session = add_session(client, profile_id)
     assert client.get(f"/api/sessions/{session}").json()["profile_id"] == profile_id
     before = profile_settings(profile_id).resolve_profile()[1].auth_source
-    assert client.put(f"/api/models/{profile_id}", json={
-        "label": "incorrect API conversion", "api_format": "openai", "model": "test",
-    }).status_code == 400
+    assert (
+        client.put(
+            f"/api/models/{profile_id}",
+            json={
+                "label": "incorrect API conversion",
+                "api_format": "openai",
+                "model": "test",
+            },
+        ).status_code
+        == 400
+    )
     assert profile_settings(profile_id).resolve_profile()[1].auth_source == before
 
 
 def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
     from openharness.research.store import ResearchStore
     from openharness.utils.session_files import SessionFiles
+
     client, app, requests, _, cwd = workspace
     sid = add_session(client, add_model(client))
     second = add_session(client, add_model(client, label="Other"))
-    response = client.post(f"/api/sessions/{sid}/attachments", files=[("files", ("report.txt", b"Consolidated revenue 100", "text/plain"))])
+    response = client.post(
+        f"/api/sessions/{sid}/attachments",
+        files=[("files", ("report.txt", b"Consolidated revenue 100", "text/plain"))],
+    )
     assert response.status_code == 201, response.text
     attachment = response.json()["items"][0]
     assert attachment["status"] == "ready"
     assert client.get(f"/api/sessions/{sid}/attachments").json()["items"] == [attachment]
     assert client.get(f"/api/sessions/{second}/attachments").json()["items"] == []
-    assert client.delete(f"/api/sessions/{second}/attachments/{attachment['id']}").status_code == 404
+    assert (
+        client.delete(f"/api/sessions/{second}/attachments/{attachment['id']}").status_code == 404
+    )
     with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
         socket.receive_json()
-        socket.send_json({"type": "submit", "request_id": "r1", "text": "Analyze", "attachment_ids": [attachment["id"]]})
+        socket.send_json(
+            {
+                "type": "submit",
+                "request_id": "r1",
+                "text": "Analyze",
+                "attachment_ids": [attachment["id"]],
+            }
+        )
         events = collect(socket)
         assert not events[-1]["failed"]
         user = next(m for m in reversed(requests[-1].messages) if m.role == "user")
         assert "text.md" in user.text and "parsed.json" in user.text and "外部资料" in user.text
     with client.websocket_connect(f"/api/sessions/{second}/ws", headers=ORIGIN) as socket:
         socket.receive_json()
-        socket.send_json({"type": "submit", "request_id": "r1", "text": "Analyze", "attachment_ids": [attachment["id"]]})
+        socket.send_json(
+            {
+                "type": "submit",
+                "request_id": "r1",
+                "text": "Analyze",
+                "attachment_ids": [attachment["id"]],
+            }
+        )
         events = collect(socket)
         assert events[-1]["failed"] and any("不属于" in e.get("message", "") for e in events)
     directory = ResearchStore(cwd, sid).directory
     output = cwd / "report.md"
     output.write_text("Report")
-    artifact = SessionFiles(directory).register(output, task_id="task1", status="partial", kind="financial")
+    artifact = SessionFiles(directory).register(
+        output, task_id="task1", status="partial", kind="financial"
+    )
     endpoint = f"/api/sessions/{sid}/artifacts/{artifact['id']}/download"
     assert client.get(endpoint).content == b"Report"
-    assert client.get(f"/api/sessions/{second}/artifacts/{artifact['id']}/download").status_code == 404
+    assert (
+        client.get(f"/api/sessions/{second}/artifacts/{artifact['id']}/download").status_code == 404
+    )
     restarted = create_app(str(cwd))
     with TestClient(restarted, base_url="http://localhost") as reclient:
         assert reclient.get(endpoint).content == b"Report"
@@ -603,7 +672,12 @@ def test_attachment_failures_limits_and_server_id_validation(workspace, monkeypa
     assert client.post(endpoint, files={"files": ("a.exe", b"binary")}).status_code == 422
     response = client.post(endpoint, files={"files": ("bad.pdf", b"not-pdf")})
     assert response.status_code == 201 and response.json()["items"][0]["status"] == "failed"
-    assert client.post(endpoint, files=[("files", (f"{i}.txt", b"data")) for i in range(11)]).status_code == 400
+    assert (
+        client.post(
+            endpoint, files=[("files", (f"{i}.txt", b"data")) for i in range(11)]
+        ).status_code
+        == 400
+    )
     monkeypatch.setattr("openharness.web.app.MAX_DOCUMENT_BYTES", 10)
     assert client.post(endpoint, files={"files": ("large.txt", b"x" * 11)}).status_code == 413
     assert client.get(f"/api/sessions/{sid}/artifacts/arbitrary-path/download").status_code == 404
@@ -614,10 +688,15 @@ def test_model_context_budget_round_trip_and_omitted_edit_preserves_it(workspace
     profile = add_model(client)
     row = next(item for item in client.get("/api/models").json()["items"] if item["id"] == profile)
     assert row["context_window_tokens"] == 200_000
-    payload = {"label": "Budgeted model", "api_format": "openai", "model": "test-model",
-               "auto_compact_threshold_tokens": 12345}
+    payload = {
+        "label": "Budgeted model",
+        "api_format": "openai",
+        "model": "test-model",
+        "auto_compact_threshold_tokens": 12345,
+    }
     assert client.put(f"/api/models/{profile}", json=payload).status_code == 200
     from openharness.web.catalog import profile_settings
+
     settings = profile_settings(profile)
     assert settings.context_window_tokens == 200_000
     assert settings.auto_compact_threshold_tokens == 12345
@@ -632,6 +711,63 @@ def test_model_context_budget_round_trip_and_omitted_edit_preserves_it(workspace
 @pytest.mark.parametrize("field", ["context_window_tokens", "auto_compact_threshold_tokens"])
 def test_model_rejects_nonpositive_budget_fields(workspace, field):
     client, _, _, _, _ = workspace
-    response = client.post("/api/models", json={"label": "Invalid budget", "api_format": "openai",
-        "model": "test-model", field: 0})
+    response = client.post(
+        "/api/models",
+        json={"label": "Invalid budget", "api_format": "openai", "model": "test-model", field: 0},
+    )
     assert response.status_code == 422
+
+
+def test_skill_catalog_is_metadata_only_and_details_are_selected(workspace, monkeypatch):
+    from pathlib import Path
+    from openharness.plugins.loader import BUNDLED_PLUGINS_DIR
+
+    client, _, _, _, _ = workspace
+    original = Path.read_text
+    reads = []
+
+    def read(path, *args, **kwargs):
+        if path.name == "SKILL.md" and path.is_relative_to(BUNDLED_PLUGINS_DIR):
+            reads.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    cards = client.get("/api/skills").json()["items"]
+    assert len(cards) == 2 and not reads
+    assert all("content" not in skill for card in cards for skill in card["skills"])
+    selected = client.get("/api/skills/report-generation/industry-commentary")
+    assert selected.status_code == 200 and "行业点评" in selected.json()["content"]
+    assert len(reads) == 1 and reads[0].parent.name == "industry-commentary"
+    assert (
+        client.patch("/api/skills/industry-commentary", json={"enabled": False}).status_code == 200
+    )
+    assert client.get("/api/skills/report-generation/industry-commentary").status_code == 409
+    assert len(reads) == 1
+    assert (
+        client.patch("/api/skills/industry-commentary", json={"enabled": True}).status_code == 200
+    )
+    assert client.patch("/api/skills/report-generation", json={"enabled": False}).status_code == 200
+    assert client.get("/api/skills/report-generation/industry-commentary").status_code == 409
+
+
+def test_legacy_skill_configuration_and_explicit_switches(workspace):
+    client, _, _, _, _ = workspace
+    from openharness.config.settings import load_settings
+
+    settings = load_settings().model_copy(
+        update={"enabled_plugins": {"financial-statement-analysis": False}}
+    )
+    save_settings(settings)
+    cards = client.get("/api/skills").json()["items"]
+    package = next(card for card in cards if card["id"] == "analysis-modeling")
+    assert package["enabled"]
+    assert not next(
+        skill for skill in package["skills"] if skill["name"] == "financial-statement-analysis"
+    )["enabled"]
+    assert (
+        client.patch("/api/skills/financial-statement-analysis", json={"enabled": True}).status_code
+        == 200
+    )
+    assert (
+        client.get("/api/skills/analysis-modeling/financial-statement-analysis").status_code == 200
+    )

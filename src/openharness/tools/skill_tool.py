@@ -8,6 +8,7 @@ import sys
 from pydantic import BaseModel, Field
 
 from openharness.skills import load_skill_registry
+from openharness.skills.resources import RESOURCE_DIRS, resolve_resource
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 
 
@@ -17,7 +18,7 @@ class SkillToolInput(BaseModel):
     name: str = Field(description="Skill name")
 
 
-class SkillTool(BaseTool):
+class SkillTool(BaseTool[SkillToolInput]):
     """Return the content of a loaded skill."""
 
     name = "skill"
@@ -35,39 +36,83 @@ class SkillTool(BaseTool):
             extra_plugin_roots=context.metadata.get("extra_plugin_roots"),
             settings=context.metadata.get("skill_settings"),
         )
-        skill = registry.get(arguments.name) or registry.get(arguments.name.lower()) or registry.get(arguments.name.title())
+        skill = (
+            registry.get(arguments.name)
+            or registry.get(arguments.name.lower())
+            or registry.get(arguments.name.title())
+        )
         if skill is None:
             return ToolResult(output=f"Skill not found: {arguments.name}", is_error=True)
         if skill.metadata.status in {"draft", "retired"}:
-            return ToolResult(output=f"Skill {skill.name} is {skill.metadata.status} and cannot be executed.", is_error=True)
+            return ToolResult(
+                output=f"Skill {skill.name} is {skill.metadata.status} and cannot be executed.",
+                is_error=True,
+            )
         if skill.disable_model_invocation:
             command_name = skill.command_name or skill.name
             return ToolResult(
                 output=f"Skill {command_name} can only be invoked by the user as /{command_name}.",
                 is_error=True,
             )
+        tools = context.metadata.get("tool_registry")
+        if tools is None and skill.metadata.required_tools:
+            from openharness.tools import create_research_tool_registry
+
+            tools = create_research_tool_registry()
+        if tools is not None:
+            missing = [name for name in skill.metadata.required_tools if tools.get(name) is None]
+            if missing:
+                return ToolResult(
+                    output=f"Skill {skill.name} requires unavailable tools: {', '.join(missing)}",
+                    is_error=True,
+                )
+        try:
+            content = skill.load_content()
+        except (OSError, ValueError) as exc:
+            return ToolResult(output=f"Cannot load Skill {skill.name}: {exc}", is_error=True)
         paths = [f"Skill status: {skill.metadata.status}", f"Python interpreter: {sys.executable}"]
         if skill.metadata.deprecation:
             paths.append(f"Deprecation: {skill.metadata.deprecation}")
         store = context.metadata.get("research_store")
         if store is not None:
-            paths.append(f"Current session output directory: {store.directory / 'work'}")
+            output = (
+                context.cwd / "reports" if context.workspace_runtime() else store.directory / "work"
+            )
+            paths.append(f"Current session output directory: {output}")
         if skill.path:
             paths.append(f"Skill entrypoint: {skill.path}")
         if skill.base_dir:
             paths.append(f"Resource base directory: {skill.base_dir}")
             base = Path(skill.base_dir).resolve()
-            for directory in ("references", "scripts", "templates", "assets"):
+            for directory in RESOURCE_DIRS:
                 root = base / directory
                 if not root.is_dir() or not root.resolve().is_relative_to(base):
                     continue
                 paths.append(f"- {directory}/: {root.resolve()}")
-                for path in sorted(root.rglob("*")):
-                    resolved = path.resolve()
-                    if path.is_file() and not path.name.startswith(".") and resolved.is_relative_to(base):
-                        paths.append(f"- {path.relative_to(base)}: {resolved}")
-            paths.append("Read supporting files only when the current step needs them, using read_file and the absolute paths above. "
-                         "Scripts and templates are resources; listing them does not execute or load them.")
-        return ToolResult(output="\n".join(paths) + "\n\n" + skill.content,
-                          metadata={"skill_entrypoint": skill.path, "skill_base_dir": skill.base_dir,
-                                    "skill_metadata": skill.metadata.model_dump()})
+            paths.append(
+                "Read supporting files only when the current step needs them, using read_file and the absolute paths above. "
+                "Scripts and templates are resources; listing them does not execute or load them."
+            )
+        # Validate entry links, without reading any target body or executing scripts.
+        import re
+
+        for link in re.findall(r"\]\(([^)]+)\)", content):
+            if "://" in link or link.startswith("#"):
+                continue
+            try:
+                resolve_resource(skill.base_dir or ".", link.split("#", 1)[0])
+            except ValueError as exc:
+                return ToolResult(output=str(exc), is_error=True)
+        # Grant read-only resource access only after validating the selected entry.
+        shared = getattr(context.metadata.get("query_context"), "tool_metadata", context.metadata)
+        if skill.base_dir:
+            shared.setdefault("selected_skill_roots", {})[skill.name] = skill.base_dir
+        return ToolResult(
+            output="\n".join(paths) + "\n\n" + content,
+            metadata={
+                "context_component": "dynamic_context",
+                "skill_entrypoint": skill.path,
+                "skill_base_dir": skill.base_dir,
+                "skill_metadata": skill.metadata.model_dump(),
+            },
+        )

@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-
 from openharness.config.settings import Settings
 from openharness.permissions.modes import PermissionMode
 from openharness.prompts.system_prompt import get_base_system_prompt, _format_environment_section
 from openharness.prompts.environment import get_environment_info
 from openharness.skills.loader import load_skill_registry
+from typing_extensions import TypedDict, Unpack
+from openharness.engine.messages import ContextSpan
 
 
 def _build_skills_section(
@@ -27,8 +28,11 @@ def _build_skills_section(
         extra_plugin_roots=extra_plugin_roots,
         settings=settings,
     )
-    skills = [skill for skill in registry.list_skills() if not skill.disable_model_invocation
-              and skill.metadata.status in {"active", "deprecated"}]
+    skills = [
+        skill
+        for skill in registry.list_skills()
+        if not skill.disable_model_invocation and skill.metadata.status in {"active", "deprecated"}
+    ]
     if not skills:
         return None
     lines = [
@@ -45,7 +49,9 @@ def _build_skills_section(
         display = f" ({skill.display_name})" if skill.display_name else ""
         lines.append(f"- **{command_name}**{display}: {skill.description}")
         if skill.metadata.status == "deprecated":
-            lines.append(f"  Deprecated: {skill.metadata.deprecation or 'No replacement specified'}")
+            lines.append(
+                f"  Deprecated: {skill.metadata.deprecation or 'No replacement specified'}"
+            )
     return "\n".join(lines)
 
 
@@ -75,6 +81,7 @@ def _build_permission_mode_section(settings: Settings) -> str:
 class RuntimePrompt:
     system_prompt: str
     runtime_context: str
+    runtime_context_manifest: list[ContextSpan] | None = None
 
 
 def build_runtime_prompt(
@@ -119,13 +126,30 @@ def build_runtime_prompt(
 
         sections.append(RESEARCH_MEMORY_PROMPT)
 
+    from openharness.services.context_sources import ContextSnapshot
+
+    snapshot = ContextSnapshot.join(
+        [
+            (text, "dynamic_context" if index == 0 else "system_prompt", "runtime", index == 0)
+            for index, text in enumerate(dynamic)
+            if text.strip()
+        ]
+    )
     return RuntimePrompt(
         system_prompt="\n\n".join(section for section in sections if section.strip()),
-        runtime_context="\n\n".join(section for section in dynamic if section.strip()),
+        runtime_context=snapshot.text,
+        runtime_context_manifest=snapshot.manifest,
     )
 
 
-def build_runtime_system_prompt(settings: Settings, **kwargs) -> str:
+class PromptOptions(TypedDict, total=False):
+    cwd: str
+    latest_user_prompt: str | None
+    extra_skill_dirs: Iterable[str | Path] | None
+    extra_plugin_roots: Iterable[str | Path] | None
+
+
+def build_runtime_system_prompt(settings: Settings, **kwargs: Unpack[PromptOptions]) -> str:
     """Legacy combined prompt for previews and external integrations."""
     prompt = build_runtime_prompt(settings, **kwargs)
     return prompt.system_prompt + "\n\n" + prompt.runtime_context

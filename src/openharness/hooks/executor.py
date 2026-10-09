@@ -7,13 +7,25 @@ import fnmatch
 import json
 import os
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from openharness.api.usage import UsageSnapshot
+from openharness.config import Settings
+from openharness.permissions.checker import PermissionChecker
+from openharness.permissions.capabilities import CapabilityContext
+from openharness.sandbox.policy import ExecutionOwner
+from typing import Awaitable
+from openharness.hooks.safety import redact, post_hook, SAFE_ENV
+from openharness.utils.shell import terminate_shell_process
 
-import httpx
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest, SupportsStreamingMessages
+from openharness.api.client import (
+    ApiTextDeltaEvent,
+    ApiMessageCompleteEvent,
+    ApiMessageRequest,
+    SupportsStreamingMessages,
+)
 from openharness.engine.messages import ConversationMessage
 from openharness.hooks.events import HookEvent
 from openharness.hooks.loader import HookRegistry
@@ -23,6 +35,7 @@ from openharness.hooks.schemas import (
     HookDefinition,
     HttpHookDefinition,
     PromptHookDefinition,
+    PolicyHookDefinition,
 )
 from openharness.hooks.types import AggregatedHookResult, HookResult
 from openharness.sandbox import SandboxUnavailableError
@@ -37,6 +50,12 @@ class HookExecutionContext:
     api_client: SupportsStreamingMessages
     default_model: str
     context_window_tokens: int | None = None
+    settings: Settings | None = None
+    owner: ExecutionOwner | None = None
+    permission_checker: PermissionChecker | None = None
+    capabilities: CapabilityContext = CapabilityContext()
+    permission_prompt: Callable[[str, str], Awaitable[bool]] | None = None
+    account_usage: Callable[[UsageSnapshot], None] | None = None
 
 
 class HookExecutor:
@@ -46,18 +65,67 @@ class HookExecutor:
         self._registry = registry
         self._context = context
 
+    def scoped(
+        self,
+        *,
+        cwd: Path,
+        settings: Settings | None,
+        checker: PermissionChecker,
+        capabilities: CapabilityContext,
+        prompt: Callable[[str, str], Awaitable[bool]] | None,
+        owner: ExecutionOwner | None = None,
+    ) -> HookExecutor:
+        return HookExecutor(
+            self._registry,
+            replace(
+                self._context,
+                cwd=cwd,
+                settings=settings or self._context.settings,
+                permission_checker=checker,
+                capabilities=capabilities,
+                permission_prompt=prompt,
+                owner=owner,
+            ),
+        )
+
+    def has_effects(self, event: HookEvent, tool_name: str) -> bool:
+        return any(
+            not isinstance(hook, PolicyHookDefinition)
+            and _matches_hook(hook, {"tool_name": tool_name})
+            for hook in self._registry.get(event)
+        )
+
     def update_registry(self, registry: HookRegistry) -> None:
         """Replace the active hook registry."""
         self._registry = registry
 
-    def with_api_client(self, api_client: SupportsStreamingMessages, default_model: str,
-                        *, context_window_tokens: int | None = None) -> HookExecutor:
+    def with_api_client(
+        self,
+        api_client: SupportsStreamingMessages,
+        default_model: str,
+        *,
+        context_window_tokens: int | None = None,
+    ) -> HookExecutor:
         """Reuse hook policy with a separate model transport and execution context."""
-        return HookExecutor(self._registry, HookExecutionContext(
-            cwd=self._context.cwd, api_client=api_client, default_model=default_model,
-            context_window_tokens=context_window_tokens if context_window_tokens is not None else (
-                self._context.context_window_tokens if default_model == self._context.default_model else None),
-        ))
+        return HookExecutor(
+            self._registry,
+            HookExecutionContext(
+                cwd=self._context.cwd,
+                settings=self._context.settings,
+                account_usage=None
+                if getattr(api_client, "accounts_usage", False)
+                else self._context.account_usage,
+                api_client=api_client,
+                default_model=default_model,
+                context_window_tokens=context_window_tokens
+                if context_window_tokens is not None
+                else (
+                    self._context.context_window_tokens
+                    if default_model == self._context.default_model
+                    else None
+                ),
+            ),
+        )
 
     def update_context(
         self,
@@ -77,14 +145,73 @@ class HookExecutor:
         for hook in self._registry.get(event):
             if not _matches_hook(hook, payload):
                 continue
-            if isinstance(hook, CommandHookDefinition):
-                results.append(await self._run_command_hook(hook, event, payload))
-            elif isinstance(hook, HttpHookDefinition):
-                results.append(await self._run_http_hook(hook, event, payload))
-            elif isinstance(hook, PromptHookDefinition):
-                results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=False))
-            elif isinstance(hook, AgentHookDefinition):
-                results.append(await self._run_prompt_like_hook(hook, event, payload, agent_mode=True))
+            clean_payload = redact(payload)
+            try:
+                if isinstance(hook, PolicyHookDefinition):
+                    denied = payload.get("tool_name") in hook.denied_tools
+                    result = HookResult(
+                        hook_type="policy",
+                        success=not denied,
+                        blocked=denied,
+                        reason="Tool denied by deterministic policy hook" if denied else "",
+                    )
+                else:
+                    capability = (
+                        "shell.execute"
+                        if isinstance(hook, CommandHookDefinition)
+                        else (
+                            "network.http" if isinstance(hook, HttpHookDefinition) else "model.call"
+                        )
+                    )
+                    if not self._context.capabilities.permits(frozenset({capability})):
+                        raise PermissionError("Hook capability not granted")
+                    checker = self._context.permission_checker
+                    if checker is not None:
+                        decision = checker.evaluate(
+                            "hook:" + hook.type,
+                            is_read_only=isinstance(
+                                hook, (PromptHookDefinition, AgentHookDefinition)
+                            ),
+                            command=_inject_arguments(
+                                hook.command, clean_payload, shell_escape=True
+                            )
+                            if isinstance(hook, CommandHookDefinition)
+                            else None,
+                        )
+                        if not decision.allowed:
+                            prompt = self._context.permission_prompt
+                            if not (
+                                decision.requires_confirmation
+                                and prompt
+                                and await prompt("hook:" + hook.type, decision.reason)
+                            ):
+                                raise PermissionError("Hook permission denied")
+                    if len(json.dumps(clean_payload).encode()) > hook.max_payload_bytes:
+                        raise ValueError("Hook payload exceeds limit")
+                    if isinstance(hook, CommandHookDefinition):
+                        pending = self._run_command_hook(hook, event, clean_payload)
+                    elif isinstance(hook, HttpHookDefinition):
+                        pending = self._run_http_hook(hook, event, clean_payload)
+                    else:
+                        pending = self._run_prompt_like_hook(
+                            hook,
+                            event,
+                            clean_payload,
+                            agent_mode=isinstance(hook, AgentHookDefinition),
+                        )
+                    result = await asyncio.wait_for(pending, hook.timeout_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                result = HookResult(
+                    hook_type=hook.type,
+                    success=False,
+                    blocked=hook.block_on_failure,
+                    reason=f"Hook failed: {type(exc).__name__}",
+                )
+            results.append(result)
+            if result.blocked:
+                break
         return AggregatedHookResult(results=results)
 
     async def _run_command_hook(
@@ -97,11 +224,18 @@ class HookExecutor:
         try:
             process = await create_shell_subprocess(
                 command,
+                login=False,
                 cwd=self._context.cwd,
+                settings=self._context.settings,
+                owner=self._context.owner,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={
-                    **os.environ,
+                    **{
+                        key: value
+                        for key, value in os.environ.items()
+                        if key in SAFE_ENV and (not hook.env_allowlist or key in hook.env_allowlist)
+                    },
                     "OPENHARNESS_HOOK_EVENT": event.value,
                     "OPENHARNESS_HOOK_PAYLOAD": json.dumps(payload),
                 },
@@ -116,12 +250,13 @@ class HookExecutor:
 
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
+                _bounded_communicate(process, hook.max_output_bytes),
                 timeout=hook.timeout_seconds,
             )
         except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            await asyncio.gather(
+                terminate_shell_process(process, force=True), process.communicate()
+            )
             return HookResult(
                 hook_type=hook.type,
                 success=False,
@@ -129,12 +264,23 @@ class HookExecutor:
                 reason=f"command hook timed out after {hook.timeout_seconds}s",
             )
 
+        except BaseException:
+            await asyncio.gather(
+                terminate_shell_process(process, force=True), process.communicate()
+            )
+            raise
+
         output = "\n".join(
-            part for part in (
+            part
+            for part in (
                 stdout.decode("utf-8", errors="replace").strip(),
                 stderr.decode("utf-8", errors="replace").strip(),
-            ) if part
+            )
+            if part
         )
+        output = str(redact(output))
+        if len(output.encode()) > hook.max_output_bytes:
+            raise ValueError("Command hook output exceeds limit")
         success = process.returncode == 0
         return HookResult(
             hook_type=hook.type,
@@ -151,30 +297,16 @@ class HookExecutor:
         event: HookEvent,
         payload: dict[str, Any],
     ) -> HookResult:
-        try:
-            async with httpx.AsyncClient(timeout=hook.timeout_seconds) as client:
-                response = await client.post(
-                    hook.url,
-                    json={"event": event.value, "payload": payload},
-                    headers=hook.headers,
-                )
-            success = response.is_success
-            output = response.text
-            return HookResult(
-                hook_type=hook.type,
-                success=success,
-                output=output,
-                blocked=hook.block_on_failure and not success,
-                reason=output or f"http hook returned {response.status_code}",
-                metadata={"status_code": response.status_code},
-            )
-        except Exception as exc:
-            return HookResult(
-                hook_type=hook.type,
-                success=False,
-                blocked=hook.block_on_failure,
-                reason=str(exc),
-            )
+        status, output = await post_hook(hook, event.value, payload)
+        success = 200 <= status < 300
+        return HookResult(
+            hook_type=hook.type,
+            success=success,
+            output=output,
+            blocked=hook.block_on_failure and not success,
+            reason="" if success else f"HTTP hook returned {status}",
+            metadata={"status_code": status},
+        )
 
     async def _run_prompt_like_hook(
         self,
@@ -187,7 +319,7 @@ class HookExecutor:
         prompt = _inject_arguments(hook.prompt, payload)
         prefix = (
             "You are validating whether a hook condition passes in OpenHarness. "
-            "Return strict JSON: {\"ok\": true} or {\"ok\": false, \"reason\": \"...\"}."
+            'Return strict JSON: {"ok": true} or {"ok": false, "reason": "..."}.'
         )
         if agent_mode:
             prefix += " Be more thorough and reason over the payload before deciding."
@@ -196,25 +328,37 @@ class HookExecutor:
             messages=[ConversationMessage.from_user_text(prompt)],
             system_prompt=prefix,
             max_tokens=512,
-            context_window_tokens=(hook.context_window_tokens if hook.context_window_tokens is not None else (
-                self._context.context_window_tokens
-                if not hook.model or hook.model == self._context.default_model else None)),
+            context_window_tokens=(
+                hook.context_window_tokens
+                if hook.context_window_tokens is not None
+                else (
+                    self._context.context_window_tokens
+                    if not hook.model or hook.model == self._context.default_model
+                    else None
+                )
+            ),
         )
 
         from openharness.services.context_budget import checked_request
+
         request = checked_request(self._context.api_client, request)
         text_chunks: list[str] = []
         final_event: ApiMessageCompleteEvent | None = None
         async for event_item in self._context.api_client.stream_message(request):
             if isinstance(event_item, ApiMessageCompleteEvent):
                 final_event = event_item
-            else:
+                if self._context.account_usage:
+                    self._context.account_usage(event_item.usage)
+            elif isinstance(event_item, ApiTextDeltaEvent):
                 text_chunks.append(event_item.text)
 
         text = "".join(text_chunks)
         if final_event is not None and final_event.message.text:
             text = final_event.message.text
 
+        if len(text.encode()) > hook.max_output_bytes:
+            raise ValueError("Model hook output exceeds limit")
+        text = str(redact(text))
         parsed = _parse_hook_json(text)
         if parsed["ok"]:
             return HookResult(hook_type=hook.type, success=True, output=text)
@@ -235,9 +379,7 @@ def _matches_hook(hook: HookDefinition, payload: dict[str, Any]) -> bool:
     return fnmatch.fnmatch(subject, matcher)
 
 
-def _inject_arguments(
-    template: str, payload: dict[str, Any], *, shell_escape: bool = False
-) -> str:
+def _inject_arguments(template: str, payload: dict[str, Any], *, shell_escape: bool = False) -> str:
     serialized = json.dumps(payload, ensure_ascii=True)
     if shell_escape:
         serialized = shlex.quote(serialized)
@@ -251,7 +393,32 @@ def _parse_hook_json(text: str) -> dict[str, Any]:
             return parsed
     except json.JSONDecodeError:
         pass
-    lowered = text.strip().lower()
-    if lowered in {"ok", "true", "yes"}:
-        return {"ok": True}
     return {"ok": False, "reason": text.strip() or "hook returned invalid JSON"}
+
+
+async def _bounded_communicate(
+    process: asyncio.subprocess.Process, limit: int
+) -> tuple[bytes, bytes]:
+    total = 0
+
+    async def read(stream: asyncio.StreamReader | None) -> bytes:
+        nonlocal total
+        data = bytearray()
+        if stream is None:
+            return bytes(data)
+        while chunk := await stream.read(8192):
+            total += len(chunk)
+            if total > limit:
+                raise ValueError("Command hook output exceeds limit")
+            data.extend(chunk)
+        return bytes(data)
+
+    tasks = [asyncio.create_task(read(process.stdout)), asyncio.create_task(read(process.stderr))]
+    try:
+        stdout, stderr = await asyncio.gather(*tasks)
+        await process.wait()
+        return stdout, stderr
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

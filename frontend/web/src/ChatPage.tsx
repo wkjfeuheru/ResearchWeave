@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, BookOpen, Building2, Check, ChevronDown, Copy, Download, Paperclip, Trash2, Layers, MessageSquare, Square } from 'lucide-react';
 import type { ModelProfile, Prompt, ResearchProgress, Session, SessionFile, Skill, Usage } from './api';
 import { Markdown, Modal } from './components';
@@ -25,14 +25,18 @@ export function UsageLine({ usage }: { usage: Usage }) {
 }
 
 function ResearchTasks({ progress, sessionId }: { progress: ResearchProgress; sessionId: string }) {
-  const labels = { pending: '待执行', in_progress: '进行中', completed: '已完成', blocked: '受阻', cancelled: '已取消' };
+  const labels = { pending: '待执行', ready: '可执行', in_progress: '进行中', validating: '验证中',
+    completed: '已完成', blocked: '受阻', failed: '失败', cancelled: '已取消' };
+  const projectLabels = { created: '已创建', planning: '规划中', running: '研究中', replanning: '重新规划中',
+    suspended: '已暂停', validating: '交付验证中', completed: '研报已完成', failed: '失败', cancelled: '已取消' };
   const storageKey = `openharness:research-progress:${sessionId}:${progress.plan_id || 'replan'}`;
   const hasBlocked = progress.tasks.some(task => task.status === 'blocked');
   const conflicts = progress.conflicts || [];
   const conflictLabels = { open: '发现冲突', investigating: '核查原文中', awaiting_review: '等待审查',
     resolved: '裁决完成', unresolved: '仍未决', interrupted: '核查已中断' };
   const hasPendingConflict = conflicts.some(conflict => conflict.core && conflict.status !== 'resolved');
-  const automaticOpen = progress.replan_required || progress.completed < progress.total || hasBlocked || hasPendingConflict;
+  const automaticOpen = progress.replan_required || progress.completed < progress.total || hasBlocked || hasPendingConflict
+    || !!(progress.project_status && progress.project_status !== 'completed');
   const [open, setOpen] = useState(automaticOpen);
   useEffect(() => {
     if (hasBlocked) { setOpen(true); return; }
@@ -48,13 +52,14 @@ function ResearchTasks({ progress, sessionId }: { progress: ResearchProgress; se
     sessionStorage.setItem(storageKey, next ? 'open' : 'closed');
     return next;
   });
-  if (!progress.plan_id && !progress.replan_required) return null;
+  if (!progress.plan_id && !progress.replan_required && !progress.project_status) return null;
   return <div className="research-progress" aria-label="研究任务进度" aria-live="polite">
     <button type="button" className="research-progress-heading" aria-expanded={open}
       aria-disabled={hasBlocked} onClick={toggle}>
       <span className="research-progress-title"><ChevronDown size={14} className={open ? 'expanded' : ''} />
         <strong title={progress.replan_required ? '正在重新规划' : progress.title}>{progress.replan_required ? '正在重新规划' : progress.title}</strong></span>
-      {!progress.replan_required && <span className="research-progress-count">{progress.completed}/{progress.total} 项任务完成</span>}
+      <span className="research-progress-count">{progress.project_status && `${projectLabels[progress.project_status]} · `}
+        {!progress.replan_required && `${progress.completed}/${progress.total} 项任务完成`}</span>
     </button>
     {open && <ol>{progress.tasks.map(task => <li key={task.id} className={task.status}>
       <span className="task-status-symbol">{task.status === 'completed' ? <Check size={13} /> : '·'}</span>
@@ -99,15 +104,23 @@ export default function ChatPage({ session, models, skills, selectedProfile, onP
   onSteer: () => void;
   prompt: Prompt | null; onRespond: (answer: string) => void;
 }) {
-  const bottom = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
-  const follow = useRef(true);
+  const previousScrollHeight = useRef(0);
   const [copied, setCopied] = useState('');
   const model = models.find(m => m.id === selectedProfile);
   const enabled = skills.filter(s => s.enabled);
   const messages = session?.messages || [];
-  useEffect(() => { follow.current = true; }, [session?.session_id]);
-  useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ behavior: 'instant' }); }, [messages]);
+  useLayoutEffect(() => { previousScrollHeight.current = 0; }, [session?.session_id]);
+  useLayoutEffect(() => {
+    const element = scroll.current;
+    if (!element) return;
+    // Determine where the user was before this content grew. A scroll event
+    // caused by that growth must not disable following the current stream.
+    if (!previousScrollHeight.current || previousScrollHeight.current - element.scrollTop - element.clientHeight < 100) {
+      element.scrollTop = element.scrollHeight;
+    }
+    previousScrollHeight.current = element.scrollHeight;
+  }, [messages]);
   const renderedTurns = new Set<string>();
 
   return <div className="chat-page">
@@ -119,10 +132,7 @@ export default function ChatPage({ session, models, skills, selectedProfile, onP
       </div>
       <button className="skill-summary" onClick={onSkills}><Layers size={15} />{enabled.length ? `${enabled.length} 个技能已启用` : '选择研究技能'}</button>
     </div>
-    <div className="conversation-scroll" ref={scroll} onScroll={() => {
-      const element = scroll.current;
-      if (element) follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 100;
-    }}>
+    <div className="conversation-scroll" ref={scroll}>
       {!messages.length ? <div className="chat-welcome">
         <div className="welcome-symbol"><MessageSquare size={28} strokeWidth={1.5} /></div>
         <span className="eyebrow">YOUR RESEARCH WORKSPACE</span>
@@ -150,7 +160,7 @@ export default function ChatPage({ session, models, skills, selectedProfile, onP
             }}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}{copied === message.id ? '已复制' : '复制'}</button>}
           </div>
         </article>;
-      })}<div ref={bottom} /></div>}
+      })}</div>}
     </div>
     <div className="composer-container">
       {session?.research_progress && <ResearchTasks progress={session.research_progress} sessionId={session.session_id} />}

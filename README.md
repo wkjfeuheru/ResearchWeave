@@ -33,11 +33,17 @@ The installation scripts support PyPI and source installs. `oh`, `openharness` a
 
 ## Research workflow
 
-Complex questions produce a concise task outline and committed progress. Simple questions need no forced plan. Research tools read and search documents, fetch webpages, query configured MCP services, execute calculations and create files, notebooks or images. File edits and Shell operations retain permission and sandbox checks.
+Complex questions produce a concise task outline and committed progress. Simple questions need no forced plan. Research tools read and search documents, fetch webpages, query configured MCP services, execute calculations and create files. Financial analysis, valuation, charts and report export belong in Skills using these shared tools. File edits and Shell operations retain permission and sandbox checks.
 
-The research memory tool maintains versioned objectives, plans, evidence, conclusions and auditable method summaries. A successful tool call does not verify a claim. Search summaries and user accounts remain pending verification until supported by explicit records. Corrections preserve history and mark dependent conclusions for review.
+The research memory tool maintains evidence, provenance, conclusions, conflicts and auditable method summaries. Report objectives, plans and task state are controlled by ResearchAgentRuntime, TaskManager and CompletionPolicy; legacy memory planning operations remain available only outside report projects. A successful tool call does not verify a claim. Search summaries and user accounts remain pending verification until supported by explicit records. Corrections preserve history and mark dependent conclusions for review.
 
 Use **Stop** to cancel generation, or **Interrupt and modify** to save a change request, finish cancellation and replan. Refreshing or restarting restores committed state and historical citations; it does not automatically resume a model run. Conversations do not inherit other conversations' research.
+
+Report production can start an explicit `research_project` with a versioned objective. The main agent calls the registered `planner` and `replanner` tools; the existing loop's ResearchAgentRuntime validates their proposals, leases DAG tasks, isolates late results and checks evidence-backed artifacts before freezing delivery. Report drafts are downloadable Markdown artifacts. Ordinary questions and historical plans keep their existing path. See [core tool contracts and compatibility](docs/AGENT_CORE_TOOLS.md). The offline earnings commentary fixture can be run with `uv run pytest -q tests/test_research/test_earnings_workflow.py`.
+
+Each report project now binds an isolated directory with `MEMORY.md`, `artifacts/` and `reports/`. Existing file tools maintain the Markdown background, and the original loop reloads it for each model request. See [workspace configuration, file boundaries and recovery](docs/WORKSPACE_MEMORY.md).
+
+`dispatch_subagents` delegates 1–16 independent assignments with bounded parallelism, separate histories and private output directories under `subagents/`. Children return candidates for main-agent review and cannot edit main `MEMORY.md` or authoritative task state. The research registry excludes `notebook_edit`, `config`, `mcp_auth`, `image_generation` and `sleep`; their underlying services and the explicit general registry remain available.
 
 ## Models, credentials and extensions
 
@@ -66,13 +72,17 @@ oh config set research_memory.enabled false
 
 Plugins can contribute skills, tools, MCP services and generic hooks. Installed skills and plugin discovery directories remain compatible, including `.agents/skills` and `.claude/skills`. Legacy plugin agent and terminal command declarations are accepted but ignored, with diagnostics in `oh plugin list`.
 
-Web search defaults to configured investment research sources, ordered by official disclosures/statistics/policy, industry professionals, then financial media. Broader web discovery requires an explicit scope. The former bundled `skill-creator` is now supplied by the toggleable `skill-authoring` plugin with layered resources and a reusable scaffold. See [research search and skill plugins](docs/research-search-and-skills.md) for configuration and layouts.
+Web search defaults to configured investment research sources, ordered by official disclosures/statistics/policy, industry professionals, then financial media. Broader web discovery requires an explicit scope. Business Skills ship in `analysis-modeling` and `report-generation`, with package and individual switches and metadata-only discovery. See [Skill modules and progressive loading](docs/skill-modules.md).
 
 Research memory defaults to enabled with a 6,000-token injection budget. Disabling it never activates an older memory system. Old configuration fields are ignored; legacy memory context budgets migrate only when no top-level or active-model budget is set. Existing user data is not automatically removed.
 
 The personal assistant product, messaging integrations, coding orchestration, terminal UI, scheduling and old long-term/vector memory are retired. Only the research Web runtime and administrative CLI remain.
 
 ## Validation
+
+The deterministic Agent core integration suite covers parallel delegation, memory updates, replanning, cancellation/recovery and report delivery through the existing loop. See the [E2E-01–16 test report and coverage](docs/testing/agent-core-e2e-report.md) and [remaining limits](docs/testing/agent-core-risks.md).
+
+Report projects require SRT 0.0.79 or the configured Docker backend; unavailable backends reject Shell execution. See [sandbox setup, exports and crash recovery](docs/SANDBOX_EXECUTION.md). Run `uv run python scripts/check_types.py` for strict checks of all production Python, including bundled scripts.
 
 ```bash
 uv run pytest -q
@@ -86,3 +96,5 @@ npm run test:e2e
 Real model verification is separate from deterministic tests. See `tests/test_web/real_research_eval.py --help` for the two-turn Web evaluation with source collection, calculations, citations, browser checks and restart recovery. Run it with an existing configured profile in a disposable workspace.
 
 [Cleanup scope and validation report](docs/research-product-cleanup.md)
+
+Developer reference: [Harness contracts, permissions, retry and recovery](docs/HARNESS_EXECUTION.md), with [validation results](docs/testing/harness-validation.md).

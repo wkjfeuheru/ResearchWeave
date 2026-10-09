@@ -1,22 +1,66 @@
 """Four-dimensional reports with explicit denominators, coverage and run slices."""
 
+from __future__ import annotations
+
+from typing_extensions import TypedDict
 import json
 import math
 from collections import defaultdict
 from pathlib import Path
-
 from openharness.evaluation.models import RunArtifact
 from openharness.utils.fs import atomic_write_text
 
 
-def read_results(directory):
+class MetricSummary(TypedDict, total=False):
+    count: int
+    total: int
+    coverage: float | None
+    not_applicable: int
+    unjudged: int
+    mean: float | None
+    p50: float | None
+    p90: float | None
+    p95: float | None
+    numerator: float
+    denominator: float
+    micro: float | None
+
+
+class FailureSummary(TypedDict):
+    case_id: str
+    trace_id: str
+    status: str
+    error: str | None
+    judge_error: object
+    record: str
+    failed_checks: list[str]
+    unjudged: list[str]
+
+
+class EvaluationReport(TypedDict, total=False):
+    task_count: int
+    code_changed_during_experiment: bool
+    calibrated: bool
+    warning: str
+    summary: dict[str, MetricSummary]
+    groups: dict[str, dict[str, MetricSummary]]
+    failures: list[FailureSummary]
+    composite_score: None
+    calibration: dict[str, object]
+    planned_executions: int
+    execution_coverage: float | None
+    pending_executions: list[tuple[str, int]]
+    execution_complete: bool
+
+
+def read_results(directory: str | Path) -> list[RunArtifact]:
     return [
         RunArtifact.model_validate_json(p.read_text(encoding="utf-8"))
         for p in sorted((Path(directory) / "results").glob("*.json"))
     ]
 
 
-def percentile(values, percent):
+def percentile(values: list[float], percent: float) -> float | None:
     if not values:
         return None
     values = sorted(values)
@@ -25,13 +69,13 @@ def percentile(values, percent):
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
 
 
-def summary(artifacts):
+def summary(artifacts: list[RunArtifact]) -> dict[str, MetricSummary]:
     names = {s.name for a in artifacts for s in a.scores}
-    result = {}
+    result: dict[str, MetricSummary] = {}
     for name in sorted(names):
         scores = [s for a in artifacts for s in a.scores if s.name == name]
         known = [s for s in scores if s.value is not None and s.status == "scored"]
-        values = [s.value for s in known]
+        values = [s.value for s in known if s.value is not None]
         result[name] = {
             "count": len(known),
             "total": len(artifacts),
@@ -51,9 +95,9 @@ def summary(artifacts):
     return result
 
 
-def create_report(artifacts):
-    groups = defaultdict(list)
-    failures = []
+def create_report(artifacts: list[RunArtifact]) -> EvaluationReport:
+    groups: dict[str, list[RunArtifact]] = defaultdict(list)
+    failures: list[FailureSummary] = []
     for artifact in artifacts:
         groups[f"environment:{artifact.provenance.get('environment', 'unknown')}"].append(artifact)
         for dimension in ("category", "difficulty", "split", "material", "cache_condition"):
@@ -99,7 +143,7 @@ def create_report(artifacts):
     }
 
 
-def write_report(directory, artifacts):
+def write_report(directory: str | Path, artifacts: list[RunArtifact]) -> EvaluationReport:
     directory = Path(directory)
     from openharness.evaluation.calibration import review_report
 
@@ -146,7 +190,7 @@ def write_report(directory, artifacts):
         "first_content_ms",
     )
 
-    def fmt(value):
+    def fmt(value: float | None) -> str:
         return "N/A" if value is None else f"{value:.3f}"
 
     for group in (
@@ -179,7 +223,7 @@ def write_report(directory, artifacts):
     return report
 
 
-def compare_runs(candidate, baseline):
+def compare_runs(candidate: list[RunArtifact], baseline: list[RunArtifact]) -> dict[str, object]:
     left = {(a.case_id, a.repetition): a for a in candidate}
     right = {(a.case_id, a.repetition): a for a in baseline}
     shared = sorted(left.keys() & right.keys())
@@ -195,13 +239,15 @@ def compare_runs(candidate, baseline):
         and not left[key].provenance.get("code_changed_during_experiment", False)
         and not right[key].provenance.get("code_changed_during_experiment", False)
     ]
-    differences = defaultdict(list)
+    differences: dict[str, list[float]] = defaultdict(list)
     for key in valid:
         a = {s.name: s.value for s in left[key].scores if s.status == "scored"}
         b = {s.name: s.value for s in right[key].scores if s.status == "scored"}
         for name in a.keys() & b.keys():
             if a[name] is not None and b[name] is not None:
-                differences[name].append(a[name] - b[name])
+                left_value, right_value = a[name], b[name]
+                assert left_value is not None and right_value is not None
+                differences[name].append(left_value - right_value)
     return {
         "paired_count": len(valid),
         "excluded_incompatible": len(shared) - len(valid),

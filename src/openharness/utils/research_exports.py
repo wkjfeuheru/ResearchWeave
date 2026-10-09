@@ -1,9 +1,12 @@
 """Generic cited-document and spreadsheet writers; no skill business dispatch."""
 
 from __future__ import annotations
+from pydantic import BaseModel
+from typing import Any, Iterator, Callable, Iterable
 
 import json
 import re
+import os
 from decimal import Decimal
 from pathlib import Path
 from docx import Document
@@ -12,7 +15,7 @@ from openharness.utils.fs import atomic_write_text
 from openharness.utils.session_files import SessionFiles
 
 
-def collect_references(value):
+def collect_references(value: object) -> Iterator[dict[str, Any]]:
     if isinstance(value, dict):
         if "locator" in value and "title" in value:
             yield value
@@ -23,7 +26,7 @@ def collect_references(value):
             yield from collect_references(item)
 
 
-def display(value):
+def display(value: object) -> str:
     if value is None:
         return "未知/不可计算"
     if isinstance(value, (dict, list)):
@@ -34,16 +37,18 @@ def display(value):
 class ReportContext:
     """Shared reference checks and source navigation for plugin-owned report bodies."""
 
-    def __init__(self, data: dict, session_directory: Path | None = None):
+    def __init__(self, data: dict[str, Any], session_directory: Path | None = None) -> None:
         self.data = data
-        self.references = []
+        self.references: list[dict[str, Any]] = []
         for ref in collect_references(data):
             if ref not in self.references:
                 self.references.append(ref)
-        self.memory = {}
+        self.memory: dict[str, Any] = {}
         if session_directory is not None and (session_directory / "state.json").is_file():
             self.memory = json.loads((session_directory / "state.json").read_text())
         for ref in self.references:
+            if os.environ.get("OPENHARNESS_ISOLATED_EXPORT"):
+                continue  # Candidate IDs are verified by the main agent on the host.
             for key, pool in (("source_id", "sources"), ("evidence_id", "evidence_pool")):
                 if ref.get(key) and ref[key] not in self.memory.get(pool, {}):
                     raise ValueError(f"{ref[key]}不属于当前会话；导入资料须重新登记来源/证据")
@@ -54,13 +59,13 @@ class ReportContext:
                 ):
                     raise ValueError("来源与证据不对应，须核对引用")
 
-    def refs(self, items):
+    def refs(self, items: list[dict[str, Any]]) -> str:
         return " ".join(f"[R{self.references.index(ref) + 1}]" for ref in items)
 
-    def claim(self, item):
-        return item["text"] + " " + self.refs(item["references"])
+    def claim(self, item: dict[str, Any]) -> str:
+        return str(item["text"]) + " " + self.refs(item["references"])
 
-    def header(self, title):
+    def header(self, title: str) -> list[str]:
         data = self.data
         return [
             f"# {title}：{data['company']['name']}（{data['company']['code']}）",
@@ -68,7 +73,7 @@ class ReportContext:
             "",
         ]
 
-    def finish(self, lines):
+    def finish(self, lines: list[str]) -> str:
         lines.append("## 缺口与限制")
         lines.extend("- " + gap for gap in self.data["gaps"])
         if not self.data["gaps"]:
@@ -81,7 +86,7 @@ class ReportContext:
         # GFM table rows must remain adjacent; prose blocks get blank-line separation.
         text = "\n".join(line if line.startswith("|") else "\n" + line + "\n" for line in lines)
 
-        def replace_evidence(match):
+        def replace_evidence(match: re.Match[str]) -> str:
             evidence = self.memory.get("evidence_pool", {}).get(match[1])
             source = (
                 self.memory.get("sources", {}).get(evidence.get("source_id")) if evidence else None
@@ -93,7 +98,7 @@ class ReportContext:
         return re.sub(r"\[E:([^\]]+)\]", replace_evidence, text)
 
 
-def flatten(value, prefix=""):
+def flatten(value: object, prefix: str = "") -> Iterator[tuple[str, object]]:
     if isinstance(value, dict):
         for key, item in value.items():
             yield from flatten(item, f"{prefix}.{key}" if prefix else key)
@@ -105,14 +110,14 @@ def flatten(value, prefix=""):
 
 
 def export_result(
-    result,
+    result: BaseModel,
     directory: Path,
     session_directory: Path | None = None,
     task_id: str | None = None,
     *,
-    render_markdown,
-    sheets,
-) -> dict:
+    render_markdown: Callable[[dict[str, Any], Path | None], str],
+    sheets: Iterable[str],
+) -> dict[str, object]:
     data = result.model_dump(mode="json")
     raw_data = result.model_dump(mode="python")
     markdown = render_markdown(data, session_directory)
@@ -133,8 +138,8 @@ def export_result(
                 table = document.add_table(rows=0, cols=len(cells))
                 table.style = "Table Grid"
             row = table.add_row().cells
-            for cell, value in zip(row, cells):
-                cell.text = value
+            for cell, cell_text in zip(row, cells):
+                cell.text = cell_text
             continue
         if line.strip():
             table = None
@@ -145,7 +150,9 @@ def export_result(
             document.add_paragraph(line)
     document.save(paths[2])
     workbook = Workbook()
-    workbook.remove(workbook.active)
+    active_sheet = workbook.active
+    if active_sheet is not None:
+        workbook.remove(active_sheet)
     for key in sheets:
         if key not in data:
             continue
@@ -171,10 +178,21 @@ def export_result(
         sheet.column_dimensions["C"].width = 38
     workbook.save(paths[3])
     artifacts = []
-    if session_directory is not None:
+    import os
+
+    if session_directory is not None and not os.environ.get("OPENHARNESS_ISOLATED_EXPORT"):
+        execution = json.loads(os.environ.get("OPENHARNESS_RESEARCH_EXECUTION", "null"))
+        if execution and (
+            execution["task_id"] != task_id
+            or Path(os.environ.get("OPENHARNESS_RESEARCH_SESSION_DIR", "")).resolve()
+            != session_directory.resolve()
+        ):
+            raise ValueError("Export execution belongs to another task or session")
         storage = SessionFiles(session_directory)
         artifacts = [
-            storage.register(path, task_id=task_id, status=data["status"], kind=data["kind"])
+            storage.register(
+                path, task_id=task_id, status=data["status"], kind=data["kind"], execution=execution
+            )
             for path in paths
         ]
     return {

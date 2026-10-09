@@ -27,11 +27,11 @@ class SkillMetadata(BaseModel):
 
 @dataclass(frozen=True)
 class SkillDefinition:
-    """A loaded skill."""
+    """Discovered metadata. Entry content is loaded explicitly after selection."""
 
     name: str
     description: str
-    content: str
+    content: str | None
     source: str
     path: str | None = None
     base_dir: str | None = None
@@ -43,3 +43,15 @@ class SkillDefinition:
     model: str | None = None
     argument_hint: str | None = None
     metadata: SkillMetadata = field(default_factory=SkillMetadata)
+    enabled: bool = True
+    plugin_name: str | None = None
+
+    def load_content(self) -> str:
+        """Read only this entrypoint, never its supporting resources."""
+        if self.content is not None:
+            return self.content
+        if not self.path or not self.base_dir:
+            return ""
+        from openharness.skills.resources import resolve_resource
+
+        return resolve_resource(self.base_dir, self.path).read_text(encoding="utf-8")

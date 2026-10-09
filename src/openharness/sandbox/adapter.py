@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,9 +80,26 @@ def get_sandbox_availability(settings: Settings | None = None) -> SandboxAvailab
             available=False,
             reason=(
                 "sandbox runtime CLI not found; install it with "
-                "`npm install -g @anthropic-ai/sandbox-runtime`"
+                "`npm install -g @anthropic-ai/sandbox-runtime@0.0.79`"
             ),
         )
+
+    required_version = resolved_settings.sandbox.required_srt_version
+    if required_version:
+        try:
+            version = subprocess.run(
+                [srt, "--version"], capture_output=True, text=True, timeout=5, check=True
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return SandboxAvailability(
+                enabled=True, available=False, reason="Cannot verify SRT version"
+            )
+        if version != required_version:
+            return SandboxAvailability(
+                enabled=True,
+                available=False,
+                reason=f"Report execution requires SRT {required_version}; installed {version}",
+            )
 
     if platform_name in {"linux", "wsl"} and shutil.which("bwrap") is None:
         return SandboxAvailability(
@@ -89,6 +107,13 @@ def get_sandbox_availability(settings: Settings | None = None) -> SandboxAvailab
             available=False,
             reason="bubblewrap (`bwrap`) is required for sandbox runtime on Linux/WSL",
             command=srt,
+        )
+
+    if platform_name in {"linux", "wsl"} and shutil.which("socat") is None:
+        return SandboxAvailability(
+            enabled=True,
+            available=False,
+            reason="socat is required for sandbox runtime on Linux/WSL",
         )
 
     if platform_name == "macos" and shutil.which("sandbox-exec") is None:

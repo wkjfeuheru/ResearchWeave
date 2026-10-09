@@ -221,7 +221,7 @@ def poll_for_access_token(
         data: dict[str, Any] = resp.json()
 
         if "access_token" in data:
-            return data["access_token"]
+            return str(data["access_token"])
 
         error = data.get("error", "")
         if error == "authorization_pending":

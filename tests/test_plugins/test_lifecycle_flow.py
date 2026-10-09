@@ -20,7 +20,9 @@ from openharness.tools.base import ToolExecutionContext
 @pytest.fixture(autouse=True)
 def isolate_user_and_project_plugins(tmp_path, monkeypatch):
     """These tests exercise user/project plugins; packaged plugins have separate coverage."""
-    monkeypatch.setattr("openharness.plugins.loader.BUNDLED_PLUGINS_DIR", tmp_path / "packaged-plugins")
+    monkeypatch.setattr(
+        "openharness.plugins.loader.BUNDLED_PLUGINS_DIR", tmp_path / "packaged-plugins"
+    )
 
 
 def _write_plugin(source_root: Path, server_script: Path) -> Path:

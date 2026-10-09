@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Callable, Protocol, Iterable
+from openharness.config import Settings
+from openharness.api.client import SupportsStreamingMessages
+from openharness.evaluation.models import EvalCase, Turn, Budget
+from openharness.runtime import RuntimeBundle
 import asyncio
 import shutil
 import subprocess
@@ -12,7 +17,6 @@ import platform
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from uuid import uuid4
-
 from openharness.config import load_settings
 from openharness.engine.stream_events import (
     AssistantTextDelta,
@@ -38,14 +42,18 @@ from openharness.skills import load_skill_registry
 from openharness.utils.fs import atomic_write_text
 
 
-def write_artifact(path, artifact):
+class ObserverFactory(Protocol):
+    def __call__(self, *, secrets: Iterable[str], budget: Budget) -> RecordingObserver: ...
+
+
+def write_artifact(path: str | Path, artifact: RunArtifact) -> None:
     atomic_write_text(Path(path), artifact.model_dump_json(indent=2) + "\n", mode=0o600)
 
 
-def code_version():
+def code_version() -> dict[str, object]:
     root = Path(__file__).resolve().parents[3]
 
-    def git(*args):
+    def git(*args: str) -> bytes:
         return subprocess.run(["git", *args], cwd=root, capture_output=True, check=False).stdout
 
     untracked = git("ls-files", "--others", "--exclude-standard").decode().splitlines()
@@ -70,7 +78,7 @@ def code_version():
     }
 
 
-def resolve_profile(name):
+def resolve_profile(name: str) -> Settings:
     settings = (
         load_settings()
         .model_copy(deep=True, update={"active_profile": name})
@@ -83,17 +91,17 @@ def resolve_profile(name):
 class ExperimentRunner:
     def __init__(
         self,
-        cases,
-        directory,
-        output,
+        cases: list[EvalCase],
+        directory: str | Path,
+        output: str | Path,
         *,
-        profile,
-        judge_profile=None,
-        observer_factory=None,
-        client_factory=None,
-        context_window_tokens=None,
-        judge_context_window_tokens=None,
-    ):
+        profile: str,
+        judge_profile: str | None = None,
+        observer_factory: ObserverFactory | None = None,
+        client_factory: Callable[[Settings], SupportsStreamingMessages] | None = None,
+        context_window_tokens: int | None = None,
+        judge_context_window_tokens: int | None = None,
+    ) -> None:
         self.cases = {case.id: case for case in cases}
         self.directory, self.output = Path(directory), Path(output).resolve()
         self.output.mkdir(parents=True, exist_ok=True)
@@ -136,7 +144,9 @@ class ExperimentRunner:
         self.observer_factory = observer_factory or RecordingObserver
         self.client_factory = client_factory or _resolve_api_client_from_settings
 
-    async def run_case(self, case, *, repetition=1, run_name=None):
+    async def run_case(
+        self, case: EvalCase, *, repetition: int = 1, run_name: str | None = None
+    ) -> RunArtifact:
         run_id = run_name or uuid4().hex
         workspace = self.output / "workspaces" / f"{case.id}-r{repetition}-{uuid4().hex[:8]}"
         workspace.mkdir(parents=True)
@@ -203,14 +213,14 @@ class ExperimentRunner:
         )
         result_path = self.output / "results" / f"{case.id}-r{repetition}-{run_id}.json"
         start = time.monotonic()
-        bundle = None
-        roots = []
+        bundle: RuntimeBundle | None = None
+        roots: list[Path] = []
         progress_counter = 0
 
-        async def question(text):
+        async def question(text: str) -> str:
             return case.turns[min(progress_counter, len(case.turns) - 1)].question_response
 
-        async def permission(tool, reason):
+        async def permission(tool: str, reason: str) -> bool:
             # Scripted policy is fixed per experiment; it does not depend on user response latency.
             return tool in {
                 "bash",
@@ -220,7 +230,7 @@ class ExperimentRunner:
                 "mcp__fixture__get_company_data",
             }
 
-        async def make_bundle(restore=None):
+        async def make_bundle(restore: list[dict[str, object]] | None = None) -> RuntimeBundle:
             client = self.client_factory(settings)
             current = None
             try:
@@ -251,6 +261,10 @@ class ExperimentRunner:
                     current.hook_executor.update_registry(HookRegistry())
                     artifact.provenance["external_hooks"] = "disabled_fixed_environment"
                 skills = load_skill_registry(workspace, settings=settings).list_skills()
+                # An evaluation explicitly freezes resource provenance once per
+                # case; this verification is separate from L0 registry discovery.
+                from openharness.skills.metadata import content_hash
+
                 roots[:] = [Path(skill.base_dir) for skill in skills if skill.base_dir]
                 configure_tools(current, case, workspace, roots)
                 artifact.provenance.update(
@@ -261,7 +275,9 @@ class ExperimentRunner:
                             {
                                 "id": s.metadata.skill_id or s.name,
                                 "version": s.metadata.version,
-                                "content_hash": s.metadata.content_hash,
+                                "content_hash": content_hash(Path(s.path))
+                                if s.path
+                                else s.metadata.content_hash,
                             }
                             for s in skills
                         ],
@@ -278,7 +294,10 @@ class ExperimentRunner:
                         await close()
                 raise
 
-        async def execute_turn(turn, *, interrupt=False, interrupt_trigger="first_tool"):
+        async def execute_turn(
+            turn: Turn, *, interrupt: bool = False, interrupt_trigger: str = "first_tool"
+        ) -> None:
+            assert bundle is not None
             input_prompt = turn.prompt
             if progress_counter == 0:
                 files = "\n".join(
@@ -348,8 +367,9 @@ class ExperimentRunner:
                     }
                 )
 
-                async def workflow():
+                async def workflow() -> None:
                     nonlocal bundle, progress_counter
+                    assert bundle is not None, progress_counter
                     for index, turn in enumerate(case.turns):
                         progress_counter = index
                         for asset in case.assets:
@@ -431,7 +451,7 @@ class ExperimentRunner:
                     else "first_call_cache_miss"
                 )
             if getattr(observer, "trace_id", None):
-                artifact.trace_id = observer.trace_id
+                artifact.trace_id = observer.trace_id or artifact.trace_id
                 artifact.upload_status = "failed" if observer.export_failed else "pending"
             if bundle:
                 try:
@@ -480,7 +500,9 @@ class ExperimentRunner:
         return artifact
 
     @staticmethod
-    def capture_result(bundle, workspace, artifact, observer):
+    def capture_result(
+        bundle: RuntimeBundle, workspace: Path, artifact: RunArtifact, observer: RecordingObserver
+    ) -> None:
         store = bundle.engine.tool_metadata["research_store"]
         state = store.load()
         artifact.research_state = observer.clean(state.model_dump(mode="json"))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel
+from openharness.hooks.schemas import HookDefinition
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,8 +25,8 @@ class LoadedPlugin:
     enabled: bool
     skills: list[SkillDefinition] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
-    tools: list[BaseTool] = field(default_factory=list)
-    hooks: dict[str, list] = field(default_factory=dict)
+    tools: list[BaseTool[BaseModel]] = field(default_factory=list)
+    hooks: dict[str, list[HookDefinition]] = field(default_factory=dict)
     mcp_servers: dict[str, McpServerConfig] = field(default_factory=dict)
 
     @property

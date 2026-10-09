@@ -1,12 +1,21 @@
 """Atomic per-session research storage, provenance, and bounded prompt views."""
 
 from __future__ import annotations
+from openharness.services.context_sources import ContextSnapshot
+from collections.abc import Mapping
+from openharness.research.models import (
+    PendingSteer,
+    SourceKind,
+    Record,
+    CitationSnapshot,
+    SourceDisplay,
+)
 
 import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter
@@ -39,12 +48,12 @@ from openharness.utils.research_sites import source_identity
 from openharness.research.conflicts import ConflictStoreMixin
 from openharness.research.errors import ResearchError
 
-OPERATION_ADAPTER = TypeAdapter(ResearchOperation)
+OPERATION_ADAPTER: TypeAdapter[ResearchOperation] = TypeAdapter(ResearchOperation)
 CITATION_PATTERN = re.compile(r"\[E:([^\]\s]+)\]")
 
 
 class ResearchStore(ConflictStoreMixin):
-    def __init__(self, cwd: str | Path, session_id: str, *, root: Path | None = None):
+    def __init__(self, cwd: str | Path, session_id: str, *, root: Path | None = None) -> None:
         if not re.fullmatch(r"[a-f0-9]{12}", session_id):
             raise ResearchError("无效的研究会话 ID")
         digest = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
@@ -69,14 +78,16 @@ class ResearchStore(ConflictStoreMixin):
         with exclusive_file_lock(self.lock):
             return self._load()
 
-    def _save(self, memory: ResearchMemory, action: str, data: dict) -> None:
+    def _save(self, memory: ResearchMemory, action: str, data: dict[str, object]) -> None:
         self._validate(memory)
         memory.revision += 1
-        memory.history.append({"revision": memory.revision, "action": action, "data": data, "at": now()})
+        memory.history.append(
+            {"revision": memory.revision, "action": action, "data": data, "at": now()}
+        )
         atomic_write_text(self.path, memory.model_dump_json(indent=2) + "\n", mode=0o600)
 
     @staticmethod
-    def _require(ids: list[str], records: dict, label: str) -> None:
+    def _require(ids: list[str], records: Mapping[str, object], label: str) -> None:
         missing = [key for key in ids if key not in records]
         if missing:
             raise ResearchError(f"Unknown {label} IDs in this session: {', '.join(missing)}")
@@ -87,9 +98,19 @@ class ResearchStore(ConflictStoreMixin):
             raise ResearchError("Duplicate context IDs")
         if memory.current_context_id:
             self._require([memory.current_context_id], contexts, "context")
-        buckets = (contexts, memory.sources, memory.plans, memory.evidence_pool, memory.reasoning_chain,
-                   memory.conclusions, memory.conflicts, memory.arbitrations)
-        if sum(len(records) for records in buckets) != len({key for records in buckets for key in records}):
+        buckets = (
+            contexts,
+            memory.sources,
+            memory.plans,
+            memory.evidence_pool,
+            memory.reasoning_chain,
+            memory.conclusions,
+            memory.conflicts,
+            memory.arbitrations,
+        )
+        if sum(len(records) for records in buckets) != len(
+            {key for records in buckets for key in records}
+        ):
             raise ResearchError("Record IDs must be unique within the session")
         for records in buckets:
             if any(key != record.id for key, record in records.items()):
@@ -113,7 +134,9 @@ class ResearchStore(ConflictStoreMixin):
                     raise ResearchError("Source task does not belong to its plan")
             elif source.task_id:
                 raise ResearchError("A source task requires a source plan")
-            if source.snapshot != f"content/{source.content_hash}.txt" or not re.fullmatch(r"[a-f0-9]{64}", source.content_hash):
+            if source.snapshot != f"content/{source.content_hash}.txt" or not re.fullmatch(
+                r"[a-f0-9]{64}", source.content_hash
+            ):
                 raise ResearchError("Invalid snapshot reference")
             if not (self.directory / source.snapshot).is_file():
                 raise ResearchError("Missing source snapshot")
@@ -134,7 +157,9 @@ class ResearchStore(ConflictStoreMixin):
             plan = memory.plans[state.current_plan_id]
             if plan.archived:
                 raise ResearchError("Current plan is archived")
-            if state.current_task_id and state.current_task_id not in {task.id for task in plan.tasks}:
+            if state.current_task_id and state.current_task_id not in {
+                task.id for task in plan.tasks
+            }:
                 raise ResearchError("Current task does not belong to current plan")
             active = [task.id for task in plan.tasks if task.status == "in_progress"]
             if active != ([state.current_task_id] if state.current_task_id else []):
@@ -149,55 +174,80 @@ class ResearchStore(ConflictStoreMixin):
             elif evidence.task_id:
                 raise ResearchError("An evidence task requires an evidence plan")
             self._require([evidence.source_id], memory.sources, "source")
-            self._require(evidence.supporting_evidence_ids, memory.evidence_pool, "supporting evidence")
+            self._require(
+                evidence.supporting_evidence_ids, memory.evidence_pool, "supporting evidence"
+            )
             source = memory.sources[evidence.source_id]
             if source.is_error:
                 raise ResearchError("Failed tool output cannot become evidence")
-            if evidence.collected_at != source.collected_at or evidence.published_at != source.published_at:
+            if (
+                evidence.collected_at != source.collected_at
+                or evidence.published_at != source.published_at
+            ):
                 raise ResearchError("Evidence timestamps must come from its source")
             self._require(evidence.input_evidence_ids, memory.evidence_pool, "input evidence")
             if source.kind == "calculation":
                 if not evidence.input_evidence_ids or not evidence.calculation_step_id:
                     raise ResearchError("Calculation evidence needs inputs and a calculation step")
-                self._require([evidence.calculation_step_id], memory.reasoning_chain, "calculation step")
+                self._require(
+                    [evidence.calculation_step_id], memory.reasoning_chain, "calculation step"
+                )
                 inputs = self._step_evidence(memory, [evidence.calculation_step_id])
                 if not set(evidence.input_evidence_ids) <= inputs:
                     raise ResearchError("Calculation step must reference its input evidence")
             if evidence.status in {"source_checked", "verified"}:
                 if not evidence.verification_step_id or not evidence.verification_note.strip():
                     raise ResearchError("Checked evidence needs an explicit verification record")
-                self._require([evidence.verification_step_id], memory.reasoning_chain, "verification step")
+                self._require(
+                    [evidence.verification_step_id], memory.reasoning_chain, "verification step"
+                )
                 step = memory.reasoning_chain[evidence.verification_step_id]
                 inputs = self._step_evidence(memory, [step.id])
-                if not step.verification or not any(memory.evidence_pool[key].source_id == source.id for key in inputs):
+                if not step.verification or not any(
+                    memory.evidence_pool[key].source_id == source.id for key in inputs
+                ):
                     raise ResearchError("Verification must examine the evidence source")
                 if evidence.status == "source_checked":
                     if evidence.verification_method != "source":
                         raise ResearchError("Source-checked evidence must use source verification")
                     if source.kind in {"search", "user"} or source.fragment:
-                        raise ResearchError("Search snippets, user accounts and partial sources cannot be source-checked")
+                        raise ResearchError(
+                            "Search snippets, user accounts and partial sources cannot be source-checked"
+                        )
                 elif evidence.verification_method == "cross_source":
                     if not evidence.supporting_evidence_ids:
                         raise ResearchError("Cross-source verification needs supporting evidence")
                     if not set(evidence.supporting_evidence_ids) <= inputs:
                         raise ResearchError("Verification step must reference supporting evidence")
-                    candidates = [memory.evidence_pool[key] for key in evidence.supporting_evidence_ids]
-                    if any(item.status not in {"source_checked", "verified"} or item.needs_review
-                           for item in candidates):
+                    candidates = [
+                        memory.evidence_pool[key] for key in evidence.supporting_evidence_ids
+                    ]
+                    if any(
+                        item.status not in {"source_checked", "verified"} or item.needs_review
+                        for item in candidates
+                    ):
                         raise ResearchError("Supporting evidence must already be source-checked")
-                    identities = {self._source_identity(memory.sources[item.source_id]) for item in candidates}
+                    identities = {
+                        self._source_identity(memory.sources[item.source_id]) for item in candidates
+                    }
                     identities.add(self._source_identity(source))
                     if len(identities) < 2:
                         raise ResearchError("Cross-source verification needs independent sources")
                 elif evidence.verification_method == "calculation":
                     if source.kind != "calculation" or not evidence.input_evidence_ids:
-                        raise ResearchError("Calculation verification needs calculation evidence and inputs")
-                    if any(memory.evidence_pool[key].status not in {"source_checked", "verified"}
-                           or memory.evidence_pool[key].needs_review
-                           for key in evidence.input_evidence_ids):
+                        raise ResearchError(
+                            "Calculation verification needs calculation evidence and inputs"
+                        )
+                    if any(
+                        memory.evidence_pool[key].status not in {"source_checked", "verified"}
+                        or memory.evidence_pool[key].needs_review
+                        for key in evidence.input_evidence_ids
+                    ):
                         raise ResearchError("Calculation inputs must already be source-checked")
                 else:
-                    raise ResearchError("Verified evidence needs cross-source or calculation verification")
+                    raise ResearchError(
+                        "Verified evidence needs cross-source or calculation verification"
+                    )
             if evidence.supersedes:
                 self._require([evidence.supersedes], memory.evidence_pool, "superseded evidence")
         for step in memory.reasoning_chain.values():
@@ -220,13 +270,57 @@ class ResearchStore(ConflictStoreMixin):
             if not set(claim.evidence_ids) <= self._step_evidence(memory, claim.step_ids):
                 raise ResearchError("Conclusion evidence must be used by its reasoning steps")
             if claim.status == "verified" and not claim.needs_review:
-                if any(memory.evidence_pool[key].status != "verified" or memory.evidence_pool[key].needs_review for key in claim.evidence_ids):
+                if any(
+                    memory.evidence_pool[key].status != "verified"
+                    or memory.evidence_pool[key].needs_review
+                    for key in claim.evidence_ids
+                ):
                     raise ResearchError("Verified conclusion needs verified evidence")
                 if not any(memory.reasoning_chain[key].verification for key in claim.step_ids):
                     raise ResearchError("Verified conclusion needs a verification step")
             if claim.supersedes:
                 self._require([claim.supersedes], memory.conclusions, "superseded conclusion")
         self._validate_conflicts(memory)
+        if memory.project is not None:
+            from openharness.research.tasks import validate_dag
+
+            project = memory.project
+            if project.objective_revision not in memory.objectives:
+                raise ResearchError("Missing current objective revision")
+            for revision, objective in memory.objectives.items():
+                if revision != objective.revision or objective.project_id != project.id:
+                    raise ResearchError("Objective version mismatch")
+            for plan in memory.plans.values():
+                if plan.project_id == project.id:
+                    validate_dag(plan.tasks)
+                    by_id = {task.id: task for task in plan.tasks}
+                    for task in plan.tasks:
+                        if task.dependency_revisions != {
+                            key: by_id[key].task_revision for key in task.dependencies
+                        }:
+                            raise ResearchError(
+                                "Task dependency revisions must be pinned within the plan"
+                            )
+            if (
+                state.current_plan_id
+                and memory.plans[state.current_plan_id].revision != project.plan_revision
+            ):
+                raise ResearchError("Project plan revision mismatch")
+            for artifact in memory.artifacts.values():
+                if (
+                    artifact.snapshot != f"content/{artifact.content_hash}.txt"
+                    or not re.fullmatch(r"[a-f0-9]{64}", artifact.content_hash)
+                    or not (self.directory / artifact.snapshot).is_file()
+                ):
+                    raise ResearchError("Invalid artifact snapshot")
+                self._require(
+                    artifact.evidence_ids + artifact.assumption_evidence_ids,
+                    memory.evidence_pool,
+                    "artifact evidence",
+                )
+                self._require(artifact.finding_ids, memory.conclusions, "artifact finding")
+                self._require(artifact.input_artifact_ids, memory.artifacts, "input artifact")
+                self._require([artifact.execution_id], memory.executions, "artifact execution")
 
     @staticmethod
     def _step_evidence(memory: ResearchMemory, ids: list[str]) -> set[str]:
@@ -265,9 +359,14 @@ class ResearchStore(ConflictStoreMixin):
 
     def _task_has_work(self, memory: ResearchMemory, task_id: str) -> bool:
         recorded = (
-            any(source.task_id == task_id and not source.is_error for source in memory.sources.values())
-            or any(evidence.task_id == task_id and evidence.status != "retracted"
-                   for evidence in memory.evidence_pool.values())
+            any(
+                source.task_id == task_id and not source.is_error
+                for source in memory.sources.values()
+            )
+            or any(
+                evidence.task_id == task_id and evidence.status != "retracted"
+                for evidence in memory.evidence_pool.values()
+            )
             or any(step.task_id == task_id for step in memory.reasoning_chain.values())
         )
         if recorded:
@@ -277,13 +376,26 @@ class ResearchStore(ConflictStoreMixin):
                 artifact = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if artifact.get("task_id") == task_id and artifact.get("status") not in {"failed", "error"}:
+            if artifact.get("task_id") == task_id and artifact.get("status") not in {
+                "failed",
+                "error",
+            }:
                 return True
         return False
 
-    def capture(self, *, origin_id: str, content: str, kind: str = "tool", title: str = "",
-                locator: str = "", fragment: bool = False, is_error: bool = False,
-                published_at: str | None = None, index: int = 0) -> SourceRecord:
+    def capture(
+        self,
+        *,
+        origin_id: str,
+        content: str,
+        kind: SourceKind = "tool",
+        title: str = "",
+        locator: str = "",
+        fragment: bool = False,
+        is_error: bool = False,
+        published_at: str | None = None,
+        index: int = 0,
+    ) -> SourceRecord:
         """Program-only provenance entrypoint; write immutable content before its reference."""
         source_id = "src_" + hashlib.sha256(f"{origin_id}:{index}".encode()).hexdigest()[:20]
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -301,11 +413,19 @@ class ResearchStore(ConflictStoreMixin):
             elif hashlib.sha256(path.read_bytes()).hexdigest() != content_hash:
                 raise ResearchError("资料快照校验失败；原文件已保留")
             source = SourceRecord(
-                id=source_id, plan_id=memory.research_state.current_plan_id,
-                task_id=memory.research_state.current_task_id if kind != "user" else None, kind=kind,
-                title=title or kind, locator=locator or f"{kind}:{origin_id}", origin_id=origin_id,
-                collected_at=now(), published_at=published_at, content_hash=content_hash,
-                snapshot=snapshot, fragment=fragment, is_error=is_error,
+                id=source_id,
+                plan_id=memory.research_state.current_plan_id,
+                task_id=memory.research_state.current_task_id if kind != "user" else None,
+                kind=kind,
+                title=title or kind,
+                locator=locator or f"{kind}:{origin_id}",
+                origin_id=origin_id,
+                collected_at=now(),
+                published_at=published_at,
+                content_hash=content_hash,
+                snapshot=snapshot,
+                fragment=fragment,
+                is_error=is_error,
             )
             memory.sources[source.id] = source
             self._save(memory, "capture_source", {"source_id": source.id})
@@ -317,26 +437,37 @@ class ResearchStore(ConflictStoreMixin):
             raise ResearchError("资料快照校验失败；原文件已保留")
         return content
 
-    def apply(self, data: dict[str, Any], *, budget: int | None = None, model: str = "") -> dict:
+    def apply(
+        self, data: dict[str, Any], *, budget: int | None = None, model: str = ""
+    ) -> dict[str, object]:
         operation = OPERATION_ADAPTER.validate_python(data)
         if isinstance(operation, ReadMemory):
             memory = self.load()
             if not operation.ids:
                 return self.view(memory)
-            records = {item.id: item for item in memory.task_context}
-            for bucket in (memory.plans, memory.sources, memory.evidence_pool, memory.reasoning_chain,
-                           memory.conclusions, memory.conflicts, memory.arbitrations):
+            records: dict[str, Record] = {item.id: item for item in memory.task_context}
+            for bucket in (
+                memory.plans,
+                memory.sources,
+                memory.evidence_pool,
+                memory.reasoning_chain,
+                memory.conclusions,
+                memory.conflicts,
+                memory.arbitrations,
+            ):
                 records.update(bucket)
             self._require(operation.ids, records, "record")
-            result = []
+            record_results = []
             for key in operation.ids:
                 record = records[key]
                 item = record.model_dump(mode="json")
                 if isinstance(record, SourceRecord) and operation.include_content:
                     item["content"] = self.read_source(record)
-                result.append(item)
-            return {"revision": memory.revision, "records": result}
-        fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                record_results.append(item)
+            return {"revision": memory.revision, "records": record_results}
+        fingerprint = hashlib.sha256(
+            json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
         with exclusive_file_lock(self.lock):
             memory = self._load()
             previous = memory.operations.get(operation.operation_id)
@@ -345,15 +476,22 @@ class ResearchStore(ConflictStoreMixin):
                     raise ResearchError("operation_id already used with different content")
                 return previous["receipt"] | {"current_revision": memory.revision}
             if operation.expected_revision != memory.revision:
-                raise ResearchError(f"Revision conflict: expected {operation.expected_revision}, current {memory.revision}; read and retry with a new operation_id")
+                raise ResearchError(
+                    f"Revision conflict: expected {operation.expected_revision}, current {memory.revision}; read and retry with a new operation_id"
+                )
             result = self._apply(memory, operation)
             if budget is not None:
                 self._prompt(memory, budget, model=model)
             progress = self.progress(memory)
             progress["revision"] = memory.revision + 1
             receipt = {"revision": memory.revision + 1, **result, "progress": progress}
-            memory.operations[operation.operation_id] = {"fingerprint": fingerprint, "receipt": receipt}
-            self._save(memory, operation.action, operation.model_dump(mode="json") | {"result": result})
+            memory.operations[operation.operation_id] = {
+                "fingerprint": fingerprint,
+                "receipt": receipt,
+            }
+            self._save(
+                memory, operation.action, operation.model_dump(mode="json") | {"result": result}
+            )
             return receipt
 
     @staticmethod
@@ -377,11 +515,18 @@ class ResearchStore(ConflictStoreMixin):
         affected = {evidence_id}
         while True:
             expanded = affected | {
-                item.id for item in memory.evidence_pool.values()
+                item.id
+                for item in memory.evidence_pool.values()
                 if set(item.input_evidence_ids) & affected
                 or set(item.supporting_evidence_ids) & affected
-                or (item.verification_step_id and self._step_evidence(memory, [item.verification_step_id]) & affected)
-                or (item.calculation_step_id and self._step_evidence(memory, [item.calculation_step_id]) & affected)
+                or (
+                    item.verification_step_id
+                    and self._step_evidence(memory, [item.verification_step_id]) & affected
+                )
+                or (
+                    item.calculation_step_id
+                    and self._step_evidence(memory, [item.calculation_step_id]) & affected
+                )
             }
             if expanded == affected:
                 break
@@ -391,39 +536,97 @@ class ResearchStore(ConflictStoreMixin):
         for claim in memory.conclusions.values():
             if (set(claim.evidence_ids) | self._step_evidence(memory, claim.step_ids)) & affected:
                 claim.needs_review = True
+        if memory.project:
+            stale = {
+                key
+                for key, artifact in memory.artifacts.items()
+                if (set(artifact.evidence_ids + artifact.assumption_evidence_ids) & affected)
+                or any(memory.conclusions[key].needs_review for key in artifact.finding_ids)
+            }
+            while True:
+                expanded = stale | {
+                    key
+                    for key, artifact in memory.artifacts.items()
+                    if set(artifact.input_artifact_ids) & stale
+                }
+                if expanded == stale:
+                    break
+                stale = expanded
+            for key in stale:
+                memory.artifacts[key].stale, memory.artifacts[key].stale_reason = (
+                    True,
+                    "Evidence version superseded",
+                )
+            current = memory.plans.get(memory.research_state.current_plan_id or "")
+            active_ids = (
+                {key for task in current.tasks for key in task.artifact_ids} if current else set()
+            )
+            if stale & active_ids:
+                from openharness.research.repository import ResearchRepository
+
+                memory.research_state.replan_required = True
+                memory.project.status = "replanning"
+                ResearchRepository.revoke_executions(memory, "Evidence version superseded")
         self._reopen_affected_conflicts(memory, affected)
 
-    def _apply(self, memory: ResearchMemory, operation) -> dict:
+    def _apply(self, memory: ResearchMemory, operation: ResearchOperation) -> dict[str, object]:
+        if memory.project is not None and isinstance(
+            operation, (SetContext, CreatePlan, UpdateTask)
+        ):
+            raise ResearchError(
+                "Report projects use research_project and planner/replanner; legacy plan/task writes cannot bypass Runtime"
+            )
+        if (
+            memory.project is not None
+            and not isinstance(operation, ReadMemory)
+            and (memory.project.status != "running" or memory.research_state.replan_required)
+        ):
+            raise ResearchError(
+                "Resume and plan the report project before research memory mutations"
+            )
         conflict_result = self._apply_conflict(memory, operation)
         if conflict_result is not None:
             return conflict_result
         state = memory.research_state
         if isinstance(operation, SetContext):
             self._require(operation.user_source_ids, memory.sources, "user source")
-            context = TaskContext(**operation.model_dump(exclude={"action", "operation_id", "expected_revision"}), supersedes=memory.current_context_id)
-            memory.task_context.append(context)
-            memory.current_context_id = context.id
+            new_context = TaskContext(
+                **operation.model_dump(exclude={"action", "operation_id", "expected_revision"}),
+                supersedes=memory.current_context_id,
+            )
+            memory.task_context.append(new_context)
+            memory.current_context_id = new_context.id
             if state.current_plan_id:
                 self._archive_plan(memory)
                 state.replan_required = True
-            return {"context_id": context.id}
+            return {"context_id": new_context.id}
         if isinstance(operation, CreatePlan):
             if not memory.current_context_id:
                 raise ResearchError("Set task context before creating a plan")
             self._require(operation.reused_evidence_ids, memory.evidence_pool, "reused evidence")
             replaced = {item.supersedes for item in memory.evidence_pool.values()}
-            if any(memory.evidence_pool[key].status == "retracted" or key in replaced for key in operation.reused_evidence_ids):
+            if any(
+                memory.evidence_pool[key].status == "retracted" or key in replaced
+                for key in operation.reused_evidence_ids
+            ):
                 raise ResearchError("Reuse only current, non-retracted evidence versions")
             old_id = self._archive_plan(memory)
             if old_id is None and memory.plans:
                 old_id = next(reversed(memory.plans))
-            plan = ResearchPlan(context_id=memory.current_context_id, title=operation.title,
-                                tasks=[ResearchTask(title=title) for title in operation.tasks],
-                                supersedes=old_id, reused_evidence_ids=operation.reused_evidence_ids)
-            memory.plans[plan.id] = plan
-            state.current_plan_id = plan.id
+            new_plan = ResearchPlan(
+                context_id=memory.current_context_id,
+                title=operation.title,
+                tasks=[ResearchTask(title=title) for title in operation.tasks],
+                supersedes=old_id,
+                reused_evidence_ids=operation.reused_evidence_ids,
+            )
+            memory.plans[new_plan.id] = new_plan
+            state.current_plan_id = new_plan.id
             state.replan_required = False
-            return {"plan_id": plan.id, "tasks": [task.model_dump(mode="json") for task in plan.tasks]}
+            return {
+                "plan_id": new_plan.id,
+                "tasks": [task.model_dump(mode="json") for task in new_plan.tasks],
+            }
         if isinstance(operation, UpdateTask):
             if state.replan_required or not state.current_plan_id:
                 raise ResearchError("Create a current plan before updating tasks")
@@ -432,8 +635,12 @@ class ResearchStore(ConflictStoreMixin):
             if task is None:
                 raise ResearchError("Task does not belong to the current plan")
             transition = (task.status, operation.status)
-            allowed = {("pending", "in_progress"), ("blocked", "in_progress"),
-                       ("in_progress", "completed"), ("in_progress", "blocked")}
+            allowed = {
+                ("pending", "in_progress"),
+                ("blocked", "in_progress"),
+                ("in_progress", "completed"),
+                ("in_progress", "blocked"),
+            }
             if transition not in allowed:
                 raise ResearchError(f"Invalid task transition: {task.status} -> {operation.status}")
             timestamp = now()
@@ -449,7 +656,9 @@ class ResearchStore(ConflictStoreMixin):
                 if not operation.completion_note.strip():
                     raise ResearchError("Completing a task requires a completion note")
                 if not self._task_has_work(memory, task.id):
-                    raise ResearchError("A task needs recorded source, evidence or reasoning before completion")
+                    raise ResearchError(
+                        "A task needs recorded source, evidence or reasoning before completion"
+                    )
                 task.completed_at = timestamp
                 task.completion_note = operation.completion_note
                 task.blocker = ""
@@ -470,19 +679,52 @@ class ResearchStore(ConflictStoreMixin):
         if isinstance(operation, AddEvidence):
             self._require([operation.source_id], memory.sources, "source")
             source = memory.sources[operation.source_id]
+            if memory.project is not None and source.execution_id:
+                execution = memory.executions[source.execution_id]
+                evidence_plan = memory.plans.get(state.current_plan_id or "")
+                task = (
+                    next((task for task in evidence_plan.tasks if task.id == source.task_id), None)
+                    if evidence_plan
+                    else None
+                )
+                if (
+                    execution.status != "committed"
+                    or not task
+                    or source.task_revision != task.task_revision
+                ):
+                    raise ResearchError("Stale execution source cannot become current evidence")
             if source.plan_id and source.plan_id != state.current_plan_id:
-                plan = memory.plans.get(state.current_plan_id or "")
-                reused_sources = {memory.evidence_pool[key].source_id for key in plan.reused_evidence_ids} if plan else set()
-                context = next((item for item in memory.task_context if item.id == memory.current_context_id), None)
+                evidence_plan = memory.plans.get(state.current_plan_id or "")
+                reused_sources = (
+                    {
+                        memory.evidence_pool[key].source_id
+                        for key in evidence_plan.reused_evidence_ids
+                    }
+                    if evidence_plan
+                    else set()
+                )
+                context = next(
+                    (item for item in memory.task_context if item.id == memory.current_context_id),
+                    None,
+                )
                 user_sources = set(context.user_source_ids if context else [])
                 if source.id not in reused_sources | user_sources:
-                    raise ResearchError("Explicitly reuse archived evidence in the current plan before registering it again")
+                    raise ResearchError(
+                        "Explicitly reuse archived evidence in the current plan before registering it again"
+                    )
             fields = operation.model_dump(exclude={"action", "operation_id", "expected_revision"})
-            evidence = Evidence(**fields, plan_id=state.current_plan_id, task_id=state.current_task_id,
-                                collected_at=source.collected_at, published_at=source.published_at)
+            evidence = Evidence(
+                **fields,
+                plan_id=state.current_plan_id,
+                task_id=state.current_task_id,
+                collected_at=source.collected_at,
+                published_at=source.published_at,
+            )
             if evidence.supersedes:
                 self._require([evidence.supersedes], memory.evidence_pool, "superseded evidence")
-                if any(item.supersedes == evidence.supersedes for item in memory.evidence_pool.values()):
+                if any(
+                    item.supersedes == evidence.supersedes for item in memory.evidence_pool.values()
+                ):
                     raise ResearchError("Revise the latest evidence version")
                 self._invalidate(memory, evidence.supersedes)
             memory.evidence_pool[evidence.id] = evidence
@@ -491,30 +733,53 @@ class ResearchStore(ConflictStoreMixin):
             if state.replan_required:
                 raise ResearchError("Replan before continuing research")
             self._ensure_scope(memory, operation.evidence_ids, operation.prior_step_ids)
-            step = ReasoningStep(**operation.model_dump(exclude={"action", "operation_id", "expected_revision"}),
-                                 plan_id=state.current_plan_id, task_id=state.current_task_id)
+            step = ReasoningStep(
+                **operation.model_dump(exclude={"action", "operation_id", "expected_revision"}),
+                plan_id=state.current_plan_id,
+                task_id=state.current_task_id,
+            )
             memory.reasoning_chain[step.id] = step
             return {"step_id": step.id}
         if isinstance(operation, VerifyEvidence):
             if state.replan_required:
                 raise ResearchError("Replan before verifying evidence")
             self._require([operation.evidence_id], memory.evidence_pool, "evidence")
-            self._require([operation.verification_step_id], memory.reasoning_chain, "verification step")
-            self._require(operation.supporting_evidence_ids, memory.evidence_pool, "supporting evidence")
+            self._require(
+                [operation.verification_step_id], memory.reasoning_chain, "verification step"
+            )
+            self._require(
+                operation.supporting_evidence_ids, memory.evidence_pool, "supporting evidence"
+            )
             original = memory.evidence_pool[operation.evidence_id]
             if original.status == "retracted" or any(
                 item.supersedes == original.id for item in memory.evidence_pool.values()
             ):
                 raise ResearchError("Verify only the current, non-retracted evidence version")
-            fields = original.model_dump(exclude={
-                "id", "plan_id", "status", "needs_review", "verification_step_id", "verification_note",
-                "verification_method", "supporting_evidence_ids", "supersedes", "created_at", "task_id",
-            })
+            fields = original.model_dump(
+                exclude={
+                    "id",
+                    "plan_id",
+                    "status",
+                    "needs_review",
+                    "verification_step_id",
+                    "verification_note",
+                    "verification_method",
+                    "supporting_evidence_ids",
+                    "supersedes",
+                    "created_at",
+                    "task_id",
+                }
+            )
             checked = Evidence(
-                **fields, plan_id=state.current_plan_id, task_id=state.current_task_id,
-                status=operation.level, verification_step_id=operation.verification_step_id,
-                verification_note=operation.verification_note, verification_method=operation.method,
-                supporting_evidence_ids=operation.supporting_evidence_ids, supersedes=original.id,
+                **fields,
+                plan_id=state.current_plan_id,
+                task_id=state.current_task_id,
+                status=operation.level,
+                verification_step_id=operation.verification_step_id,
+                verification_note=operation.verification_note,
+                verification_method=operation.method,
+                supporting_evidence_ids=operation.supporting_evidence_ids,
+                supersedes=original.id,
             )
             self._invalidate(memory, original.id)
             memory.evidence_pool[checked.id] = checked
@@ -524,27 +789,47 @@ class ResearchStore(ConflictStoreMixin):
                 raise ResearchError("Replan before drawing conclusions")
             self._ensure_scope(memory, operation.evidence_ids, operation.step_ids)
             replaced = {item.supersedes for item in memory.evidence_pool.values()}
-            if operation.status != "retracted" and any(key in replaced or memory.evidence_pool[key].status == "retracted" for key in operation.evidence_ids):
+            if operation.status != "retracted" and any(
+                key in replaced or memory.evidence_pool[key].status == "retracted"
+                for key in operation.evidence_ids
+            ):
                 raise ResearchError("Conclusions must use current, non-retracted evidence")
-            claim = Conclusion(**operation.model_dump(exclude={"action", "operation_id", "expected_revision"}), plan_id=state.current_plan_id)
+            claim = Conclusion(
+                **operation.model_dump(exclude={"action", "operation_id", "expected_revision"}),
+                plan_id=state.current_plan_id,
+            )
             for conflict in memory.conflicts.values():
-                if conflict.core and conflict.plan_id == state.current_plan_id and conflict.status != "resolved":
+                if (
+                    conflict.core
+                    and conflict.plan_id == state.current_plan_id
+                    and conflict.status != "resolved"
+                ):
                     inputs, _, _ = self._conflict_inputs(memory, conflict)
-                    if (set(claim.evidence_ids) | self._step_evidence(memory, claim.step_ids)) & inputs:
+                    if (
+                        set(claim.evidence_ids) | self._step_evidence(memory, claim.step_ids)
+                    ) & inputs:
                         if claim.status == "verified":
-                            raise ResearchError("Resolve the core conflict before registering a verified conclusion")
+                            raise ResearchError(
+                                "Resolve the core conflict before registering a verified conclusion"
+                            )
                         claim.needs_review = True
             if any(memory.evidence_pool[key].needs_review for key in claim.evidence_ids):
                 if claim.status == "verified":
-                    raise ResearchError("Evidence awaiting review cannot support a verified conclusion")
+                    raise ResearchError(
+                        "Evidence awaiting review cannot support a verified conclusion"
+                    )
                 claim.needs_review = True
-            if claim.supersedes and any(item.supersedes == claim.supersedes for item in memory.conclusions.values()):
+            if claim.supersedes and any(
+                item.supersedes == claim.supersedes for item in memory.conclusions.values()
+            ):
                 raise ResearchError("Revise the latest conclusion version")
             memory.conclusions[claim.id] = claim
             return {"conclusion_id": claim.id}
         raise ResearchError("Unsupported research operation")
 
-    def _ensure_scope(self, memory: ResearchMemory, evidence_ids: list[str], step_ids: list[str]) -> None:
+    def _ensure_scope(
+        self, memory: ResearchMemory, evidence_ids: list[str], step_ids: list[str]
+    ) -> None:
         self._require(evidence_ids, memory.evidence_pool, "evidence")
         self._require(step_ids, memory.reasoning_chain, "reasoning step")
         plan_id = memory.research_state.current_plan_id
@@ -553,30 +838,61 @@ class ResearchStore(ConflictStoreMixin):
         inputs = set(evidence_ids) | self._step_evidence(memory, step_ids)
         # A prior verification may reference earlier versions of the same explicitly reused source.
         allowed_sources = {memory.evidence_pool[key].source_id for key in allowed}
-        if any(memory.evidence_pool[key].plan_id != plan_id and key not in allowed
-               and memory.evidence_pool[key].source_id not in allowed_sources for key in inputs):
-            raise ResearchError("Explicitly reuse archived evidence in the current plan before analyzing it")
+        if any(
+            memory.evidence_pool[key].plan_id != plan_id
+            and key not in allowed
+            and memory.evidence_pool[key].source_id not in allowed_sources
+            for key in inputs
+        ):
+            raise ResearchError(
+                "Explicitly reuse archived evidence in the current plan before analyzing it"
+            )
 
-    def progress(self, memory: ResearchMemory | None = None) -> dict:
+    def progress(self, memory: ResearchMemory | None = None) -> dict[str, object]:
         memory = memory or self.load()
         state = memory.research_state
         plan = memory.plans.get(state.current_plan_id or "")
         tasks = [task.model_dump(mode="json") for task in plan.tasks] if plan else []
-        return {"revision": memory.revision, "plan_id": plan.id if plan else None,
-                "title": plan.title if plan else "", "tasks": tasks,
-                "current_task_id": state.current_task_id,
-                "completed": sum(task["status"] == "completed" for task in tasks),
-                "total": len(tasks), "replan_required": state.replan_required,
-                "conflicts": [{"id": item.id, "question": item.question, "status": item.status, "core": item.core}
-                              for item in memory.conflicts.values() if item.plan_id == state.current_plan_id]}
+        return {
+            "revision": memory.revision,
+            "plan_id": plan.id if plan else None,
+            "title": plan.title
+            if plan
+            else memory.objectives[memory.project.objective_revision].subject
+            if memory.project
+            else "",
+            "tasks": tasks,
+            "current_task_id": state.current_task_id,
+            "completed": sum(task["status"] == "completed" for task in tasks),
+            "total": len(tasks),
+            "replan_required": state.replan_required,
+            **(
+                {
+                    "project_status": memory.project.status,
+                    "plan_revision": memory.project.plan_revision,
+                    "objective_revision": memory.project.objective_revision,
+                }
+                if memory.project
+                else {}
+            ),
+            "conflicts": [
+                {"id": item.id, "question": item.question, "status": item.status, "core": item.core}
+                for item in memory.conflicts.values()
+                if item.plan_id == state.current_plan_id
+            ],
+        }
 
     def verification_candidates(self, text: str) -> list[dict[str, Any]]:
         """Return cited current evidence that can advance without inventing new sources."""
         memory = self.load()
         replaced = {item.supersedes for item in memory.evidence_pool.values()}
-        checked = [item for item in memory.evidence_pool.values()
-                   if item.status in {"source_checked", "verified"} and not item.needs_review
-                   and item.id not in replaced]
+        checked = [
+            item
+            for item in memory.evidence_pool.values()
+            if item.status in {"source_checked", "verified"}
+            and not item.needs_review
+            and item.id not in replaced
+        ]
         candidates: list[dict[str, Any]] = []
         for match in CITATION_PATTERN.finditer(text):
             key = match.group(1)
@@ -585,85 +901,184 @@ class ResearchStore(ConflictStoreMixin):
                 continue
             source = memory.sources[evidence.source_id]
             methods: list[str] = []
-            if (evidence.status == "pending" and source.kind not in {"search", "user", "calculation"}
-                    and not source.fragment and not source.is_error):
+            if (
+                evidence.status == "pending"
+                and source.kind not in {"search", "user", "calculation"}
+                and not source.fragment
+                and not source.is_error
+            ):
                 methods.append("source")
-            if (evidence.status == "pending" and source.kind == "calculation"
-                    and evidence.input_evidence_ids
-                    and all(memory.evidence_pool[item].status in {"source_checked", "verified"}
-                            and not memory.evidence_pool[item].needs_review
-                            for item in evidence.input_evidence_ids)):
+            if (
+                evidence.status == "pending"
+                and source.kind == "calculation"
+                and evidence.input_evidence_ids
+                and all(
+                    memory.evidence_pool[item].status in {"source_checked", "verified"}
+                    and not memory.evidence_pool[item].needs_review
+                    for item in evidence.input_evidence_ids
+                )
+            ):
                 methods.append("calculation")
             if evidence.status == "source_checked" and any(
-                self._source_identity(memory.sources[item.source_id]) != self._source_identity(source)
-                for item in checked if item.id != evidence.id
+                self._source_identity(memory.sources[item.source_id])
+                != self._source_identity(source)
+                for item in checked
+                if item.id != evidence.id
             ):
                 methods.append("cross_source")
             if methods:
-                candidates.append({
-                    "evidence_id": evidence.id,
-                    "status": evidence.status,
-                    "source_id": source.id,
-                    "source_kind": source.kind,
-                    "methods": methods,
-                })
+                candidates.append(
+                    {
+                        "evidence_id": evidence.id,
+                        "status": evidence.status,
+                        "source_id": source.id,
+                        "source_kind": source.kind,
+                        "methods": methods,
+                    }
+                )
         return candidates
 
     @staticmethod
-    def view(memory: ResearchMemory) -> dict:
+    def view(memory: ResearchMemory) -> dict[str, object]:
         state = memory.research_state
-        context = next((item for item in memory.task_context if item.id == memory.current_context_id), None)
+        context = next(
+            (item for item in memory.task_context if item.id == memory.current_context_id), None
+        )
         plan = memory.plans.get(state.current_plan_id or "")
         superseded_claims = {item.supersedes for item in memory.conclusions.values()}
-        superseded_claims.update(key for item in memory.arbitrations.values() for key in item.replaced_conclusion_ids)
+        superseded_claims.update(
+            key for item in memory.arbitrations.values() for key in item.replaced_conclusion_ids
+        )
         superseded_evidence = {item.supersedes for item in memory.evidence_pool.values()}
-        claims = [item for item in memory.conclusions.values()
-                  if item.plan_id == state.current_plan_id and item.id not in superseded_claims and item.status != "retracted"]
+        claims = [
+            item
+            for item in memory.conclusions.values()
+            if item.plan_id == state.current_plan_id
+            and item.id not in superseded_claims
+            and item.status != "retracted"
+        ]
         evidence_ids = set(plan.reused_evidence_ids if plan else [])
         for claim in claims:
             evidence_ids.update(claim.evidence_ids)
-        evidence = [item for item in memory.evidence_pool.values()
-                    if (item.plan_id == state.current_plan_id or item.id in evidence_ids)
-                    and item.id not in superseded_evidence and item.status != "retracted"]
-        steps = [item for item in memory.reasoning_chain.values() if item.plan_id == state.current_plan_id]
+        evidence = [
+            item
+            for item in memory.evidence_pool.values()
+            if (item.plan_id == state.current_plan_id or item.id in evidence_ids)
+            and item.id not in superseded_evidence
+            and item.status != "retracted"
+        ]
+        steps = [
+            item
+            for item in memory.reasoning_chain.values()
+            if item.plan_id == state.current_plan_id
+        ]
         source_ids = {item.source_id for item in evidence}
-        recent_sources = [item for item in memory.sources.values()
-                          if item.plan_id == state.current_plan_id][-8:]
+        recent_sources = [
+            item for item in memory.sources.values() if item.plan_id == state.current_plan_id
+        ][-8:]
         source_ids.update(item.id for item in recent_sources)
         if context:
             source_ids.update(context.user_source_ids)
-        return {"session_id": memory.session_id, "revision": memory.revision,
-                "task_context": context.model_dump(mode="json") if context else None,
-                "research_state": state.model_dump(mode="json"),
-                "plan": plan.model_dump(mode="json") if plan else None,
-                "conclusions": [item.model_dump(mode="json") for item in claims],
-                "conflicts": [item.model_dump(mode="json") for item in memory.conflicts.values() if item.plan_id == state.current_plan_id],
-                "arbitrations": [item.model_dump(mode="json") for item in memory.arbitrations.values()
-                                 if memory.conflicts[item.conflict_id].plan_id == state.current_plan_id],
-                "evidence_pool": [item.model_dump(mode="json") for item in evidence],
-                "reasoning_chain": [item.model_dump(mode="json") for item in steps],
-                "sources": [item.model_dump(mode="json", exclude={"snapshot"}) for item in memory.sources.values() if item.id in source_ids]}
+        return {
+            "session_id": memory.session_id,
+            "revision": memory.revision,
+            "task_context": context.model_dump(mode="json") if context else None,
+            "research_state": state.model_dump(mode="json"),
+            "plan": plan.model_dump(mode="json") if plan else None,
+            "conclusions": [item.model_dump(mode="json") for item in claims],
+            "conflicts": [
+                item.model_dump(mode="json")
+                for item in memory.conflicts.values()
+                if item.plan_id == state.current_plan_id
+            ],
+            "arbitrations": [
+                item.model_dump(mode="json")
+                for item in memory.arbitrations.values()
+                if memory.conflicts[item.conflict_id].plan_id == state.current_plan_id
+            ],
+            "evidence_pool": [item.model_dump(mode="json") for item in evidence],
+            "reasoning_chain": [item.model_dump(mode="json") for item in steps],
+            "sources": [
+                item.model_dump(mode="json", exclude={"snapshot"})
+                for item in memory.sources.values()
+                if item.id in source_ids
+            ],
+        }
 
     def prompt(self, budget: int = 6000, *, model: str = "") -> str:
         return self._prompt(self.load(), budget, model=model)
 
-    def _prompt(self, memory: ResearchMemory, budget: int, *, model: str = "") -> str:
+    def prompt_snapshot(
+        self, budget: int = 6000, *, model: str = "", memory_budget: int | None = None
+    ) -> ContextSnapshot:
+        from openharness.services.context_sources import tagged_snapshot
+
+        text = self._prompt(self.load(), budget, model=model, memory_budget=memory_budget)
+        return tagged_snapshot(text, "research_store")
+
+    def _prompt(
+        self,
+        memory: ResearchMemory,
+        budget: int,
+        *,
+        model: str = "",
+        memory_budget: int | None = None,
+    ) -> str:
         view = self.view(memory)
-        required = {key: view[key] for key in ("session_id", "revision", "task_context", "research_state", "plan")}
+        required = {
+            key: view[key]
+            for key in ("session_id", "revision", "task_context", "research_state", "plan")
+        }
         required["omitted"] = "Other records remain available through research_memory(read, ids)."
-        for bucket in ("conflicts", "arbitrations", "conclusions", "evidence_pool", "sources", "reasoning_chain"):
+        if memory.project:
+            required["project"] = memory.project.model_dump(
+                mode="json", exclude={"delivery_manifest"}
+            )
+            required["objective"] = memory.objectives[memory.project.objective_revision].model_dump(
+                mode="json"
+            )
+        for bucket in (
+            "conflicts",
+            "arbitrations",
+            "conclusions",
+            "evidence_pool",
+            "sources",
+            "reasoning_chain",
+        ):
             required[bucket] = []
 
-        def render(value: dict) -> str:
-            return "<research_memory>\n" + json.dumps(value, ensure_ascii=False) + "\n</research_memory>"
+        def render(value: dict[str, object]) -> str:
+            return (
+                "<research_memory>\n"
+                + json.dumps(value, ensure_ascii=False)
+                + "\n</research_memory>"
+            )
 
         if estimate_tokens(render(required), model) > budget:
             raise ResearchError("研究目标、约束或计划超过注入预算；请精简后继续")
-        for bucket in ("conflicts", "arbitrations", "conclusions", "evidence_pool", "sources", "reasoning_chain"):
-            for item in reversed(view[bucket]):
-                required[bucket].append(item)
-                if estimate_tokens(render(required), model) > budget:
-                    required[bucket].pop()
+        for bucket in (
+            "conflicts",
+            "arbitrations",
+            "conclusions",
+            "evidence_pool",
+            "sources",
+            "reasoning_chain",
+        ):
+            for item in reversed(cast(list[object], view[bucket])):
+                cast(list[object], required[bucket]).append(item)
+                exceeds_memory = False
+                if memory_budget is not None:
+                    # Whole records only; plan/objective snapshots belong to D.
+                    from openharness.services.context_sources import MEMORY_KEYS
+
+                    recalled = sum(
+                        estimate_tokens(json.dumps(required[key], ensure_ascii=False), model)
+                        for key in MEMORY_KEYS
+                        if required[key]
+                    )
+                    exceeds_memory = recalled > memory_budget
+                if estimate_tokens(render(required), model) > budget or exceeds_memory:
+                    cast(list[object], required[bucket]).pop()
         return render(required)
 
     def interrupt(self, *, request_id: str, target_request_id: str, text: str) -> None:
@@ -671,12 +1086,20 @@ class ResearchStore(ConflictStoreMixin):
         with exclusive_file_lock(self.lock):
             memory = self._load()
             existing = memory.pending_steers.get(request_id)
-            data = {"target_request_id": target_request_id, "text": text, "accepted_at": now()}
+            data: PendingSteer = {
+                "target_request_id": target_request_id,
+                "text": text,
+                "accepted_at": now(),
+            }
             if existing:
                 if existing["target_request_id"] != target_request_id or existing["text"] != text:
                     raise ResearchError("Steering request ID already used")
                 return
             memory.pending_steers[request_id] = data
+            if memory.project:
+                from openharness.research.repository import ResearchRepository
+
+                ResearchRepository.feedback_memory(memory, text)
             self._save(memory, "accept_steer", {"request_id": request_id, **data})
 
     def require_replan(self, request_id: str) -> None:
@@ -686,8 +1109,11 @@ class ResearchStore(ConflictStoreMixin):
                 raise ResearchError("Steering request was not persisted")
             if memory.pending_steers[request_id].get("ready"):
                 return
-            self._archive_plan(memory)
-            memory.research_state.replan_required = True
+            if memory.project is None:
+                self._archive_plan(memory)
+                memory.research_state.replan_required = True
+            else:
+                memory.project.status = "replanning" if memory.project.plan_revision else "planning"
             memory.pending_steers[request_id]["ready"] = True
             self._save(memory, "require_replan", {"request_id": request_id})
 
@@ -701,6 +1127,13 @@ class ResearchStore(ConflictStoreMixin):
     def stopped(self) -> None:
         with exclusive_file_lock(self.lock):
             memory = self._load()
+            if memory.project:
+                from openharness.research.repository import ResearchRepository
+
+                if memory.project.status not in {"completed", "failed", "cancelled"}:
+                    ResearchRepository.suspend_memory(memory, "执行已停止")
+                    self._save(memory, "project_stop", {})
+                return
             plan = memory.plans.get(memory.research_state.current_plan_id or "")
             if plan:
                 changed = False
@@ -715,31 +1148,36 @@ class ResearchStore(ConflictStoreMixin):
     def invalid_citations(self, text: str) -> list[str]:
         """Validate exact IDs before publishing; never infer an intended source."""
         memory = self.load()
-        invalid = [match.group(1) for match in CITATION_PATTERN.finditer(text)
-                   if match.group(1) not in memory.evidence_pool]
+        invalid = [
+            match.group(1)
+            for match in CITATION_PATTERN.finditer(text)
+            if match.group(1) not in memory.evidence_pool
+        ]
         if memory.evidence_pool:
             invalid.extend(match.group(0) for match in re.finditer(r"\[(\d{1,3})\](?!\()", text))
         return list(dict.fromkeys(invalid))
 
-    def render_answer(self, text: str, answer_id: str) -> tuple[str, dict]:
+    def render_answer(self, text: str, answer_id: str) -> tuple[str, dict[str, object]]:
         with exclusive_file_lock(self.lock):
             memory = self._load()
             if answer_id in memory.answers:
                 answer = memory.answers[answer_id]
-                return answer["rendered"], answer
-            cited: dict[str, dict] = {}
+                return answer["rendered"], dict(answer)
+            cited: dict[str, CitationSnapshot] = {}
             invalid: list[str] = []
 
             # Display numbers are local to one frozen answer. The model must
             # supply stable evidence IDs; bare numbers have no proven target.
             if memory.evidence_pool:
-                def reject_number(match):
+
+                def reject_number(match: re.Match[str]) -> str:
                     invalid.append(match.group(0))
                     return "[来源不可核验]"
+
                 numbered = re.compile(r"\[(\d{1,3})\](?!\()")
                 text = numbered.sub(reject_number, text)
 
-            def replace(match) -> str:
+            def replace(match: re.Match[str]) -> str:
                 key = match.group(1)
                 if key not in memory.evidence_pool:
                     invalid.append(key)
@@ -747,8 +1185,13 @@ class ResearchStore(ConflictStoreMixin):
                 if key not in cited:
                     evidence = memory.evidence_pool[key]
                     source = memory.sources[evidence.source_id]
-                    cited[key] = {"number": len(cited) + 1, "evidence": evidence.model_dump(mode="json"),
-                                  "source": source.model_dump(mode="json", exclude={"snapshot"})}
+                    cited[key] = {
+                        "number": len(cited) + 1,
+                        "evidence": evidence.model_dump(mode="json"),
+                        "source": cast(
+                            SourceDisplay, source.model_dump(mode="json", exclude={"snapshot"})
+                        ),
+                    }
                 return f"[{cited[key]['number']}]"
 
             rendered = CITATION_PATTERN.sub(replace, text)
@@ -764,7 +1207,10 @@ class ResearchStore(ConflictStoreMixin):
                     else:
                         clean_locator = re.sub(r"[\n\r<>]", " ", locator)
                         reference = f"{title}（{clean_locator}）"
-                    date = source["published_at"] or f"采集 {source['collected_at'][:10]}；发布日期未知"
+                    date = (
+                        source["published_at"]
+                        or f"采集 {source['collected_at'][:10]}；发布日期未知"
+                    )
                     if evidence["status"] == "retracted":
                         mark = "已撤回"
                     elif evidence["needs_review"]:
@@ -781,27 +1227,50 @@ class ResearchStore(ConflictStoreMixin):
                         mark = "待核验（仅有片段，需补充完整原文）"
                     else:
                         mark = "待核验（尚未完成原文核对）"
-                    replacement = next((item for item in memory.evidence_pool.values() if item.supersedes == evidence["id"]), None)
+                    replacement = next(
+                        (
+                            item
+                            for item in memory.evidence_pool.values()
+                            if item.supersedes == evidence["id"]
+                        ),
+                        None,
+                    )
                     if replacement is not None:
                         mark = "已撤回" if replacement.status == "retracted" else "已更正，待复核"
                     lines.append(f"[{item['number']}] {reference} · {date} · {mark}")
                 rendered += "\n".join(lines)
-            answer = {"answer_id": answer_id, "rendered": rendered, "model_text": text, "memory_revision": memory.revision,
-                      "citations": cited, "invalid": invalid, "created_at": now()}
+            answer = {
+                "answer_id": answer_id,
+                "rendered": rendered,
+                "model_text": text,
+                "memory_revision": memory.revision,
+                "citations": cited,
+                "invalid": invalid,
+                "created_at": now(),
+            }
             memory.answers[answer_id] = answer
             self._save(memory, "answer", {"answer_id": answer_id, "evidence_ids": list(cited)})
-            return rendered, answer
+            return rendered, dict(answer)
 
     def completion_warning(self) -> str | None:
         memory = self.load()
         warnings = []
+        if memory.project and memory.project.status != "completed":
+            warnings.append("研报项目尚未通过完成验证，当前内容为阶段性结果。")
         if memory.research_state.replan_required:
             warnings.append("研究计划尚未重新生成，研究未完成。")
         plan = memory.plans.get(memory.research_state.current_plan_id or "")
         if plan and any(task.status != "completed" for task in plan.tasks):
             warnings.append("研究任务尚未全部完成，当前回复仅代表阶段性结果。")
-        pending = [item.question for item in memory.conflicts.values()
-                   if item.plan_id == memory.research_state.current_plan_id and item.core and item.status != "resolved"]
+        pending = [
+            item.question
+            for item in memory.conflicts.values()
+            if item.plan_id == memory.research_state.current_plan_id
+            and item.core
+            and item.status != "resolved"
+        ]
         if pending:
-            warnings.append("以下核心争议尚未解决，相关判断不能作为确定事实：" + "；".join(pending) + "。")
+            warnings.append(
+                "以下核心争议尚未解决，相关判断不能作为确定事实：" + "；".join(pending) + "。"
+            )
         return "\n".join(warnings) or None

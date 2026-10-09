@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ from pathlib import Path
 from openharness.config import Settings, load_settings
 from openharness.platforms import PlatformName, get_platform
 from openharness.sandbox import wrap_command_for_sandbox
+from openharness.sandbox.policy import ExecutionOwner
 
 
 def resolve_shell_command(
@@ -19,13 +21,14 @@ def resolve_shell_command(
     *,
     platform_name: PlatformName | None = None,
     prefer_pty: bool = False,
+    login: bool = True,
 ) -> list[str]:
     """Return argv for the best available shell on the current platform."""
     resolved_platform = platform_name or get_platform()
     if resolved_platform == "windows":
         bash = shutil.which("bash")
         if bash and _bash_is_usable(bash):
-            return [bash, "-lc", command]
+            return [bash, "-lc" if login else "-c", command]
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell:
             return [powershell, "-NoLogo", "-NoProfile", "-Command", command]
@@ -33,14 +36,14 @@ def resolve_shell_command(
 
     bash = shutil.which("bash")
     if bash:
-        argv = [bash, "-lc", command]
+        argv = [bash, "-lc" if login else "-c", command]
         if prefer_pty:
             wrapped = _wrap_command_with_script(argv, platform_name=resolved_platform)
             if wrapped is not None:
                 return wrapped
         return argv
     shell = shutil.which("sh") or os.environ.get("SHELL") or "/bin/sh"
-    argv = [shell, "-lc", command]
+    argv = [shell, "-lc" if login else "-c", command]
     if prefer_pty:
         wrapped = _wrap_command_with_script(argv, platform_name=resolved_platform)
         if wrapped is not None:
@@ -53,7 +56,9 @@ async def create_shell_subprocess(
     *,
     cwd: str | Path,
     settings: Settings | None = None,
+    owner: ExecutionOwner | None = None,
     prefer_pty: bool = False,
+    login: bool | None = None,
     stdin: int | None = asyncio.subprocess.DEVNULL,
     stdout: int | None = None,
     stderr: int | None = None,
@@ -64,11 +69,20 @@ async def create_shell_subprocess(
 
     # Docker backend: route through docker exec
     if resolved_settings.sandbox.enabled and resolved_settings.sandbox.backend == "docker":
-        from openharness.sandbox.session import get_docker_sandbox
+        from openharness.sandbox.session import get_docker_sandbox, start_docker_sandbox
 
-        session = get_docker_sandbox()
+        session = get_docker_sandbox(owner.key if owner else None)
+        if owner and session is None:
+            session = await start_docker_sandbox(
+                resolved_settings, owner.key, owner.workspace, report=True
+            )
         if session is not None and session.is_running:
-            argv = resolve_shell_command(command)
+            argv = resolve_shell_command(
+                command,
+                login=(owner is None and not resolved_settings.sandbox.enabled)
+                if login is None
+                else login,
+            )
             return await session.exec_command(
                 argv,
                 cwd=cwd,
@@ -83,7 +97,11 @@ async def create_shell_subprocess(
             raise SandboxUnavailableError("Docker sandbox session is not running")
 
     # Existing srt path
-    argv = resolve_shell_command(command, prefer_pty=prefer_pty)
+    argv = resolve_shell_command(
+        command,
+        prefer_pty=prefer_pty if owner is None else False,
+        login=(owner is None and not resolved_settings.sandbox.enabled) if login is None else login,
+    )
     argv, cleanup_path = wrap_command_for_sandbox(argv, settings=resolved_settings)
 
     try:
@@ -94,6 +112,7 @@ async def create_shell_subprocess(
             stdout=stdout,
             stderr=stderr,
             env=dict(env) if env is not None else None,
+            start_new_session=os.name != "nt",
         )
     except Exception:
         if cleanup_path is not None:
@@ -145,3 +164,29 @@ async def _cleanup_after_exit(process: asyncio.subprocess.Process, cleanup_path:
         await process.wait()
     finally:
         cleanup_path.unlink(missing_ok=True)
+
+
+async def terminate_shell_process(
+    process: asyncio.subprocess.Process, *, force: bool = False
+) -> None:
+    """Terminate the entire owned process tree, including sandbox wrappers."""
+    if os.name != "nt" and getattr(process, "pid", None) is not None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    elif force:
+        process.kill()
+    else:
+        process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), 2)
+    except asyncio.TimeoutError:
+        if os.name != "nt" and getattr(process, "pid", None) is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        await process.wait()

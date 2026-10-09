@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import logging
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -59,10 +58,17 @@ class ImageToTextToolInput(BaseModel):
     )
 
 
-class ImageToTextTool(BaseTool):
+class ImageToTextTool(BaseTool[ImageToTextToolInput]):
     """Use a multimodal model to describe an image and return text."""
 
     name = "image_to_text"
+    contract = {
+        "name": "image_to_text",
+        "source": "builtin",
+        "effect": "model_call",
+        "required_capabilities": ("model.call", "filesystem.read"),
+        "resources_write": ("*",),
+    }
     description = (
         "Convert an image to a detailed text description using a vision-capable model. "
         "Use this when you need to understand the content of an image but your current "
@@ -74,7 +80,10 @@ class ImageToTextTool(BaseTool):
         self, arguments: ImageToTextToolInput, context: ToolExecutionContext
     ) -> ToolResult:
         # 1. Resolve image data
-        image_data, media_type = await self._resolve_image(arguments, context)
+        try:
+            image_data, media_type = await self._resolve_image(arguments, context)
+        except (ValueError, OSError) as exc:
+            return ToolResult(output=str(exc), is_error=True)
         if image_data is None:
             return ToolResult(
                 output="image_to_text failed: provide either image_data (base64) or image_path",
@@ -115,7 +124,9 @@ class ImageToTextTool(BaseTool):
                 api_key=api_key,
                 base_url=base_url,
                 max_tokens=arguments.max_tokens,
-                context_window_tokens=vision_config.get("context_window_tokens"),
+                context_window_tokens=int(vision_config["context_window_tokens"])
+                if vision_config.get("context_window_tokens")
+                else None,
             )
         except Exception as exc:
             log.exception("image_to_text: vision model call failed")
@@ -124,11 +135,7 @@ class ImageToTextTool(BaseTool):
                 is_error=True,
             )
 
-        return ToolResult(
-            output=(
-                f"[Image description via {model}]\n\n{description}"
-            )
-        )
+        return ToolResult(output=(f"[Image description via {model}]\n\n{description}"))
 
     def is_read_only(self, arguments: BaseModel) -> bool:
         del arguments
@@ -148,10 +155,7 @@ class ImageToTextTool(BaseTool):
             return arguments.image_data, arguments.media_type
 
         if arguments.image_path:
-            path = Path(arguments.image_path)
-            if not path.is_absolute():
-                path = context.cwd / path
-            path = path.expanduser().resolve()
+            path = context.resolve_path(arguments.image_path)
 
             if not path.exists():
                 log.warning("image_to_text: image not found at %s", path)

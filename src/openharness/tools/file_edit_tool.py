@@ -8,6 +8,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from openharness.research.errors import ResearchError
+from openharness.utils.fs import atomic_write_text
 
 
 class FileEditToolInput(BaseModel):
@@ -19,10 +21,17 @@ class FileEditToolInput(BaseModel):
     replace_all: bool = Field(default=False)
 
 
-class FileEditTool(BaseTool):
+class FileEditTool(BaseTool[FileEditToolInput]):
     """Replace text in an existing file."""
 
     name = "edit_file"
+    contract = {
+        "name": "edit_file",
+        "source": "builtin",
+        "effect": "local_write",
+        "required_capabilities": ("filesystem.write",),
+        "resources_write": ("path",),
+    }
     description = "Edit an existing file by replacing a string."
     input_model = FileEditToolInput
 
@@ -31,7 +40,20 @@ class FileEditTool(BaseTool):
         arguments: FileEditToolInput,
         context: ToolExecutionContext,
     ) -> ToolResult:
-        path = _resolve_path(context.cwd, arguments.path)
+        try:
+            return await self._edit(arguments, context)
+        except OSError as exc:
+            # Atomic replacement or directory creation may have started before the error.
+            return ToolResult(
+                output=str(exc), is_error=True, status="uncertain", error_code="filesystem_error"
+            )
+        except (ResearchError, UnicodeError) as exc:
+            return ToolResult(output=str(exc), is_error=True)
+
+    async def _edit(
+        self, arguments: FileEditToolInput, context: ToolExecutionContext
+    ) -> ToolResult:
+        path = context.resolve_path(arguments.path, write=True)
 
         from openharness.sandbox.session import is_docker_sandbox_active
 
@@ -40,14 +62,23 @@ class FileEditTool(BaseTool):
 
             allowed, reason = validate_sandbox_path(path, context.cwd)
             if not allowed:
-                return ToolResult(output=f"Sandbox: {reason}", is_error=True)
+                return ToolResult(
+                    output=f"Sandbox: {reason}", is_error=True, metadata={"no_effect": True}
+                )
 
         if not path.exists():
-            return ToolResult(output=f"File not found: {path}", is_error=True)
+            return ToolResult(
+                output=f"File not found: {path}", is_error=True, metadata={"no_effect": True}
+            )
 
-        original = path.read_text(encoding="utf-8")
+        with context.file_lock(arguments.path) as path:
+            original = path.read_text(encoding="utf-8")
         if arguments.old_str not in original:
-            return ToolResult(output="old_str was not found in the file", is_error=True)
+            return ToolResult(
+                output="old_str was not found in the file",
+                is_error=True,
+                metadata={"no_effect": True},
+            )
 
         if arguments.replace_all:
             updated = original.replace(arguments.old_str, arguments.new_str)
@@ -55,17 +86,37 @@ class FileEditTool(BaseTool):
             updated = original.replace(arguments.old_str, arguments.new_str, 1)
 
         approval_prompt = context.metadata.get("edit_approval_prompt") if context.metadata else None
+        stats = ""
         if approval_prompt is not None:
             diff_text, added, removed = _compute_diff(str(path), original, updated)
             reply = await approval_prompt(str(path), diff_text, added, removed)
             if reply == "reject":
-                return ToolResult(output=f"Edit rejected by user: {path}", is_error=True)
-            path.write_text(updated, encoding="utf-8")
+                return ToolResult(
+                    output=f"Edit rejected by user: {path}",
+                    is_error=True,
+                    metadata={"no_effect": True},
+                )
             stats = f"  ({_ANSI_GREEN}+{added}{_ANSI_RESET} {_ANSI_RED}-{removed}{_ANSI_RESET})"
-            return ToolResult(output=f"Updated {path}{stats}")
-
-        path.write_text(updated, encoding="utf-8")
-        return ToolResult(output=f"Updated {path}")
+        with context.file_lock(arguments.path, write=True) as path:
+            current = path.read_text(encoding="utf-8")
+            if approval_prompt is not None and current != original:
+                return ToolResult(
+                    output="File changed during edit approval; read it again",
+                    is_error=True,
+                    metadata={"no_effect": True},
+                )
+            if arguments.old_str not in current:
+                return ToolResult(
+                    output="old_str was not found in the latest file",
+                    is_error=True,
+                    metadata={"no_effect": True},
+                )
+            # Reapply to the latest contents inside the lock, preserving concurrent unrelated edits.
+            updated = current.replace(
+                arguments.old_str, arguments.new_str, -1 if arguments.replace_all else 1
+            )
+            atomic_write_text(path, updated)
+        return ToolResult(output=f"Updated {path}{stats}")
 
 
 def _resolve_path(base: Path, candidate: str) -> Path:

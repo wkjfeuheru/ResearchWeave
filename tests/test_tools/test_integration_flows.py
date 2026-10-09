@@ -10,8 +10,6 @@ from openharness.tools import create_research_tool_registry
 from openharness.tools.base import ToolExecutionContext
 
 
-
-
 @pytest.mark.asyncio
 async def test_search_edit_flow_across_registry(tmp_path: Path):
     registry = create_research_tool_registry()
@@ -45,8 +43,6 @@ async def test_search_edit_flow_across_registry(tmp_path: Path):
     assert "beta" not in (tmp_path / "src" / "demo.py").read_text(encoding="utf-8")
 
 
-
-
 @pytest.mark.asyncio
 async def test_skill_and_config_flow_across_registry(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
@@ -62,6 +58,8 @@ async def test_skill_and_config_flow_across_registry(tmp_path: Path, monkeypatch
     registry = create_research_tool_registry()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"tool_registry": registry})
 
+    registry = create_research_tool_registry(mode="general")
+    context.metadata["tool_registry"] = registry
     config = registry.get("config")
     skill = registry.get("skill")
 
@@ -76,8 +74,6 @@ async def test_skill_and_config_flow_across_registry(tmp_path: Path, monkeypatch
 
     skill_result = await skill.execute(skill.input_model(name="Pytest"), context)
     assert "fixtures" in skill_result.output
-
-
 
 
 @pytest.mark.asyncio
@@ -116,6 +112,8 @@ async def test_notebook_flow_across_registry(tmp_path: Path, monkeypatch):
     registry = create_research_tool_registry()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"tool_registry": registry})
 
+    registry = create_research_tool_registry(mode="general")
+    context.metadata["tool_registry"] = registry
     notebook = registry.get("notebook_edit")
     notebook_result = await notebook.execute(
         notebook.input_model(path="nb/demo.ipynb", cell_index=0, new_source="print('flow ok')\n"),

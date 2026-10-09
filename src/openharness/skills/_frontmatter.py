@@ -3,11 +3,46 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+def read_discovery_header(path: Path) -> str:
+    """Read frontmatter only; legacy Markdown gets a bounded heading/paragraph probe.
+
+    Binary readline avoids text buffering decoding a potentially huge body. Invalid
+    or unterminated headers are bounded too; no discovery read exceeds 64 KiB.
+    """
+    with path.open("rb", buffering=0) as stream:
+        first = stream.readline(4096)
+        lines = [first]
+        total = len(first)
+        if first.rstrip(b"\r\n") == b"---":
+            while total < 65536:
+                line = stream.readline(min(4096, 65536 - total))
+                if not line:
+                    break
+                lines.append(line)
+                total += len(line)
+                if line.rstrip(b"\r\n") == b"---":
+                    break
+        else:
+            # Preserve heading-derived legacy names and the first short paragraph.
+            for _ in range(31):
+                if total >= 65536:
+                    break
+                line = stream.readline(min(4096, 65536 - total))
+                if not line:
+                    break
+                lines.append(line)
+                total += len(line)
+                if line.strip() and not line.lstrip().startswith(b"#"):
+                    break
+    return b"".join(lines).decode("utf-8", errors="replace").replace("\r\n", "\n")
 
 
 def parse_bool_frontmatter(value: Any, *, default: bool) -> bool:

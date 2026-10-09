@@ -36,12 +36,6 @@ def test_detect_shell_fallback(monkeypatch):
     assert isinstance(shell, str)
 
 
-
-
-
-
-
-
 def test_get_environment_info_returns_dataclass():
     info = get_environment_info()
     assert isinstance(info, EnvironmentInfo)
@@ -53,7 +47,9 @@ def test_get_environment_info_returns_dataclass():
     assert len(info.python_executable) > 0
 
 
-def test_get_environment_info_detects_virtual_env_from_python_executable(monkeypatch, tmp_path: Path):
+def test_get_environment_info_detects_virtual_env_from_python_executable(
+    monkeypatch, tmp_path: Path
+):
     venv_root = tmp_path / ".openharness-venv"
     bin_dir = venv_root / "bin"
     bin_dir.mkdir(parents=True)

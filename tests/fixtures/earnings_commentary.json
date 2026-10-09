@@ -1,0 +1,12 @@
+{
+  "fixture_notice": "离线合成验收数据，不代表真实公司披露或实时金融数据接入",
+  "subject": "示例公司 A 财报点评",
+  "report_type": "earnings_commentary",
+  "period": "FY2025",
+  "unit": "million",
+  "currency": "CNY",
+  "previous": {"revenue": 100, "net_profit": 10},
+  "current": {"revenue": 120, "net_profit": 12},
+  "expected": {"revenue_growth_pct": 20, "net_profit_margin_pct": 10},
+  "required_sections": ["摘要", "财务表现", "风险"]
+}

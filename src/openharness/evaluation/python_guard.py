@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 
-def bootstrap(workspace, resource_roots, args, *, allow_network=False):
+def bootstrap(
+    workspace: Path, resource_roots: list[Path], args: list[str], *, allow_network: bool = False
+) -> str:
     roots = [str(Path(workspace).resolve()), *[str(Path(p).resolve()) for p in resource_roots]]
     package_root = str(Path(__file__).resolve().parents[1])
     # Trusted framework imports are allowed; evaluation modules and datasets remain denied.

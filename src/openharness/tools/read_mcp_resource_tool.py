@@ -15,7 +15,7 @@ class ReadMcpResourceToolInput(BaseModel):
     uri: str = Field(description="Resource URI")
 
 
-class ReadMcpResourceTool(BaseTool):
+class ReadMcpResourceTool(BaseTool[ReadMcpResourceToolInput]):
     """Read one resource from an MCP server."""
 
     name = "read_mcp_resource"
@@ -29,14 +29,25 @@ class ReadMcpResourceTool(BaseTool):
         del arguments
         return True
 
-    async def execute(self, arguments: ReadMcpResourceToolInput, context: ToolExecutionContext) -> ToolResult:
+    async def execute(
+        self, arguments: ReadMcpResourceToolInput, context: ToolExecutionContext
+    ) -> ToolResult:
         del context
         try:
             output = await self._manager.read_resource(arguments.server, arguments.uri)
         except McpServerNotConnectedError as exc:
             return ToolResult(output=str(exc), is_error=True)
-        return ToolResult(output=output, metadata={"research_source_specs": [{
-            "kind": "mcp", "title": arguments.uri,
-            "locator": f"mcp:{arguments.server}/{arguments.uri}",
-            "content": output, "fragment": False,
-        }]})
+        return ToolResult(
+            output=output,
+            metadata={
+                "research_source_specs": [
+                    {
+                        "kind": "mcp",
+                        "title": arguments.uri,
+                        "locator": f"mcp:{arguments.server}/{arguments.uri}",
+                        "content": output,
+                        "fragment": False,
+                    }
+                ]
+            },
+        )

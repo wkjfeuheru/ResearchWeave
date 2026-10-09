@@ -8,7 +8,13 @@ import pytest
 
 from openharness.api.client import ApiMessageCompleteEvent
 from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock, ToolResultBlock, ToolUseBlock
+from openharness.engine.messages import (
+    ConversationMessage,
+    ImageBlock,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from openharness.hooks import HookEvent
 from openharness.services import (
     build_post_compact_messages,
@@ -133,8 +139,6 @@ class _HookExecutorStub:
         return AggregatedHookResult()
 
 
-
-
 def test_try_context_collapse_trims_oversized_messages():
     giant = ("alpha " * 1200).strip()
     messages = [
@@ -159,7 +163,11 @@ def test_try_context_collapse_trims_oversized_tool_results():
         ConversationMessage.from_user_text("open page"),
         ConversationMessage(
             role="assistant",
-            content=[ToolUseBlock(id="toolu_snapshot", name="mcp__playwright__browser_snapshot", input={})],
+            content=[
+                ToolUseBlock(
+                    id="toolu_snapshot", name="mcp__playwright__browser_snapshot", input={}
+                )
+            ],
         ),
         ConversationMessage(
             role="user",
@@ -236,7 +244,9 @@ def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
         ),
         ConversationMessage(
             role="user",
-            content=[ToolResultBlock(tool_use_id="toolu_custom_0", content="A" * 4096, is_error=False)],
+            content=[
+                ToolResultBlock(tool_use_id="toolu_custom_0", content="A" * 4096, is_error=False)
+            ],
         ),
         ConversationMessage(
             role="assistant",
@@ -244,7 +254,9 @@ def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
         ),
         ConversationMessage(
             role="user",
-            content=[ToolResultBlock(tool_use_id="toolu_custom_1", content="B" * 512, is_error=False)],
+            content=[
+                ToolResultBlock(tool_use_id="toolu_custom_1", content="B" * 512, is_error=False)
+            ],
         ),
     ]
 
@@ -272,7 +284,9 @@ def test_compact_token_estimate_counts_images(monkeypatch):
     messages = [
         ConversationMessage(
             role="user",
-            content=[ImageBlock(media_type="image/png", data="YWJj", source_path="/tmp/screen.png")],
+            content=[
+                ImageBlock(media_type="image/png", data="YWJj", source_path="/tmp/screen.png")
+            ],
         )
     ]
 
@@ -284,17 +298,22 @@ def test_should_autocompact_counts_image_tokens(monkeypatch):
     messages = [
         ConversationMessage(
             role="user",
-            content=[ImageBlock(media_type="image/png", data="YWJj", source_path="/tmp/screen.png")],
+            content=[
+                ImageBlock(media_type="image/png", data="YWJj", source_path="/tmp/screen.png")
+            ],
         )
     ]
 
-    assert should_autocompact(
-        messages,
-        "local-vision",
-        AutoCompactState(),
-        auto_compact_threshold_tokens=7000,
-        context_window_tokens=200_000,
-    ) is True
+    assert (
+        should_autocompact(
+            messages,
+            "local-vision",
+            AutoCompactState(),
+            auto_compact_threshold_tokens=7000,
+            context_window_tokens=200_000,
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -326,7 +345,9 @@ async def test_compact_conversation_replaces_images_in_summary_request():
     messages = [
         ConversationMessage(role="user", content=[image]),
         ConversationMessage(role="assistant", content=[TextBlock(text="I can see the screenshot")]),
-        ConversationMessage(role="user", content=[TextBlock(text="Please summarize before moving on")]),
+        ConversationMessage(
+            role="user", content=[TextBlock(text="Please summarize before moving on")]
+        ),
         ConversationMessage(role="assistant", content=[TextBlock(text="Working")]),
     ]
     client = _CompactApiClient(["<summary>image context preserved</summary>"])
@@ -363,12 +384,22 @@ async def test_compact_conversation_runs_hooks_and_preserves_carryover_state(tmp
     hook_executor = _HookExecutorStub()
     messages = [
         ConversationMessage(role="user", content=[ImageBlock.from_path(image_path)]),
-        ConversationMessage(role="assistant", content=[TextBlock(text="Looking at the attachment")]),
+        ConversationMessage(
+            role="assistant", content=[TextBlock(text="Looking at the attachment")]
+        ),
         ConversationMessage(
             role="assistant",
-            content=[ToolUseBlock(id="image_read", name="read_file", input={"path": str(image_path)})],
+            content=[
+                ToolUseBlock(id="image_read", name="read_file", input={"path": str(image_path)})
+            ],
         ),
-        ConversationMessage(role="user", content=[ToolResultBlock(tool_use_id="image_read", content="image read"), TextBlock(text="Please keep going")]),
+        ConversationMessage(
+            role="user",
+            content=[
+                ToolResultBlock(tool_use_id="image_read", content="image read"),
+                TextBlock(text="Please keep going"),
+            ],
+        ),
         ConversationMessage(role="assistant", content=[TextBlock(text="Working through it")]),
         ConversationMessage(role="user", content=[TextBlock(text="And preserve context")]),
         ConversationMessage(role="assistant", content=[TextBlock(text="Sure")]),
@@ -388,7 +419,10 @@ async def test_compact_conversation_runs_hooks_and_preserves_carryover_state(tmp
         },
     )
 
-    assert [event for event, _payload in hook_executor.events] == [HookEvent.PRE_COMPACT, HookEvent.POST_COMPACT]
+    assert [event for event, _payload in hook_executor.events] == [
+        HookEvent.PRE_COMPACT,
+        HookEvent.POST_COMPACT,
+    ]
     rebuilt = build_post_compact_messages(compacted)
     joined = "\n\n".join(message.text for message in rebuilt)
     assert rebuilt[0].text.startswith("[Compact boundary marker]")
@@ -439,15 +473,24 @@ async def test_compact_conversation_keeps_tool_pair_when_boundary_would_split_it
 @pytest.mark.asyncio
 async def test_compact_conversation_rejects_orphan_without_discarding_it():
     from openharness.services.context_budget import ContextBudgetError
-    messages = [ConversationMessage.from_user_text("alpha " * 2000),
-                ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
-                ConversationMessage.from_user_text("gamma"),
-                ConversationMessage(role="assistant", content=[
-                    ToolUseBlock(id="toolu_orphan", name="edit_file", input={"path": "demo.txt"})])]
+
+    messages = [
+        ConversationMessage.from_user_text("alpha " * 2000),
+        ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+        ConversationMessage.from_user_text("gamma"),
+        ConversationMessage(
+            role="assistant",
+            content=[ToolUseBlock(id="toolu_orphan", name="edit_file", input={"path": "demo.txt"})],
+        ),
+    ]
     original = [m.model_dump() for m in messages]
     with pytest.raises(ContextBudgetError, match="Unfinished"):
-        await compact_conversation(messages, api_client=_CompactApiClient(["<summary>condensed</summary>"]),
-                                   model="claude-sonnet-4-6", preserve_recent=1)
+        await compact_conversation(
+            messages,
+            api_client=_CompactApiClient(["<summary>condensed</summary>"]),
+            model="claude-sonnet-4-6",
+            preserve_recent=1,
+        )
     assert [m.model_dump() for m in messages] == original
 
 
@@ -548,20 +591,26 @@ async def test_auto_compact_if_needed_returns_original_messages_after_timeout(mo
 
 
 def test_get_autocompact_threshold_respects_manual_override():
-    assert get_autocompact_threshold(
-        "claude-sonnet-4-6",
-        auto_compact_threshold_tokens=12345,
-    ) == 12345
+    assert (
+        get_autocompact_threshold(
+            "claude-sonnet-4-6",
+            auto_compact_threshold_tokens=12345,
+        )
+        == 12345
+    )
 
 
 def test_should_autocompact_uses_custom_context_window():
     messages = [
         ConversationMessage(role="user", content=[TextBlock(text="alpha " * 6000)]),
     ]
-    assert should_autocompact(
-        messages,
-        "claude-sonnet-4-6",
-        AutoCompactState(),
-        context_window_tokens=4000,
-        max_tokens=512,
-    ) is True
+    assert (
+        should_autocompact(
+            messages,
+            "claude-sonnet-4-6",
+            AutoCompactState(),
+            context_window_tokens=4000,
+            max_tokens=512,
+        )
+        is True
+    )

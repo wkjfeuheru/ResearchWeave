@@ -1,9 +1,43 @@
 import { expect, test } from '@playwright/test';
 
+test('report project status and extended task states survive history refresh', async ({ page }) => {
+  const created = await page.request.post('/api/models', { data: {
+    label: '研报状态模型', api_format: 'openai', model: 'report-state-test', api_key: 'report-state-secret', context_window_tokens: 200000,
+  } });
+  const { id } = await created.json();
+  const session = await (await page.request.post('/api/sessions', { data: { profile_id: id } })).json();
+  let projectStatus = 'running';
+  await page.routeWebSocket(`**/api/sessions/${session.session_id}/ws`, route => {
+    const server = route.connectToServer();
+    server.onMessage(message => {
+      const data = JSON.parse(String(message));
+      if (data.type === 'ready') data.session.research_progress = {
+      revision: 10, plan_id: 'report-plan', title: '离线财报点评', current_task_id: null,
+      tasks: ['ready', 'validating', 'failed'].map((status, index) => ({
+        id: `task-${index}`, title: `任务${index + 1}`, status, blocker: '', completion_note: '',
+      })), completed: 0, total: 3, replan_required: false, project_status: projectStatus,
+      };
+      route.send(JSON.stringify(data));
+    });
+    route.onMessage(message => server.send(message));
+  });
+  await page.addInitScript(sid => sessionStorage.setItem('openharness.web.session', sid), session.session_id);
+  await page.goto('/');
+  const progress = page.getByLabel('研究任务进度');
+  await expect(progress).toContainText('研究中 · 0/3 项任务完成');
+  await expect(progress).toContainText('可执行');
+  await expect(progress).toContainText('验证中');
+  await expect(progress).toContainText('失败');
+  projectStatus = 'suspended';
+  await page.reload();
+  await expect(progress).toContainText('已暂停 · 0/3 项任务完成');
+  await expect(progress).not.toContainText('研报已完成');
+});
+
 for (const outcome of ['unresolved', 'compatible']) {
   test(`conflict outcomes remain visible after tasks complete and history restores: ${outcome}`, async ({ page }) => {
     const created = await page.request.post('/api/models', { data: {
-      label: '冲突进度模型', api_format: 'openai', model: 'conflict-test', api_key: 'conflict-test-secret',
+      label: '冲突进度模型', api_format: 'openai', model: 'conflict-test', api_key: 'conflict-test-secret', context_window_tokens: 200000,
     } });
     const { id } = await created.json();
     const response = await page.request.post(`/__test/conflict-progress?profile_id=${id}&outcome=${outcome}`);
@@ -27,7 +61,7 @@ for (const outcome of ['unresolved', 'compatible']) {
 
 test('long collapsed progress and website-only source rows survive refresh and copy', async ({ page }) => {
   const created = await page.request.post('/api/models', { data: {
-    label: '来源布局模型', api_format: 'openai', model: 'layout-test', api_key: 'layout-test-secret',
+    label: '来源布局模型', api_format: 'openai', model: 'layout-test', api_key: 'layout-test-secret', context_window_tokens: 200000,
   } });
   const { id } = await created.json();
   const response = await page.request.post(`/__test/citation-layout?profile_id=${id}`);
@@ -83,7 +117,7 @@ test('session approvals skip repeated confirmations and remain isolated after re
     if (data.type === 'prompt') prompts.push(data);
   }));
   const created = await page.request.post('/api/models', { data: {
-    label: '会话授权测试模型', api_format: 'openai', model: 'session-approval-test', api_key: 'session-approval-secret',
+    label: '会话授权测试模型', api_format: 'openai', model: 'session-approval-test', api_key: 'session-approval-secret', context_window_tokens: 200000,
   } });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
@@ -92,7 +126,12 @@ test('session approvals skip repeated confirmations and remain isolated after re
   const approval = page.getByRole('dialog', { name: '操作确认' });
   const sendWrite = async () => {
     await page.getByLabel('对话输入').fill('请写入测试文件');
+    const needsSession = await page.evaluate(() => !sessionStorage.getItem('openharness.web.session'));
+    const sessionCreated = needsSession ? page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/sessions' && response.status() === 201,
+    ) : null;
     await page.getByRole('button', { name: '发送消息', exact: true }).click();
+    if (sessionCreated) await sessionCreated;
   };
   await sendWrite();
   await expect(approval).toContainText('同一工具');
@@ -136,6 +175,7 @@ test('model configuration, skills, streaming, approvals, stop and recovery', asy
   await page.getByRole('button', { name: '添加模型', exact: true }).click();
   await page.getByLabel('配置名称').fill('浏览器测试模型');
   await page.getByLabel('模型名称').fill('browser-test-model');
+  await page.getByLabel('上下文窗口（Token）').fill('200000');
   await page.getByLabel(/^API Key/).fill('browser-test-secret');
   await page.getByRole('button', { name: '保存配置' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -145,16 +185,16 @@ test('model configuration, skills, streaming, approvals, stop and recovery', asy
   await card.getByRole('button', { name: '设为默认' }).click();
   await expect(card.getByText('默认', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'SkillHub', exact: true }).click();
-  await expect(page.getByRole('switch', { name: '启用 财报穿透解析', exact: true })).toBeChecked();
-  await page.getByRole('switch', { name: '启用 财报穿透解析', exact: true }).click();
-  await expect(page.getByRole('switch', { name: '启用 财报穿透解析', exact: true })).not.toBeChecked();
-  await page.getByRole('switch', { name: '启用 财报穿透解析', exact: true }).click();
-  await expect(page.getByRole('switch', { name: '启用 财报穿透解析', exact: true })).toBeChecked();
-  await page.getByLabel('搜索技能').fill('财报穿透解析');
+  await expect(page.getByRole('switch', { name: '启用 分析建模 Skill 包', exact: true })).toBeChecked();
+  await page.getByRole('switch', { name: '启用 分析建模 Skill 包', exact: true }).click();
+  await expect(page.getByRole('switch', { name: '启用 分析建模 Skill 包', exact: true })).not.toBeChecked();
+  await page.getByRole('switch', { name: '启用 分析建模 Skill 包', exact: true }).click();
+  await expect(page.getByRole('switch', { name: '启用 分析建模 Skill 包', exact: true })).toBeChecked();
+  await page.getByLabel('搜索技能').fill('分析建模');
   await expect(page.locator('.skill-card')).toHaveCount(1);
   await page.locator('.skill-card').getByRole('button', { name: '查看详情' }).click();
   await page.getByRole('button', { name: '在对话中试用' }).click();
-  await expect(page.getByLabel('对话输入')).toHaveValue('/financial-statement-analysis 贵州茅台 2025年年报');
+  await expect(page.getByLabel('对话输入')).toHaveValue('/financial-statement-analysis 分析公司财报');
   await page.getByLabel('当前对话模型').selectOption({ label: '浏览器测试模型 · browser-test-model' });
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.locator('.message.assistant')).toContainText('这是浏览器测试回复');
@@ -238,7 +278,7 @@ test('research progress, source footnotes and interrupt to replan', async ({ pag
     } catch { /* Ignore non-JSON transport frames. */ }
   }));
   const created = await page.request.post('/api/models', { data: {
-    label: '研究记忆测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret',
+    label: '研究记忆测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret', context_window_tokens: 200000,
   } });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
@@ -294,7 +334,7 @@ test('research progress, source footnotes and interrupt to replan', async ({ pag
 
 test('blocked research task stays expanded with its blocker', async ({ page }) => {
   const created = await page.request.post('/api/models', { data: {
-    label: '受阻任务测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret',
+    label: '受阻任务测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret', context_window_tokens: 200000,
   } });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
@@ -312,7 +352,7 @@ test('blocked research task stays expanded with its blocker', async ({ page }) =
 
 async function prepareProcessChat(page: import('@playwright/test').Page) {
   const created = await page.request.post('/api/models', { data: {
-    label: '执行过程测试模型', api_format: 'openai', model: 'process-test', api_key: 'process-test-secret',
+    label: '执行过程测试模型', api_format: 'openai', model: 'process-test', api_key: 'process-test-secret', context_window_tokens: 200000,
   } });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
@@ -320,6 +360,9 @@ async function prepareProcessChat(page: import('@playwright/test').Page) {
   await page.getByLabel('当前对话模型').selectOption(id);
   await page.getByLabel('对话输入').fill('查看执行过程');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  // Session creation loads the real Runtime; observe its first streamed event
+  // before testing disclosure or completion, even during concurrent regression.
+  await expect(page.locator('.process-heading').last()).toBeVisible({ timeout: 15_000 });
 }
 
 test('two levels of process disclosure, final answer and refresh recovery', async ({ page }) => {
@@ -377,12 +420,14 @@ test('manual process disclosure survives completion and stopping preserves parti
 
 test('delete confirmation, failure retry, noncurrent and current session cleanup', async ({ page }) => {
   await prepareProcessChat(page);
+  await expect(page.locator('.answer-content').last()).toContainText('已整理资料；第二份文件不可用', { timeout: 15_000 });
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
   const currentId = await page.evaluate(() => sessionStorage.getItem('openharness.web.session'));
   const session = await (await page.request.get(`/api/sessions/${currentId}`)).json();
   const other = await (await page.request.post('/api/sessions', { data: { profile_id: session.profile_id } })).json();
   await page.reload();
-  const otherRow = page.locator('.session-row').filter({ has: page.getByRole('button', { name: '新对话', exact: true }) }).last();
+  // History is newest first; earlier test sessions may have the same default title.
+  const otherRow = page.locator('.session-row').filter({ has: page.getByRole('button', { name: '新对话', exact: true }) }).first();
   await otherRow.hover();
   await otherRow.getByRole('button', { name: '删除对话：新对话', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '删除对话', exact: true });
@@ -417,6 +462,7 @@ test('delete confirmation, failure retry, noncurrent and current session cleanup
 test('mobile deletion remains visible and returns to welcome', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await prepareProcessChat(page);
+  await expect(page.locator('.answer-content').last()).toContainText('已整理资料；第二份文件不可用', { timeout: 15_000 });
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
   await page.getByRole('button', { name: '打开导航' }).click();
   const remove = page.locator('.session-row.selected .session-delete');
@@ -440,7 +486,7 @@ test('disconnect marks pending activity interrupted and restores the saved proce
     };
   });
   const created = await page.request.post('/api/models', { data: {
-    label: '断线测试模型', api_format: 'openai', model: 'disconnect-test', api_key: 'disconnect-test-secret',
+    label: '断线测试模型', api_format: 'openai', model: 'disconnect-test', api_key: 'disconnect-test-secret', context_window_tokens: 200000,
   } });
   const { id } = await created.json();
   await page.goto('/');
@@ -468,7 +514,7 @@ test('disconnect marks pending activity interrupted and restores the saved proce
 
 test('new stream content follows the bottom without interrupting reading above', async ({ page }) => {
   const created = await page.request.post('/api/models', { data: {
-    label: '滚动测试模型', api_format: 'openai', model: 'scroll-test', api_key: 'scroll-test-secret',
+    label: '滚动测试模型', api_format: 'openai', model: 'scroll-test', api_key: 'scroll-test-secret', context_window_tokens: 200000,
   } });
   const { id } = await created.json();
   const session = await (await page.request.post('/api/sessions', { data: { profile_id: id } })).json();
@@ -496,13 +542,25 @@ test('new stream content follows the bottom without interrupting reading above',
   send('研究资料段落。\n\n'.repeat(100));
   const scroll = page.locator('.conversation-scroll');
   await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(10);
-  await scroll.evaluate(element => { element.scrollTop = 0; });
+  await scroll.evaluate(element => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(0);
   send('新增资料。\n\n'.repeat(10));
   await expect(page.locator('.answer-content')).toContainText('新增资料');
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(0);
   await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
   await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(10);
+  await scroll.evaluate(element => {
+    // Deliver a scroll notification after content grows but before passive
+    // effects, as browsers can do when anchoring streaming Markdown.
+    const observer = new MutationObserver(() => {
+      observer.disconnect();
+      element.dispatchEvent(new Event('scroll'));
+    });
+    observer.observe(element.querySelector('.answer-content')!, { childList: true, characterData: true, subtree: true });
+  });
   send('继续补充。\n\n'.repeat(10));
   await expect(page.locator('.answer-content')).toContainText('继续补充');
   await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(10);
@@ -511,7 +569,7 @@ test('new stream content follows the bottom without interrupting reading above',
 
 test('attachments, real script artifacts, download, reload and isolation', async ({page}) => {
   const created = await page.request.post('/api/models', { data: {
-    label: '附件验收模型', api_format: 'openai', model: 'file-test-model', api_key: 'file-test-secret',
+    label: '附件验收模型', api_format: 'openai', model: 'file-test-model', api_key: 'file-test-secret', context_window_tokens: 200000,
   }});
   const {id} = await created.json();
   await page.goto('/');

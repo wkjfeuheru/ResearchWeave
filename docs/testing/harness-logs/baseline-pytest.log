@@ -1,0 +1,19 @@
+........................................................................ [ 19%]
+........................................................................ [ 38%]
+........................................................................ [ 57%]
+........................................................................ [ 76%]
+........................................................................ [ 95%]
+..........F......                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_h_compaction_failure_retains_original_when_hard_cap_rejects _______
+tests/test_services/test_context_budget.py:596: in test_h_compaction_failure_retains_original_when_hard_cap_rejects
+    assert client.requests and all(request.current_user_message_id == "" for request in client.requests)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AssertionError: assert 3 == 1
+E    +  where 3 = len([ApiMessageRequest(model='claude-sonnet-4-6', messages=[ConversationMessage(reasoning_content=None, runtime_context=No...sation summarizer.', max_tokens=4096, tools=[], effort=None, context_window_tokens=200000, current_user_message_id='')])
+E    +    where [ApiMessageRequest(model='claude-sonnet-4-6', messages=[ConversationMessage(reasoning_content=None, runtime_context=No...sation summarizer.', max_tokens=4096, tools=[], effort=None, context_window_tokens=200000, current_user_message_id='')] = <test_context_budget.Client object at 0x7f3c37bf68d0>.requests
+------------------------------ Captured log call -------------------------------
+WARNING  openharness.services.compact:__init__.py:1329 Compaction rejected; original history retained: summary failed
+=========================== short test summary info ============================
+FAILED tests/test_services/test_context_budget.py::test_h_compaction_failure_retains_original_when_hard_cap_rejects
+1 failed, 376 passed in 48.15s

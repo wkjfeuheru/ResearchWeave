@@ -1,5 +1,6 @@
 """Concurrent confirmations must all remain reachable and cancellable."""
 
+from openharness.utils.async_timeout import timeout as async_timeout
 import asyncio
 from types import SimpleNamespace
 
@@ -25,7 +26,7 @@ def connection(monkeypatch, tmp_path):
 
 
 async def until(predicate):
-    async with asyncio.timeout(1):
+    async with async_timeout(1):
         while not predicate():
             await asyncio.sleep(0)
 
@@ -33,7 +34,9 @@ async def until(predicate):
 @pytest.mark.asyncio
 async def test_four_parallel_prompts_mixed_answers_and_stale_replies(connection):
     conn, events = connection
-    tasks = [asyncio.create_task(conn.permission(f"mcp__finance__tool{i}", "confirm")) for i in range(4)]
+    tasks = [
+        asyncio.create_task(conn.permission(f"mcp__finance__tool{i}", "confirm")) for i in range(4)
+    ]
     await until(lambda: len(conn.prompts) == 4)
     assert len(events) == 1
     first = events[0]["prompt_id"]
@@ -70,13 +73,21 @@ async def test_cancel_clears_active_and_queued_confirmations_and_allows_next_tur
 
 
 @pytest.mark.asyncio
-async def test_activity_distinguishes_empty_from_failure_and_redacts_details(connection, monkeypatch):
+async def test_activity_distinguishes_empty_from_failure_and_redacts_details(
+    connection, monkeypatch
+):
     conn, events = connection
     monkeypatch.setenv("TAVILY_API_KEY", "secret-to-redact")
     conn.redactor = Redactor()
     await conn.event(ToolExecutionStarted("web_search", {"query": "solar"}, tool_use_id="search"))
-    await conn.event(ToolExecutionCompleted("web_search", "", tool_use_id="search",
-                                          metadata={"outcome": "empty", "detail": "no matches secret-to-redact"}))
+    await conn.event(
+        ToolExecutionCompleted(
+            "web_search",
+            "",
+            tool_use_id="search",
+            metadata={"outcome": "empty", "detail": "no matches secret-to-redact"},
+        )
+    )
     row = conn.rows[0]
     assert row["status"] == "completed" and row["outcome"] == "empty"
     assert "secret-to-redact" not in str(row) and "secret-to-redact" not in str(events)

@@ -11,18 +11,31 @@ export default function SkillPage({ skills, refresh, onTry }: {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [working, setWorking] = useState('');
+  const [entries, setEntries] = useState<Record<string, string>>({});
   const enabled = skills.filter(s => s.enabled).length;
   const detail = skills.find(s => s.id === detailId);
-  const filtered = skills.filter(s => (filter !== 'enabled' || s.enabled) && `${s.label} ${s.description} ${s.category}`.toLowerCase().includes(query.toLowerCase()));
+  const filtered = skills.filter(s => (filter !== 'enabled' || s.enabled) && `${s.label} ${s.description} ${s.category} ${s.skills.map(item => `${item.name} ${item.description}`).join(' ')}`.toLowerCase().includes(query.toLowerCase()));
   async function toggle(skill: Skill) {
     setWorking(skill.id); setError('');
     try { await api(`/skills/${skill.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !skill.enabled }) }); await refresh(); }
     catch (error) { setError(errorText(error)); } finally { setWorking(''); }
   }
+  async function toggleEntry(name: string, enabled: boolean) {
+    setWorking(name); setError('');
+    try { await api(`/skills/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ enabled: !enabled }) }); await refresh(); }
+    catch (error) { setError(errorText(error)); } finally { setWorking(''); }
+  }
+  async function loadEntry(packageId: string, name: string) {
+    setWorking(name); setError('');
+    try {
+      const result = await api<{ content: string }>(`/skills/${encodeURIComponent(packageId)}/${encodeURIComponent(name)}`);
+      setEntries(current => ({ ...current, [`${packageId}/${name}`]: result.content }));
+    } catch (error) { setError(errorText(error)); } finally { setWorking(''); }
+  }
   const switchButton = (skill: Skill) => <button className={`toggle ${skill.enabled ? 'on' : ''}`} role="switch" aria-checked={skill.enabled}
     aria-label={`启用 ${skill.label}`} disabled={!!working} onClick={() => toggle(skill)}><span /></button>;
   return <div className="page-content">
-    <div className="page-intro"><div><span className="eyebrow">SKILLHUB</span><h2>为研究，添加新的视角</h2><p>发现并启用研究技能，让专业方法融入你的对话。</p></div><span className="summary-pill"><Layers size={16} />{enabled} 个技能已启用</span></div>
+    <div className="page-intro"><div><span className="eyebrow">SKILLHUB</span><h2>为研究，添加新的视角</h2><p>发现并启用研究技能，让专业方法融入你的对话。</p></div><span className="summary-pill"><Layers size={16} />{enabled} 个技能包已启用</span></div>
     {error && <ErrorBanner message={error} onClose={() => setError('')} />}
     <div className="skill-feature"><div><span className="badge blue">投研技能插件</span><h3>把方法留给技能，把探索交给对话</h3><p>启用后，助手可在对话中使用对应技能。支持财报解析、事件监控、研报摘要及综合报告；资料不足时明确展示缺口。</p></div><div className="feature-icon"><Layers size={54} strokeWidth={1} /></div></div>
     <div className="filter-toolbar"><div className="tabs"><button className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>全部技能 <span>{skills.length}</span></button><button className={filter === 'enabled' ? 'selected' : ''} onClick={() => setFilter('enabled')}>已启用 <span>{enabled}</span></button></div>
@@ -31,17 +44,21 @@ export default function SkillPage({ skills, refresh, onTry }: {
       <div className="skill-card-top"><div className={`card-icon ${skill.category === '行业研究' ? 'teal' : ''}`}>{skill.category === '行业研究' ? <Layers size={23} /> : <Building2 size={23} />}</div>{switchButton(skill)}</div>
       <div className="skill-title"><h3>{skill.label}</h3></div>
       <p>{skill.description}</p><div className="skill-tags"><span className="tag">{skill.category}</span><span className="tag">{skill.skills.length} 个技能</span></div>
-      <footer><span>{skill.author} <small>v{skill.version}</small></span><button className="text-button" onClick={() => setDetailId(skill.id)}>查看详情<ChevronRight size={15} /></button></footer>
+      <footer><span>v{skill.version}</span><button className="text-button" onClick={() => setDetailId(skill.id)}>查看详情<ChevronRight size={15} /></button></footer>
     </article>)}</div>
     {!filtered.length && <div className="empty-list"><Search size={26} /><h3>{filter === 'enabled' ? '还没有启用技能' : '没有找到相关技能'}</h3><p>试试其他关键词，或在全部技能中选择一个技能。</p></div>}
-    <p className="page-footnote"><Layers size={14} />技能按插件包全局启停，从下一轮对话开始生效。</p>
+    <p className="page-footnote"><Layers size={14} />可启停整个包或单个技能；关闭包时全部技能不可调用，从下一轮对话开始生效。</p>
     {detail && <Modal title={detail.label} onClose={() => setDetailId(null)} wide>
-      <div className="modal-body"><div className="detail-meta"><span className="tag">{detail.category}</span><span className="muted">{detail.author} · v{detail.version}</span></div><p>{detail.description}</p>
-        {detail.skills.map(skill => <div className="skill-instructions" key={skill.name}><h3>/{skill.name}</h3>{skill.metadata && <div className="skill-metadata"><p>状态：{skill.metadata.status} · 作用域：{skill.metadata.scope}</p>
+      <div className="modal-body"><div className="detail-meta"><span className="tag">{detail.category}</span><span className="muted">v{detail.version}</span></div><p>{detail.description}</p>
+        {detail.skills.map(skill => <div className="skill-instructions" key={skill.name}><h3>/{skill.name}</h3><p>{skill.description}</p>
+          <button className={`toggle ${skill.enabled ? 'on' : ''}`} role="switch" aria-checked={skill.enabled} aria-label={`启用技能 ${skill.name}`} disabled={!!working || !detail.enabled} onClick={() => toggleEntry(skill.name, skill.enabled)}><span /></button>
+          {skill.metadata && <div className="skill-metadata"><p>所有者：{skill.metadata.owner} · 状态：{skill.metadata.status} · 作用域：{skill.metadata.scope}</p>
           <p>必需工具：{skill.metadata.required_tools.join('、') || '无'}；可选工具：{skill.metadata.optional_tools.join('、') || '无'}（缺少金融MCP时可使用公开网页）</p>
           <p>操作声明：{skill.metadata.permissions.join('、')}；模型能力：{skill.metadata.compatible_models.join('、')}</p>
           {skill.metadata.deprecation && <p>废弃说明：{Object.values(skill.metadata.deprecation).join('；')}</p>}
-          <small title={skill.metadata.content_hash}>内容指纹：{skill.metadata.content_hash.slice(0, 16)}</small></div>}<Markdown text={skill.content.replace(/^---\n[\s\S]*?\n---\n/, '')} /></div>)}
+          <small title={skill.metadata.content_hash}>内容指纹：{skill.metadata.content_hash ? skill.metadata.content_hash.slice(0, 16) : '待验证'}</small></div>}
+          {entries[`${detail.id}/${skill.name}`] && skill.enabled ? <Markdown text={entries[`${detail.id}/${skill.name}`].replace(/^---\n[\s\S]*?\n---\n/, '')} /> : <button className="text-button" disabled={!!working || !skill.enabled || ['draft', 'retired'].includes(skill.metadata.status)} onClick={() => loadEntry(detail.id, skill.name)}>查看技能流程</button>}
+        </div>)}
         {detail.example && <div className="example"><span>示例调用</span><code>{detail.example}</code></div>}
       </div><footer className="modal-footer"><span className="toggle-label">{switchButton(detail)}{detail.enabled ? '已启用' : '未启用'}</span>
         {detail.example && <button className="button primary" disabled={!detail.enabled} onClick={() => { onTry(detail.example); setDetailId(null); }}>在对话中试用<ArrowUpRight size={16} /></button>}

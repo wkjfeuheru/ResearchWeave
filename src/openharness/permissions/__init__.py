@@ -11,7 +11,7 @@ if TYPE_CHECKING:  # pragma: no cover
 __all__ = ["PermissionChecker", "PermissionDecision", "PermissionMode"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     if name in {"PermissionChecker", "PermissionDecision"}:
         from openharness.permissions.checker import PermissionChecker, PermissionDecision
 

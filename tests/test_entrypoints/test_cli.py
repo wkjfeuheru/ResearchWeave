@@ -72,7 +72,9 @@ def test_select_from_menu_uses_questionary_when_tty(monkeypatch):
             "value": value,
             "checked": checked,
         },
-        select=lambda title, choices, default=None: answers.append((title, choices, default)) or _Prompt(),
+        select=lambda title, choices, default=None: (
+            answers.append((title, choices, default)) or _Prompt()
+        ),
     )
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -103,8 +105,12 @@ def test_setup_flow_existing_api_key_profile_can_update_secret(tmp_path: Path, m
     manager.store_profile_credential("openai-compatible", "api_key", "old-key")
 
     selections = iter(["openai-compatible", "openai-compatible"])
-    monkeypatch.setattr("openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr("openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr(
+        "openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections)
+    )
+    monkeypatch.setattr(
+        "openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections)
+    )
     monkeypatch.setattr("openharness.cli._confirm_prompt", lambda *args, **kwargs: True)
     monkeypatch.setattr("openharness.auth.flows.ApiKeyFlow.run", lambda self: "new-key")
     monkeypatch.setattr("openharness.cli._prompt_model_for_profile", lambda profile: "gpt-4.1")
@@ -131,8 +137,12 @@ def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path,
         ]
     )
 
-    monkeypatch.setattr("openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections))
-    monkeypatch.setattr("openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr(
+        "openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections)
+    )
+    monkeypatch.setattr(
+        "openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections)
+    )
     monkeypatch.setattr("openharness.cli._text_prompt", lambda *args, **kwargs: next(prompts))
     monkeypatch.setattr("openharness.auth.flows.ApiKeyFlow.run", lambda self: "sk-kimi-test")
 
@@ -212,7 +222,13 @@ def test_bare_cli_shows_web_instructions_without_starting_model():
 
 
 def test_terminal_coding_entrypoints_are_removed():
-    for arguments in (["--print", "research"], ["--task-worker"], ["--continue"], ["--dry-run"], ["autopilot", "list"]):
+    for arguments in (
+        ["--print", "research"],
+        ["--task-worker"],
+        ["--continue"],
+        ["--dry-run"],
+        ["autopilot", "list"],
+    ):
         result = CliRunner().invoke(app, arguments)
         assert result.exit_code == 2
 
@@ -220,20 +236,23 @@ def test_terminal_coding_entrypoints_are_removed():
 def test_tavily_credentials_without_model_profile(tmp_path, monkeypatch):
     from openharness.auth import storage
     from openharness.utils.tavily_search import resolve_tavily_key
-    monkeypatch.setenv('OPENHARNESS_CONFIG_DIR', str(tmp_path))
-    monkeypatch.delenv('OPENHARNESS_TAVILY_API_KEY', raising=False)
-    monkeypatch.delenv('TAVILY_API_KEY', raising=False)
-    monkeypatch.setattr(storage, '_keyring_available', lambda: False)
-    monkeypatch.setattr('openharness.auth.flows.ApiKeyFlow.run', lambda self: 'test-tavily-credential')
+
+    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("OPENHARNESS_TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setattr(storage, "_keyring_available", lambda: False)
+    monkeypatch.setattr(
+        "openharness.auth.flows.ApiKeyFlow.run", lambda self: "test-tavily-credential"
+    )
     before = load_settings().model_dump()
     runner = CliRunner()
-    result = runner.invoke(app, ['auth', 'login', 'tavily'])
-    assert result.exit_code == 0 and 'saved' in result.output
-    assert 'test-tavily-credential' not in result.output
-    assert resolve_tavily_key() == 'test-tavily-credential'
+    result = runner.invoke(app, ["auth", "login", "tavily"])
+    assert result.exit_code == 0 and "saved" in result.output
+    assert "test-tavily-credential" not in result.output
+    assert resolve_tavily_key() == "test-tavily-credential"
     assert load_settings().model_dump() == before
-    result = runner.invoke(app, ['auth', 'status'])
-    assert result.exit_code == 0 and 'Tavily — configured' in result.output
-    assert 'test-tavily-credential' not in result.output
-    result = runner.invoke(app, ['auth', 'logout', 'tavily'])
+    result = runner.invoke(app, ["auth", "status"])
+    assert result.exit_code == 0 and "Tavily — configured" in result.output
+    assert "test-tavily-credential" not in result.output
+    result = runner.invoke(app, ["auth", "logout", "tavily"])
     assert result.exit_code == 0 and not resolve_tavily_key()

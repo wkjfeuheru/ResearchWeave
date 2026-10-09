@@ -1,15 +1,33 @@
 """Four independent metric dimensions; unknowns never become zero-cost successes."""
 
+from __future__ import annotations
+
+from typing import Literal, Any
+from typing_extensions import TypedDict, Unpack
+from openharness.evaluation.models import Requirement, EvalCase, RunArtifact, Observation
+from openharness.evaluation.judge import RequirementReview, JudgeResult
 import re
 import shlex
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-
 from openharness.evaluation.judge import citation_map, evaluated_text
 from openharness.evaluation.models import MetricResult
 
 
-def metric(name, value, *, numerator=None, denominator=None, source="rule", explanation=""):
+class MetricOptions(TypedDict, total=False):
+    source: Literal["rule", "judge", "combined", "measurement"]
+    explanation: str
+
+
+def metric(
+    name: str,
+    value: float | None,
+    *,
+    numerator: float | None = None,
+    denominator: float | None = None,
+    source: Literal["rule", "judge", "combined", "measurement"] = "rule",
+    explanation: str = "",
+) -> MetricResult:
     return MetricResult(
         name=name,
         value=value,
@@ -21,18 +39,18 @@ def metric(name, value, *, numerator=None, denominator=None, source="rule", expl
     )
 
 
-def ratio(name, passed, total, **kwargs):
+def ratio(name: str, passed: float, total: float, **kwargs: Unpack[MetricOptions]) -> MetricResult:
     return metric(
         name, passed / total if total else None, numerator=passed, denominator=total, **kwargs
     )
 
 
-def numeric_match(requirement, review):
+def numeric_match(requirement: Requirement, review: RequirementReview | None) -> bool:
     if review is None or review.observed_value is None or not review.quote:
         return False
     try:
         actual = Decimal(review.observed_value.replace(",", ""))
-        expected = Decimal(requirement.value)
+        expected = Decimal(requirement.value or "NaN")
         quoted_numbers = [
             Decimal(v.replace(",", ""))
             for v in re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?(?:[eE][-+]?\d+)?", review.quote)
@@ -50,7 +68,7 @@ def numeric_match(requirement, review):
             "亿元人民币": "亿元",
         }
 
-        def canonical(value, key):
+        def canonical(value: str, key: str) -> str:
             value = aliases.get(value, value)
             if key == "period":
                 value = re.sub(r"^(?:FY)?(\d{4})(?:年(?:度)?|A)?$", r"\1", value)
@@ -68,7 +86,7 @@ def numeric_match(requirement, review):
         return False
 
 
-def path_checks(case, artifact):
+def path_checks(case: EvalCase, artifact: RunArtifact) -> dict[str, list[bool]]:
     tools = [o for o in artifact.observations if o.kind == "tool"]
     successful = [o for o in tools if o.status == "ok"]
     names = {o.name for o in successful}
@@ -80,12 +98,12 @@ def path_checks(case, artifact):
         for skill in case.path.skills
     ]
 
-    def executed_script(observation, script):
+    def executed_script(observation: Observation, script: str) -> bool:
         if observation.name != "bash":
             return False
         recorded = observation.metadata.get("executed_script")
         if recorded:
-            return recorded.rsplit("/", 1)[-1] == script
+            return str(recorded).rsplit("/", 1)[-1] == script
         try:
             parts = shlex.split((observation.input or {}).get("command", ""))
             # Script must be an executed Python argument, not mentioned in echo/print.
@@ -173,7 +191,9 @@ def path_checks(case, artifact):
     # Citing retracted/superseded or review-required evidence always invalidates the path.
     replaced = {e.get("supersedes") for e in evidence.values() if e.get("supersedes")}
     answers = list(artifact.research_state.get("answers", {}).values())
-    latest = next((a for a in reversed(answers) if a.get("rendered") == artifact.answer), {})
+    latest: dict[str, Any] = next(
+        (a for a in reversed(answers) if a.get("rendered") == artifact.answer), {}
+    )
     for item in latest.get("citations", {}).values():
         e = evidence.get(item["evidence"]["id"], item["evidence"])
         ordering.append(
@@ -189,7 +209,7 @@ def path_checks(case, artifact):
     }
 
 
-def efficiency(artifact):
+def efficiency(artifact: RunArtifact) -> list[MetricResult]:
     generations = [o for o in artifact.observations if o.kind == "generation"]
     reported = [o for o in generations if o.usage and o.usage.get("reported")]
     all_reported = len(reported) == len(generations) and bool(generations)
@@ -202,7 +222,9 @@ def efficiency(artifact):
         "cache_read_input_tokens",
         "cache_creation_input_tokens",
     ):
-        known = [o.usage[name] for o in reported if o.usage.get(name) is not None]
+        known = [
+            o.usage[name] for o in reported if o.usage is not None and o.usage.get(name) is not None
+        ]
         value = sum(known) if all_reported and len(known) == len(generations) else None
         scores.append(metric(name, value, source="measurement"))
         if known and value is None:
@@ -218,7 +240,11 @@ def efficiency(artifact):
         [
             metric(
                 "total_tokens",
-                sum(o.usage["input_tokens"] + o.usage["output_tokens"] for o in reported)
+                sum(
+                    o.usage["input_tokens"] + o.usage["output_tokens"]
+                    for o in reported
+                    if o.usage is not None
+                )
                 if all_reported
                 else None,
                 source="measurement",
@@ -248,14 +274,14 @@ def efficiency(artifact):
     )
     by_id = {o.id: o for o in artifact.observations}
 
-    def role(observation):
-        current = observation
+    def role(observation: Observation) -> str:
+        current: Observation | None = observation
         while current:
             if current.name == "compaction":
                 return "compaction"
             if current.name == "investigate_conflict" or current.metadata.get("investigation"):
                 return "investigation"
-            current = by_id.get(current.parent_id)
+            current = by_id.get(current.parent_id or "")
         return "main"
 
     # main decision rounds differ from all model calls including investigation/compaction.
@@ -272,7 +298,11 @@ def efficiency(artifact):
         scores.append(
             metric(
                 name + "_total_tokens",
-                sum(o.usage["input_tokens"] + o.usage["output_tokens"] for o in group)
+                sum(
+                    o.usage["input_tokens"] + o.usage["output_tokens"]
+                    for o in group
+                    if o.usage is not None
+                )
                 if complete
                 else None,
                 source="measurement",
@@ -285,7 +315,7 @@ def efficiency(artifact):
             for o in artifact.observations
             if o.kind == kind
         )
-        active, end = 0, float("-inf")
+        active, end = 0.0, float("-inf")
         for begin, duration in intervals:
             stop = begin + duration
             active += max(0, stop - max(end, begin))
@@ -324,7 +354,11 @@ def efficiency(artifact):
             source="measurement",
         )
     )
-    cached = [o.usage for o in reported if o.usage.get("cache_read_input_tokens") is not None]
+    cached = [
+        o.usage
+        for o in reported
+        if o.usage is not None and o.usage.get("cache_read_input_tokens") is not None
+    ]
     scores.append(
         ratio(
             "cache_hit_rate",
@@ -336,7 +370,9 @@ def efficiency(artifact):
     return scores
 
 
-def score_case(case, artifact, judge=None):
+def score_case(
+    case: EvalCase, artifact: RunArtifact, judge: JudgeResult | None = None
+) -> list[MetricResult]:
     scores = efficiency(artifact)
     checks = path_checks(case, artifact)
     path_passed = []
@@ -386,7 +422,7 @@ def score_case(case, artifact, judge=None):
                 (review.score >= 3 if review else None) if valid else (None if unknown else False)
             )
         elif required.check == "numeric":
-            passed = review.score >= 3 and numeric_match(required, review) if judge else None
+            passed = review.score >= 3 and numeric_match(required, review) if review else None
         else:
             passed = review.score >= 3 if review else None
         if required.required:

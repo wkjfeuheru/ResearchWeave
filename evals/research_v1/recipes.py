@@ -1,6 +1,25 @@
 """Authored scenarios and source annotations for reproducible corpus construction."""
 
-SOURCES = {
+from typing import Literal
+from typing_extensions import TypedDict
+from openharness.evaluation.models import Category
+
+
+class SourceRecipe(TypedDict):
+    name: str
+    code: str
+    year: int
+    split: Literal["dev", "holdout"]
+    date: str
+    page: int
+    url: str
+    revenue: str
+    profit: str
+    cash: str
+    prior_revenue: str
+
+
+SOURCES: dict[str, SourceRecipe] = {
     "gree": dict(
         name="格力电器",
         code="000651",
@@ -81,7 +100,7 @@ SOURCES = {
     ),
 }
 
-BROKERS = {
+BROKERS: dict[str, tuple[str, str, str, Literal["dev", "holdout"]]] = {
     "catl-broker-a": (
         "宁德时代2024年报点评（民生证券）",
         "https://pdf.dfcfw.com/pdf/H3_AP202503161644424736_1.pdf",
@@ -108,15 +127,19 @@ BROKERS = {
     ),
 }
 
-SKILLS = {
+SKILLS: dict[Category, tuple[str, str]] = {
     "financial": ("financial-statement-analysis", "analyze_statements.py"),
     "events": ("company-event-monitor", "normalize_events.py"),
     "digest": ("research-report-digest", "digest_reports.py"),
-    "deep": ("deep-investment-report", "forecast.py"),
+    "deep": ("deep-investment-report", "assemble_report.py"),
 }
 
+# Forecast is invoked independently by report workflows. Keep category names and
+# audited gold values; the calculation's owning Skill changes, not its semantics.
+FORECAST_SKILL = ("earnings-forecast", "forecast.py")
+
 # Sixteen different problem structures per category; variations change inputs and goals.
-SYNTHETIC = {
+SYNTHETIC: dict[Category, list[tuple[str, str, str | None]]] = {
     "financial": [
         ("毛利率与净利率", "计算毛利率、净利率，百分数保留两位", "gross_margin"),
         ("资产负债勾稽", "核对资产=负债+权益及容差", "balance_residual"),
@@ -209,7 +232,7 @@ SYNTHETIC = {
     ],
 }
 
-REAL = {
+REAL: dict[Category, list[str]] = {
     "financial": [
         "营业收入换算亿元，保留四位小数",
         "读取归母净利润，人民币元口径",

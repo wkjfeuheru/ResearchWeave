@@ -16,7 +16,9 @@ class McpStdioServerConfig(BaseModel):
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] | None = None
     cwd: str | None = None
-    request_timeout: float = Field(default=60.0, gt=0, description="Maximum seconds per tool call or resource read")
+    request_timeout: float = Field(
+        default=60.0, gt=0, description="Maximum seconds per tool call or resource read"
+    )
 
 
 class McpHttpServerConfig(BaseModel):
@@ -25,7 +27,9 @@ class McpHttpServerConfig(BaseModel):
     type: Literal["http"] = "http"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
-    request_timeout: float = Field(default=60.0, gt=0, description="Maximum seconds per tool call or resource read")
+    request_timeout: float = Field(
+        default=60.0, gt=0, description="Maximum seconds per tool call or resource read"
+    )
 
 
 class McpWebSocketServerConfig(BaseModel):
@@ -34,7 +38,9 @@ class McpWebSocketServerConfig(BaseModel):
     type: Literal["ws"] = "ws"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
-    request_timeout: float = Field(default=60.0, gt=0, description="Maximum seconds per tool call or resource read")
+    request_timeout: float = Field(
+        default=60.0, gt=0, description="Maximum seconds per tool call or resource read"
+    )
 
 
 McpServerConfig = McpStdioServerConfig | McpHttpServerConfig | McpWebSocketServerConfig

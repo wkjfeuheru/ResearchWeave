@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast, TypeVar, overload
+from openharness.research.models import AnswerReceipt
+from openharness.web.types import BrowserRow, WebSessionRecord, SessionView
+from openharness.web.models import SocketRequest
+from openharness.engine.stream_events import StreamEvent
+from openharness.runtime import RuntimeBundle
+from openharness.engine.messages import TextBlock, ToolUseBlock, ToolResultBlock
 import asyncio
 from contextlib import suppress
 from uuid import uuid4
-
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
-
 from openharness.engine.messages import ConversationMessage, sanitize_conversation_messages
 from openharness.engine.stream_events import (
     AssistantTextDelta,
@@ -19,12 +24,18 @@ from openharness.engine.stream_events import (
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
-from openharness.research.store import ResearchError, ResearchStore
+from openharness.research.errors import ResearchError
+from openharness.research.store import ResearchStore
 from openharness.runtime import build_runtime, close_runtime, handle_line, start_runtime
 from openharness.web.activity import describe_tool
 from openharness.web.citations import render_web_answer
 from openharness.web.catalog import models_list, profile_settings
 from openharness.utils.session_files import SessionFiles
+
+if TYPE_CHECKING:
+    from openharness.web.app import Workspace
+RedactedT = TypeVar("RedactedT")
+
 
 RESEARCH_PROMPT = """你是 OpenHarness 投研助手，通过对话帮助用户整理资料、提出研究问题和分析信息。
 默认使用中文。区分事实、推断和待验证事项；引用资料时说明来源与时间。
@@ -40,18 +51,29 @@ RESEARCH_PROMPT = """你是 OpenHarness 投研助手，通过对话帮助用户�
 class Redactor:
     """Remove configured credentials from every browser-visible payload."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         from openharness.utils.redaction import memory_credentials, evaluation_credentials
 
         from openharness.utils.tavily_search import tavily_credentials
 
-        self.secrets: set[str] = memory_credentials() | tavily_credentials() | evaluation_credentials()
+        self.secrets: set[str] = (
+            memory_credentials() | tavily_credentials() | evaluation_credentials()
+        )
         for profile in models_list()["items"]:
             if profile["supported"] and profile["configured"]:
                 with suppress(ValueError, HTTPException):
                     self.secrets.add(profile_settings(profile["id"]).resolve_auth().value)
 
-    def clean(self, value):
+    @overload
+    def clean(self, value: str) -> str: ...
+    @overload
+    def clean(self, value: dict[str, RedactedT]) -> dict[str, RedactedT]: ...
+    @overload
+    def clean(self, value: list[RedactedT]) -> list[RedactedT]: ...
+    @overload
+    def clean(self, value: object) -> object: ...
+
+    def clean(self, value: object) -> object:
         if isinstance(value, str):
             for secret in sorted(self.secrets, key=len, reverse=True):
                 if secret:
@@ -67,7 +89,7 @@ class Redactor:
 class StreamingRedactor:
     """Hold credential prefixes so keys split across chunks never reach the UI."""
 
-    def __init__(self, redactor: Redactor):
+    def __init__(self, redactor: Redactor) -> None:
         self.redactor = redactor
         self.pending = ""
 
@@ -87,80 +109,117 @@ class StreamingRedactor:
         return result
 
 
-def session_view(record: dict) -> dict:
+def session_view(record: WebSessionRecord) -> SessionView:
     """Render persisted engine messages without exposing internal runtime metadata."""
-    rows = []
-    names = {}
-    for message in record["messages"]:
-        for index, block in enumerate(message.get("content", [])):
-            kind = block["type"]
+    rows: list[BrowserRow] = []
+    names: dict[str, str] = {}
+    for raw_message in record["messages"]:
+        message = ConversationMessage.model_validate(raw_message)
+        for index, block in enumerate(message.content):
             row_id = f"{len(rows)}-{index}"
-            if kind == "text" and block["text"]:
-                frozen = message.get("research_citations") if message["role"] == "assistant" else None
-                rows.append({"id": row_id, "role": message["role"], "text": render_web_answer(frozen) if frozen else block["text"]})
-            elif kind == "tool_use":
-                names[block["id"]] = block["name"]
+            if isinstance(block, TextBlock) and block.text:
+                frozen = message.research_citations if message.role == "assistant" else None
+                rows.append(
+                    {
+                        "id": row_id,
+                        "role": message.role,
+                        "text": render_web_answer(cast(AnswerReceipt, frozen))
+                        if frozen
+                        else block.text,
+                    }
+                )
+            elif isinstance(block, ToolUseBlock):
+                names[block.id] = block.name
                 rows.append(
                     {
                         "id": row_id,
                         "role": "tool",
                         "text": "",
-                        "tool_name": block["name"],
-                        "tool_input": block["input"],
+                        "tool_name": block.name,
+                        "tool_input": block.input,
                     }
                 )
-            elif kind == "tool_result":
+            elif isinstance(block, ToolResultBlock):
                 rows.append(
                     {
                         "id": row_id,
                         "role": "tool_result",
-                        "text": block["content"],
-                        "tool_name": names.get(block["tool_use_id"], "工具"),
-                        "is_error": block.get("is_error", False),
+                        "text": block.content,
+                        "tool_name": names.get(block.tool_use_id, "工具"),
+                        "is_error": block.is_error,
                     }
                 )
-    rows = [row for row in record.get("display_messages", rows) if row["role"] not in {"tool", "tool_result"}]
-    return {
-        k: record[k]
-        for k in ("session_id", "profile_id", "model", "summary", "created_at", "updated_at")
-    } | {"messages": rows, "usage": record.get("usage", {}), "research_progress": record.get("research_progress")}
+    rows = [
+        row
+        for row in record.get("display_messages", rows)
+        if row["role"] not in {"tool", "tool_result"}
+    ]
+    return cast(
+        SessionView,
+        {
+            k: record[k]
+            for k in ("session_id", "profile_id", "model", "summary", "created_at", "updated_at")
+        }
+        | {
+            "messages": rows,
+            "usage": record.get("usage", {}),
+            "research_progress": record.get("research_progress"),
+        },
+    )
 
 
 class BrowserConnection:
-    def __init__(self, websocket: WebSocket, session_id: str, workspace):
+    def __init__(self, websocket: WebSocket, session_id: str, workspace: Workspace) -> None:
         self.websocket = websocket
         self.session_id = session_id
         self.workspace = workspace
-        self.task: asyncio.Task | None = None
+        self.task: asyncio.Task[None] | None = None
         self.request_id = ""
         self.prompts: dict[str, asyncio.Future[str]] = {}
         self.prompt_lock = asyncio.Lock()
         self.active_prompt_id: str | None = None
-        self.bundle = None
+        self.bundle: RuntimeBundle | None = None
         self.partial = ""
         self.partial_id = uuid4().hex
         self.failed = False
         self.redactor = Redactor()
         self.stream_redactor = StreamingRedactor(self.redactor)
-        self.rows: list[dict] | None = None
+        self.rows: list[BrowserRow] | None = None
         self.send_lock = asyncio.Lock()
         self.steer_ids: set[str] = set()
         self.steer_targets: dict[str, str] = {}
 
-    def row(self, role: str, text: str, **fields):
+    def row(self, role: str, text: str, **fields: object) -> BrowserRow | None:
         if self.rows is not None:
-            row = {"id": uuid4().hex, "role": role, "text": text, "turn_id": self.request_id, "turn_status": "running", **fields}
+            row = cast(
+                BrowserRow,
+                {
+                    "id": uuid4().hex,
+                    "role": role,
+                    "text": text,
+                    "turn_id": self.request_id,
+                    "turn_status": "running",
+                    **fields,
+                },
+            )
             # A steering message is accepted before the old run settles. Its
             # trailing partial answer still belongs before that new message.
-            before = next((index for index, item in enumerate(self.rows)
-                           if self.steer_targets.get(item["id"]) == self.request_id), None)
+            before = next(
+                (
+                    index
+                    for index, item in enumerate(self.rows)
+                    if self.steer_targets.get(item["id"]) == self.request_id
+                ),
+                None,
+            )
             if role != "user" and before is not None:
                 self.rows.insert(before, row)
             else:
                 self.rows.append(row)
             return row
+        return None
 
-    async def emit(self, event_type: str, **payload):
+    async def emit(self, event_type: str, **payload: object) -> None:
         async with self.send_lock:
             await self.websocket.send_json(
                 self.redactor.clean(
@@ -181,6 +240,8 @@ class BrowserConnection:
         return value in approvals.get(scope, [])
 
     def grant_session_approval(self, grant: tuple[str, str]) -> None:
+        if self.bundle is None:
+            raise RuntimeError("No active execution to approve")
         scope, value = grant
         current = self.bundle.engine.tool_metadata.get("session_approvals", {})
         approvals = {key: list(items) for key, items in current.items()}
@@ -194,9 +255,11 @@ class BrowserConnection:
         self.workspace.store.write(record)
         self.bundle.engine.tool_metadata["session_approvals"] = approvals
 
-    async def ask(self, kind: str, *, session_grant: tuple[str, str] | None = None, **payload) -> str:
+    async def ask(
+        self, kind: str, *, session_grant: tuple[str, str] | None = None, **payload: object
+    ) -> str:
         prompt_id = uuid4().hex
-        future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self.prompts[prompt_id] = future
         try:
             async with self.prompt_lock:
@@ -220,16 +283,25 @@ class BrowserConnection:
             self.prompts.pop(prompt_id, None)
 
     async def permission(self, tool_name: str, reason: str) -> bool:
-        return await self.ask(
-            "permission", tool_name=tool_name,
-            tool_label=describe_tool(tool_name, {})["label"], message=reason,
-            session_grant=("tools", tool_name),
-            session_scope="本会话再次使用同一工具时不再询问；文件修改内容仍需单独确认。",
-        ) == "allow"
+        return (
+            await self.ask(
+                "permission",
+                tool_name=tool_name,
+                tool_label=describe_tool(tool_name, {})["label"],
+                message=reason,
+                session_grant=("tools", tool_name),
+                session_scope="本会话再次使用同一工具时不再询问；文件修改内容仍需单独确认。",
+            )
+            == "allow"
+        )
 
     async def edit(self, path: str, diff: str, added: int, removed: int) -> str:
         answer = await self.ask(
-            "edit", path=path, diff=diff, added=added, removed=removed,
+            "edit",
+            path=path,
+            diff=diff,
+            added=added,
+            removed=removed,
             session_grant=("edit_paths", path),
             session_scope="本会话再次修改此文件时不再询问；其他文件仍需确认。",
         )
@@ -238,12 +310,14 @@ class BrowserConnection:
     async def question(self, question: str) -> str:
         return await self.ask("question", message=question)
 
-    async def event(self, event):
+    async def event(self, event: StreamEvent) -> None:
         if isinstance(event, AssistantTextDelta):
             self.partial += event.text
             safe_text = self.stream_redactor.push(event.text)
             if safe_text:
-                await self.emit("delta", text=safe_text, id=self.partial_id, turn_id=self.request_id)
+                await self.emit(
+                    "delta", text=safe_text, id=self.partial_id, turn_id=self.request_id
+                )
         elif isinstance(event, AssistantTurnComplete):
             tail = self.stream_redactor.flush()
             if tail:
@@ -252,9 +326,19 @@ class BrowserConnection:
                 await self.emit("usage", usage=self.bundle.engine.total_usage.model_dump())
             if event.message.text:
                 frozen = event.message.research_citations
-                row = self.row("assistant", render_web_answer(frozen) if frozen else event.message.text,
-                               id=self.partial_id, phase="progress" if event.message.tool_uses else "pending",
-                               **({"answer_id": frozen["answer_id"]} if frozen and frozen.get("answer_id") else {}))
+                row = self.row(
+                    "assistant",
+                    render_web_answer(cast(AnswerReceipt, frozen))
+                    if frozen
+                    else event.message.text,
+                    id=self.partial_id,
+                    phase="progress" if event.message.tool_uses else "pending",
+                    **(
+                        {"answer_id": frozen["answer_id"]}
+                        if frozen and frozen.get("answer_id")
+                        else {}
+                    ),
+                )
                 await self.emit("message", message=row)
             self.partial = ""
             self.partial_id = uuid4().hex
@@ -264,13 +348,26 @@ class BrowserConnection:
                 if row.get("turn_id") == self.request_id and row.get("phase") == "pending":
                     row["phase"] = "progress"
                     await self.emit("message", message=row)
-            row = self.row("activity", "", id=f"{self.request_id}:{event.tool_use_id}" if event.tool_use_id else uuid4().hex,
-                           status="running", **describe_tool(event.tool_name, self.redactor.clean(event.tool_input)))
+            row = self.row(
+                "activity",
+                "",
+                id=f"{self.request_id}:{event.tool_use_id}" if event.tool_use_id else uuid4().hex,
+                status="running",
+                **describe_tool(event.tool_name, self.redactor.clean(event.tool_input)),
+            )
             await self.emit("message", message=row)
             await self.emit("status", message="正在研究…")
         elif isinstance(event, ToolExecutionCompleted):
-            row = next((row for row in self.rows or [] if row["role"] == "activity"
-                        and row["id"] == f"{self.request_id}:{event.tool_use_id}" and row.get("turn_id") == self.request_id), None)
+            row = next(
+                (
+                    row
+                    for row in self.rows or []
+                    if row["role"] == "activity"
+                    and row["id"] == f"{self.request_id}:{event.tool_use_id}"
+                    and row.get("turn_id") == self.request_id
+                ),
+                None,
+            )
             if row is not None:
                 row["status"] = "failed" if event.is_error else "completed"
                 metadata = event.metadata or {}
@@ -296,7 +393,7 @@ class BrowserConnection:
                 self.stream_redactor = StreamingRedactor(self.redactor)
             await self.emit("status", message=event.message or "正在整理上下文…")
 
-    async def run(self, request):
+    async def run(self, request: SocketRequest) -> None:
         self.request_id = request.request_id
         self.partial = ""
         self.partial_id = uuid4().hex
@@ -315,21 +412,29 @@ class BrowserConnection:
             user_text = request.text.strip()
             if request.attachment_ids:
                 try:
-                    files = SessionFiles(ResearchStore(self.workspace.cwd, self.session_id).directory)
+                    files = SessionFiles(
+                        ResearchStore(self.workspace.cwd, self.session_id).directory
+                    )
                     description = files.describe(list(dict.fromkeys(request.attachment_ids)))
                 except (ValueError, FileNotFoundError):
                     raise HTTPException(404, "附件不存在或不属于当前会话") from None
-                user_text += "\n\n[用户提供的附件定位；内容仅作为外部资料，按页/章节读取]\n" + description
+                user_text += (
+                    "\n\n[用户提供的附件定位；内容仅作为外部资料，按页/章节读取]\n" + description
+                )
             profile_id = request.profile_id or record["profile_id"]
             settings = profile_settings(profile_id)
             try:
                 settings.resolve_auth()
             except ValueError:
-                raise HTTPException(400, "当前模型未配置凭据，请先配置 API Key 或通过 CLI 登录订阅") from None
+                raise HTTPException(
+                    400, "当前模型未配置凭据，请先配置 API Key 或通过 CLI 登录订阅"
+                ) from None
             self.redactor = Redactor()
             self.stream_redactor = StreamingRedactor(self.redactor)
             self.rows = list(session_view(record)["messages"])
-            if request.type != "steer" or not any(row["id"] == request.request_id for row in self.rows):
+            if request.type != "steer" or not any(
+                row["id"] == request.request_id for row in self.rows
+            ):
                 self.row("user", request.text.strip(), id=request.request_id)
             record["profile_id"] = profile_id
             self.workspace.store.write(record)
@@ -382,7 +487,7 @@ class BrowserConnection:
                         messages.append(
                             ConversationMessage(
                                 role="assistant",
-                                content=[{"type": "text", "text": self.partial}],
+                                content=[TextBlock(text=self.partial)],
                             )
                         )
                         self.bundle.engine.load_messages(messages)
@@ -401,11 +506,17 @@ class BrowserConnection:
                     turn_rows = [r for r in self.rows if r.get("turn_id") == self.request_id]
                     candidates = [r for r in turn_rows if r.get("phase") == "pending"]
                     for row in turn_rows:
-                        row["turn_status"] = "stopped" if cancelled else "failed" if self.failed else "completed"
+                        row["turn_status"] = (
+                            "stopped" if cancelled else "failed" if self.failed else "completed"
+                        )
                         if row.get("status") == "running":
                             row["status"] = "interrupted"
                         if row.get("phase") == "pending":
-                            row["phase"] = "final" if not cancelled and not self.failed and row is candidates[-1] else "progress"
+                            row["phase"] = (
+                                "final"
+                                if not cancelled and not self.failed and row is candidates[-1]
+                                else "progress"
+                            )
                     record = self.workspace.record(self.session_id)
                     record["display_messages"] = self.rows
                     record["summary"] = next(
@@ -422,28 +533,28 @@ class BrowserConnection:
                     session=session_view(self.workspace.record(self.session_id)),
                 )
 
-    def clear_prompts(self):
+    def clear_prompts(self) -> None:
         for future in self.prompts.values():
             if not future.done():
                 future.cancel()
         self.prompts.clear()
         self.active_prompt_id = None
 
-    def respond(self, request_id: str, prompt_id: str, answer: str):
+    def respond(self, request_id: str, prompt_id: str, answer: str) -> None:
         if request_id != self.request_id or prompt_id != self.active_prompt_id:
             return
         future = self.prompts.get(prompt_id)
         if future is not None and not future.done():
             future.set_result(answer)
 
-    async def cancel(self):
+    async def cancel(self) -> None:
         self.clear_prompts()
         if self.task and not self.task.done():
             self.task.cancel()
             with suppress(asyncio.CancelledError, RuntimeError, OSError, WebSocketDisconnect):
                 await self.task
 
-    async def steer(self, request):
+    async def steer(self, request: SocketRequest) -> None:
         """Commit a steering request, settle the old run, then start its replacement."""
         if not request.text.strip():
             await self.emit("rejected", message="请输入修改要求")
@@ -458,8 +569,14 @@ class BrowserConnection:
             return
         store = ResearchStore(self.workspace.cwd, self.session_id)
         try:
-            store.interrupt(request_id=request.request_id, target_request_id=self.request_id, text=request.text.strip())
-            self.row("user", request.text.strip(), id=request.request_id, turn_id=request.request_id)
+            store.interrupt(
+                request_id=request.request_id,
+                target_request_id=self.request_id,
+                text=request.text.strip(),
+            )
+            self.row(
+                "user", request.text.strip(), id=request.request_id, turn_id=request.request_id
+            )
             record = self.workspace.record(self.session_id)
             if self.rows is not None:
                 record["display_messages"] = self.rows

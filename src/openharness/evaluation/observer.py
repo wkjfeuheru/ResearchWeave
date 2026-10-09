@@ -1,6 +1,9 @@
 """Task-local observations with safe optional export and provider-neutral usage."""
 
 from __future__ import annotations
+from typing import TypeVar, overload, Callable, Iterable, Iterator, Mapping, AsyncIterator, cast
+from openharness.api.client import SupportsStreamingMessages, ApiMessageRequest, ApiStreamEvent
+from openharness.evaluation.models import Budget
 
 import asyncio
 import hashlib
@@ -15,14 +18,16 @@ from openharness.api.client import ApiMessageCompleteEvent, ApiRetryEvent
 from openharness.evaluation.models import Observation
 from openharness.engine.messages import ToolResultBlock
 
-_active = ContextVar("evaluation_parent_observation", default=None)
+CleanT = TypeVar("CleanT")
+
+_active: ContextVar[str | None] = ContextVar("evaluation_parent_observation", default=None)
 
 
-def timestamp():
+def timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def fingerprint(value):
+def fingerprint(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()
     ).hexdigest()
@@ -33,23 +38,32 @@ class EvaluationBudgetExceeded(RuntimeError):
 
 
 class ObservationHandle:
-    def __init__(self, observation, clean):
+    def __init__(self, observation: Observation, clean: Callable[[object], object]) -> None:
         self.observation, self.clean = observation, clean
 
-    def update(self, **values):
+    def update(self, **values: object) -> None:
         for key, value in values.items():
             if hasattr(self.observation, key):
                 setattr(self.observation, key, self.clean(value))
 
 
 class RecordingObserver:
-    def __init__(self, *, secrets=(), budget=None):
-        self.observations = []
-        self.blobs = {}
+    def __init__(self, *, secrets: Iterable[str] = (), budget: Budget | None = None) -> None:
+        self.observations: list[Observation] = []
+        self.blobs: dict[str, object] = {}
         self.secrets = sorted({s for s in secrets if s}, key=len, reverse=True)
         self.budget = budget
+        self.trace_id: str | None = None
+        self.export_failed = False
 
-    def clean(self, value):
+    @overload
+    def clean(self, value: str) -> str: ...
+    @overload
+    def clean(self, value: dict[str, CleanT]) -> dict[str, CleanT]: ...
+    @overload
+    def clean(self, value: object) -> object: ...
+
+    def clean(self, value: object) -> object:
         if isinstance(value, str):
             for secret in self.secrets:
                 value = value.replace(secret, "[REDACTED]")
@@ -81,7 +95,14 @@ class RecordingObserver:
         return value
 
     @contextmanager
-    def span(self, name, *, kind="span", input=None, metadata=None):
+    def span(
+        self,
+        name: str,
+        *,
+        kind: str = "span",
+        input: object = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> Iterator[ObservationHandle]:
         if self.budget:
             if (
                 kind == "generation"
@@ -101,7 +122,7 @@ class RecordingObserver:
             kind=kind,
             started_at=timestamp(),
             input=self.clean(input),
-            metadata=self.clean(metadata or {}),
+            metadata=cast(dict[str, object], self.clean(metadata or {})),
         )
         self.observations.append(observation)
         token = _active.set(observation.id)
@@ -120,14 +141,14 @@ class RecordingObserver:
             observation.duration_ms = (time.monotonic() - start) * 1000
             _active.reset(token)
 
-    def total_tokens(self):
+    def total_tokens(self) -> int:
         return sum(
             (o.usage or {}).get("input_tokens", 0) + (o.usage or {}).get("output_tokens", 0)
             for o in self.observations
             if o.kind == "generation"
         )
 
-    def store_blob(self, value):
+    def store_blob(self, value: object) -> dict[str, str]:
         clean = self.clean(value)
         key = fingerprint(clean)
         self.blobs.setdefault(key, clean)
@@ -137,13 +158,13 @@ class RecordingObserver:
 class ObservedClient:
     """One wrapper observes main, compaction, hook and nested investigation calls."""
 
-    def __init__(self, client, observer):
+    def __init__(self, client: SupportsStreamingMessages, observer: RecordingObserver) -> None:
         self.client, self.observer = client, observer
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> object:
         return getattr(self.client, name)
 
-    async def stream_message(self, request):
+    async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         payload = {
             "model": request.model,
             "system": request.system_prompt,
@@ -211,7 +232,7 @@ class ObservedClient:
             ):
                 raise EvaluationBudgetExceeded("Token 消耗达到评测预算")
 
-    async def close(self):
+    async def close(self) -> None:
         close = getattr(self.client, "close", None)
         if close:
             await close()

@@ -32,10 +32,7 @@ async def main():
         for f in names
     )
     assert any("/_web/index.html" in f for f in names)
-    plugin_prefix = "openharness/plugins/bundled/skill-authoring/"
-    assert plugin_prefix + "plugin.json" in names
-    assert plugin_prefix + "skills/skill-creator/templates/skill/SKILL.md" in names
-    assert plugin_prefix + "skills/skill-creator/templates/skill/scripts/.gitkeep" in names
+    assert not any("skill-authoring/" in name or "skill-creator/" in name for name in names)
     research_plugins = {
         "financial-statement-analysis": ("financial", "analyze_statements"),
         "company-event-monitor": ("monitor", "normalize_events"),
@@ -43,7 +40,8 @@ async def main():
         "research-report-digest": ("digest", "digest_reports"),
     }
     for plugin, (_, script) in research_plugins.items():
-        base = f"openharness/plugins/bundled/{plugin}/"
+        package = "report-generation" if plugin == "deep-investment-report" else "analysis-modeling"
+        base = f"openharness/plugins/bundled/{package}/"
         assert base + "plugin.json" in names
         for resource in (
             "SKILL.md",
@@ -64,14 +62,18 @@ async def main():
         cwd = Path(tmp)
         os.environ["OPENHARNESS_CONFIG_DIR"] = str(cwd / "config")
         os.environ["OPENHARNESS_DATA_DIR"] = str(cwd / "data")
-        creator = load_skill_registry(cwd).get("skill-creator")
-        assert creator is not None and creator.source == "plugin"
-        assert (Path(creator.base_dir) / "templates" / "skill" / "SKILL.md").is_file()
+        assert load_skill_registry(cwd).get("skill-creator") is None
         fixtures = Path(__file__).parents[1] / "fixtures" / "research_skills"
         for plugin, (kind, script) in research_plugins.items():
             skill = load_skill_registry(cwd).get(plugin)
             assert skill is not None and skill.metadata.status == "active"
-            assert len(skill.metadata.content_hash) == 64
+            assert len(skill.metadata.content_hash) == 64, (
+                "wheel build index should supply a cold L0 hash"
+            )
+            from openharness.skills.metadata import content_hash
+
+            assert len(content_hash(Path(skill.path))) == 64
+            assert len(load_skill_registry(cwd).get(plugin).metadata.content_hash) == 64
             scripts = Path(skill.base_dir) / "scripts"
             computed = cwd / kind / "computed.json"
             commands = [
@@ -104,6 +106,45 @@ async def main():
                 assert executed.returncode == 0, executed.stderr
                 response = json.loads(executed.stdout)
             assert response["status"] == "complete" and len(response["artifacts"]) == 4
+        for name in (
+            "earnings-forecast",
+            "financial-commentary",
+            "industry-commentary",
+            "industry-deep-dive",
+        ):
+            skill = load_skill_registry(cwd).get(name)
+            assert skill and skill.content is None and len(skill.metadata.content_hash) == 64
+            base = Path(skill.base_dir)
+            script = "forecast" if name == "earnings-forecast" else "validate_report"
+            input_path = (
+                fixtures / "deep.json"
+                if name == "earnings-forecast"
+                else base / "templates/input.json"
+            )
+            output = cwd / name / "computed.json"
+            for command in (
+                [sys.executable, str(base / f"scripts/{script}.py"), "--schema"],
+                [
+                    sys.executable,
+                    str(base / f"scripts/{script}.py"),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output),
+                ],
+                [
+                    sys.executable,
+                    str(base / "scripts/export_report.py"),
+                    "--input",
+                    str(output),
+                    "--output-dir",
+                    str(cwd / name),
+                ],
+            ):
+                executed = subprocess.run(
+                    command, cwd=cwd, capture_output=True, text=True, timeout=30
+                )
+                assert executed.returncode == 0, executed.stderr
         parsed = subprocess.run(
             [
                 sys.executable,
@@ -147,3 +188,74 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+def test_built_wheel_includes_both_packages_and_runs_installed_smoke(tmp_path):
+    """Build and execute from an isolated installation, rather than an editable checkout."""
+    import zipfile
+
+    root = Path(__file__).resolve().parents[2]
+    built = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path / "dist")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert built.returncode == 0, built.stderr
+    wheel = next((tmp_path / "dist").glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+    assert not any("skill-authoring/" in name or "skill-creator/" in name for name in names)
+    for package, skills in {
+        "analysis-modeling": [
+            "financial-statement-analysis",
+            "company-event-monitor",
+            "research-report-digest",
+            "earnings-forecast",
+        ],
+        "report-generation": [
+            "deep-investment-report",
+            "financial-commentary",
+            "industry-commentary",
+            "industry-deep-dive",
+        ],
+    }.items():
+        base = f"openharness/plugins/bundled/{package}/"
+        assert base + "plugin.json" in names
+        for skill in skills:
+            assert base + f"skills/{skill}/SKILL.md" in names
+            assert base + f"skills/{skill}/templates/input.schema.json" in names
+            assert base + f"skills/{skill}/templates/report.md" in names
+    env_dir = tmp_path / "installed"
+    created = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(env_dir)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert created.returncode == 0, created.stderr
+    interpreter = env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    installed = subprocess.run(
+        ["uv", "pip", "install", "--python", str(interpreter), f"{wheel}[web]"],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert installed.returncode == 0, installed.stderr
+    env = {
+        **os.environ,
+        "OPENHARNESS_CONFIG_DIR": str(tmp_path / "config"),
+        "OPENHARNESS_DATA_DIR": str(tmp_path / "data"),
+    }
+    env.pop("PYTHONPATH", None)
+    executed = subprocess.run(
+        [str(interpreter), str(Path(__file__).resolve())],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert executed.returncode == 0, executed.stderr
+    assert "PASS:" in executed.stdout

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Annotated, Literal
 from uuid import uuid4
 
+from typing_extensions import TypedDict
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -34,7 +35,20 @@ class TaskContext(Record):
     created_at: str = Field(default_factory=now)
 
 
-TaskStatus = Literal["pending", "in_progress", "completed", "blocked", "cancelled"]
+TaskStatus = Literal[
+    "pending", "ready", "in_progress", "blocked", "validating", "completed", "failed", "cancelled"
+]
+ProjectStatus = Literal[
+    "created",
+    "planning",
+    "running",
+    "replanning",
+    "suspended",
+    "validating",
+    "completed",
+    "failed",
+    "cancelled",
+]
 
 
 class ResearchTask(Record):
@@ -46,6 +60,20 @@ class ResearchTask(Record):
     started_at: str | None = None
     completed_at: str | None = None
     updated_at: str = Field(default_factory=now)
+    description: str = ""
+    dependencies: list[str] = Field(default_factory=list)
+    dependency_revisions: dict[str, int] = Field(default_factory=dict)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    criterion_results: dict[str, list[str]] = Field(default_factory=dict)
+    required_artifact_kinds: list[str] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    finding_ids: list[str] = Field(default_factory=list)
+    requires_evidence: bool = True
+    task_revision: int = Field(default=1, ge=1)
+    assigned_plan_revision: int = Field(default=1, ge=1)
+    failure_count: int = Field(default=0, ge=0)
+    lease_id: str | None = None
+    defects: list[str] = Field(default_factory=list)
 
 
 class ResearchPlan(Record):
@@ -57,13 +85,128 @@ class ResearchPlan(Record):
     supersedes: str | None = None
     archived: bool = False
     created_at: str = Field(default_factory=now)
+    project_id: str | None = None
+    objective_revision: int = Field(default=1, ge=1)
+    revision: int = Field(default=1, ge=1)
+    rationale: str = ""
+    assumptions: list[str] = Field(default_factory=list)
+
+
+class ResearchObjective(Record):
+    project_id: str
+    report_type: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+    requirements: list[str] = Field(min_length=1)
+    deliverables: list[str] = Field(min_length=1)
+    required_sections: list[str] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+
+
+class ResearchProject(Record):
+    id: str
+    # Host-owned checkpoint binding; never accepted in a model tool's input schema.
+    workspace_path: str | None = None
+    status: ProjectStatus = "created"
+    objective_revision: int = 1
+    plan_revision: int = 0
+    execution_epoch: int = 0
+    feedback: list[str] = Field(default_factory=list)
+    planning_calls: int = 0
+    planning_tokens: int = 0
+    max_planning_calls: int = Field(default=8, ge=1)
+    max_planning_tokens: int = Field(default=64000, ge=1)
+    last_error: str = ""
+    delivery_manifest: dict[str, object] = Field(default_factory=dict)
+
+
+class PlanProposal(Record):
+    objective_revision: int = Field(ge=1)
+    tasks: list[ResearchTask] = Field(min_length=1, max_length=30)
+    rationale: str = Field(min_length=1)
+    assumptions: list[str] = Field(default_factory=list)
+    clarification_questions: list[str] = Field(default_factory=list)
+
+
+class TaskRevision(Record):
+    task_id: str
+    expected_revision: int = Field(ge=1)
+    replacement: ResearchTask
+
+
+class PlanPatch(Record):
+    base_plan_revision: int = Field(ge=1)
+    objective_revision: int = Field(ge=1)
+    add_tasks: list[ResearchTask] = Field(default_factory=list, max_length=30)
+    revise_tasks: list[TaskRevision] = Field(default_factory=list)
+    cancel_task_ids: list[str] = Field(default_factory=list)
+    invalidate_artifact_ids: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+
+class ResearchArtifact(Record):
+    id: str = Field(default_factory=lambda: new_id("artifact"))
+    task_id: str
+    task_revision: int = Field(ge=1)
+    plan_revision: int = Field(ge=1)
+    objective_revision: int = Field(ge=1)
+    execution_id: str
+    kind: Literal["note", "dataset", "model", "chart", "report_draft"]
+    title: str = Field(min_length=1)
+    snapshot: str
+    content_hash: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    finding_ids: list[str] = Field(default_factory=list)
+    input_artifact_ids: list[str] = Field(default_factory=list)
+    unit: str = ""
+    currency: str = ""
+    period: str = ""
+    reproduction: str = ""
+    assumption_evidence_ids: list[str] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)
+    stale: bool = False
+    stale_reason: str = ""
+    file_id: str | None = None
+    created_at: str = Field(default_factory=now)
+
+
+class ResearchExecution(Record):
+    id: str
+    tool_use_id: str
+    tool_name: str
+    task_id: str
+    task_revision: int
+    plan_revision: int
+    objective_revision: int
+    epoch: int
+    lease_id: str
+    status: Literal["running", "committed", "failed", "cancelled", "rejected"] = "running"
+    source_ids: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class CheckResult(Record):
+    check_id: str
+    passed: bool
+    blocking: bool = True
+    message: str
+    affected_task_ids: list[str] = Field(default_factory=list)
+
+
+class CompletionResult(Record):
+    passed: bool
+    checks: list[CheckResult] = Field(default_factory=list)
+    missing_requirements: list[str] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+
+SourceKind = Literal["web", "search", "file", "mcp", "user", "tool", "calculation"]
 
 
 class SourceRecord(Record):
     id: str
     plan_id: str | None = None
     task_id: str | None = None
-    kind: Literal["web", "search", "file", "mcp", "user", "tool", "calculation"]
+    kind: SourceKind
     title: str
     locator: str
     origin_id: str
@@ -73,12 +216,15 @@ class SourceRecord(Record):
     snapshot: str
     fragment: bool = False
     is_error: bool = False
+    execution_id: str | None = None
+    task_revision: int | None = None
+    plan_revision: int | None = None
 
     @field_validator("collected_at")
     @classmethod
     def utc_collection_time(cls, value: str) -> str:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+        if parsed.tzinfo is None or (parsed.utcoffset() or timedelta(0)).total_seconds() != 0:
             raise ValueError("Source collection timestamp must be UTC")
         return value
 
@@ -175,9 +321,13 @@ class ArbitrationDecision(Record):
     remaining_gaps: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def complete_outcome(self):
-        if self.outcome == "prefer_side" and (self.preferred_side is None or not self.rejected_reasons):
-            raise ValueError("Preferring a side requires its index and reasons for rejecting alternatives")
+    def complete_outcome(self) -> ArbitrationDecision:
+        if self.outcome == "prefer_side" and (
+            self.preferred_side is None or not self.rejected_reasons
+        ):
+            raise ValueError(
+                "Preferring a side requires its index and reasons for rejecting alternatives"
+            )
         if self.outcome != "prefer_side" and self.preferred_side is not None:
             raise ValueError("Only prefer_side may select a preferred side")
         if self.outcome == "conditional" and not self.conditions:
@@ -196,7 +346,9 @@ class ConflictRecord(Record):
     core: bool = True
     sides: list[ConflictSide] = Field(min_length=2, max_length=10)
     additional_evidence_ids: list[str] = Field(default_factory=list)
-    status: Literal["open", "investigating", "awaiting_review", "resolved", "unresolved", "interrupted"] = "open"
+    status: Literal[
+        "open", "investigating", "awaiting_review", "resolved", "unresolved", "interrupted"
+    ] = "open"
     current_arbitration_id: str | None = None
     last_attempt_fingerprint: str = ""
     review_note: str = ""
@@ -210,16 +362,55 @@ class ArbitrationRecord(Record):
     input_fingerprint: str
     review_fingerprint: str = ""
     evidence_versions: list[str]
-    status: Literal["running", "completed", "timeout", "budget_exhausted", "interrupted", "failed", "stale"] = "running"
+    status: Literal[
+        "running", "completed", "timeout", "budget_exhausted", "interrupted", "failed", "stale"
+    ] = "running"
     report: ArbitrationDecision | None = None
     decision: ArbitrationDecision | None = None
     imported_ids: list[str] = Field(default_factory=list)
     replaced_conclusion_ids: list[str] = Field(default_factory=list)
     output_conclusion_ids: list[str] = Field(default_factory=list)
     note: str = ""
-    usage: dict = Field(default_factory=dict)
+    usage: dict[str, object] = Field(default_factory=dict)
     started_at: str = Field(default_factory=now)
     finished_at: str | None = None
+
+
+class OperationReceipt(TypedDict):
+    fingerprint: str
+    receipt: dict[str, object]
+
+
+class PendingSteer(TypedDict, total=False):
+    target_request_id: str
+    text: str
+    accepted_at: str
+    ready: bool
+
+
+class SourceDisplay(TypedDict):
+    kind: SourceKind
+    fragment: bool
+    title: str
+    locator: str
+    published_at: str | None
+    collected_at: str
+
+
+class CitationSnapshot(TypedDict):
+    number: int
+    evidence: dict[str, object]
+    source: SourceDisplay
+
+
+class AnswerReceipt(TypedDict):
+    answer_id: str
+    model_text: str
+    memory_revision: int
+    rendered: str
+    citations: dict[str, CitationSnapshot]
+    invalid: list[str]
+    created_at: str
 
 
 class ResearchMemory(Record):
@@ -236,10 +427,14 @@ class ResearchMemory(Record):
     conclusions: dict[str, Conclusion] = Field(default_factory=dict)
     conflicts: dict[str, ConflictRecord] = Field(default_factory=dict)
     arbitrations: dict[str, ArbitrationRecord] = Field(default_factory=dict)
-    history: list[dict] = Field(default_factory=list)
-    operations: dict[str, dict] = Field(default_factory=dict)
-    answers: dict[str, dict] = Field(default_factory=dict)
-    pending_steers: dict[str, dict] = Field(default_factory=dict)
+    history: list[dict[str, object]] = Field(default_factory=list)
+    operations: dict[str, OperationReceipt] = Field(default_factory=dict)
+    answers: dict[str, AnswerReceipt] = Field(default_factory=dict)
+    pending_steers: dict[str, PendingSteer] = Field(default_factory=dict)
+    project: ResearchProject | None = None
+    objectives: dict[int, ResearchObjective] = Field(default_factory=dict)
+    artifacts: dict[str, ResearchArtifact] = Field(default_factory=dict)
+    executions: dict[str, ResearchExecution] = Field(default_factory=dict)
 
 
 class ReadMemory(Record):
@@ -267,7 +462,9 @@ class SetContext(Mutation):
 class CreatePlan(Mutation):
     action: Literal["create_plan"]
     title: str = Field(min_length=1, max_length=120)
-    tasks: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(min_length=1, max_length=30)
+    tasks: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
+        min_length=1, max_length=30
+    )
     reused_evidence_ids: list[str] = Field(default_factory=list)
 
 
@@ -309,7 +506,7 @@ class AddReasoning(Mutation):
     verification: bool = False
 
     @model_validator(mode="after")
-    def has_inputs(self):
+    def has_inputs(self) -> AddReasoning:
         if not self.evidence_ids and not self.prior_step_ids:
             raise ValueError("A reasoning step needs evidence or a prior step")
         return self
@@ -358,7 +555,36 @@ class ReopenConflict(Mutation):
 
 
 ResearchOperation = Annotated[
-    ReadMemory | SetContext | CreatePlan | UpdateTask | AddEvidence | AddReasoning | VerifyEvidence
-    | AddConclusion | AddConflict | ResolveConflict | ReopenConflict,
+    ReadMemory
+    | SetContext
+    | CreatePlan
+    | UpdateTask
+    | AddEvidence
+    | AddReasoning
+    | VerifyEvidence
+    | AddConclusion
+    | AddConflict
+    | ResolveConflict
+    | ReopenConflict,
     Field(discriminator="action"),
 ]
+
+
+class ArtifactSubmission(Record):
+    task_id: str
+    task_revision: int = Field(ge=1)
+    plan_revision: int = Field(ge=1)
+    execution_id: str
+    kind: Literal["note", "dataset", "model", "chart", "report_draft"]
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=200000)
+    criteria: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    finding_ids: list[str] = Field(default_factory=list)
+    input_artifact_ids: list[str] = Field(default_factory=list)
+    unit: str = ""
+    currency: str = ""
+    period: str = ""
+    reproduction: str = ""
+    assumption_evidence_ids: list[str] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)

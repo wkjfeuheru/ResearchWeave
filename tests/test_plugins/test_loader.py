@@ -18,7 +18,9 @@ from openharness.skills import load_skill_registry
 @pytest.fixture(autouse=True)
 def isolate_user_and_project_plugins(tmp_path, monkeypatch):
     """These tests exercise user/project plugins; packaged plugins have separate coverage."""
-    monkeypatch.setattr("openharness.plugins.loader.BUNDLED_PLUGINS_DIR", tmp_path / "packaged-plugins")
+    monkeypatch.setattr(
+        "openharness.plugins.loader.BUNDLED_PLUGINS_DIR", tmp_path / "packaged-plugins"
+    )
 
 
 def _write_plugin(root: Path) -> None:
@@ -58,22 +60,12 @@ def _write_plugin(root: Path) -> None:
         encoding="utf-8",
     )
     (plugin_dir / "hooks.json").write_text(
-        json.dumps(
-            {
-                "session_start": [
-                    {"type": "command", "command": "printf start"}
-                ]
-            }
-        ),
+        json.dumps({"session_start": [{"type": "command", "command": "printf start"}]}),
         encoding="utf-8",
     )
     (plugin_dir / "mcp.json").write_text(
         json.dumps(
-            {
-                "mcpServers": {
-                    "demo": {"type": "stdio", "command": "python", "args": ["demo.py"]}
-                }
-            }
+            {"mcpServers": {"demo": {"type": "stdio", "command": "python", "args": ["demo.py"]}}}
         ),
         encoding="utf-8",
     )

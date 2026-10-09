@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover
     from openharness.hooks.events import HookEvent
     from openharness.hooks.executor import HookExecutionContext, HookExecutor
-    from openharness.hooks.loader import HookRegistry
+    from openharness.hooks.loader import HookRegistry, load_hook_registry as load_hook_registry
     from openharness.hooks.types import AggregatedHookResult, HookResult
 
 __all__ = [
@@ -21,7 +21,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     if name == "HookEvent":
         from openharness.hooks.events import HookEvent
 

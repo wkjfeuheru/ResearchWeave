@@ -88,7 +88,9 @@ def parse_synthetic_dns_cidrs(value: str | None = None) -> tuple[_IPNetwork, ...
         try:
             networks.append(ipaddress.ip_network(entry, strict=False))
         except ValueError as exc:
-            raise NetworkGuardError(f"invalid {_SYNTHETIC_DNS_CIDRS_SETTING} entry: {entry}") from exc
+            raise NetworkGuardError(
+                f"invalid {_SYNTHETIC_DNS_CIDRS_SETTING} entry: {entry}"
+            ) from exc
     return tuple(networks)
 
 
@@ -137,7 +139,7 @@ async def fetch_public_http_response(
     max_bytes: int | None = None,
     proxy: str | None = None,
     method: str = "GET",
-    json: dict | None = None,
+    json: dict[str, object] | None = None,
 ) -> httpx.Response:
     """Fetch one HTTP resource while validating every redirect hop."""
     if method not in {"GET", "POST"}:
@@ -174,13 +176,22 @@ async def fetch_public_http_response(
                 synthetic_cidrs=synthetic_cidrs,
             )
             if max_bytes is None:
-                response = (await client.get(current_url, params=current_params, headers=headers)
-                            if method == "GET" else
-                            await client.post(current_url, params=current_params, headers=headers, json=json))
+                response = (
+                    await client.get(current_url, params=current_params, headers=headers)
+                    if method == "GET"
+                    else await client.post(
+                        current_url, params=current_params, headers=headers, json=json
+                    )
+                )
             else:
                 # Stream decoded bytes so compressed/chunked responses cannot bypass the limit.
-                async with client.stream(method, current_url, params=current_params, headers=headers,
-                                         **({"json": json} if method == "POST" else {})) as streamed:
+                async with client.stream(
+                    method,
+                    current_url,
+                    params=current_params,
+                    headers=headers,
+                    json=json if method == "POST" else None,
+                ) as streamed:
                     chunks = bytearray()
                     async for chunk in streamed.aiter_bytes():
                         chunks.extend(chunk)
@@ -189,8 +200,12 @@ async def fetch_public_http_response(
                     decoded_headers = dict(streamed.headers)
                     decoded_headers.pop("content-encoding", None)
                     decoded_headers.pop("content-length", None)
-                    response = httpx.Response(streamed.status_code, headers=decoded_headers,
-                                              content=bytes(chunks), request=streamed.request)
+                    response = httpx.Response(
+                        streamed.status_code,
+                        headers=decoded_headers,
+                        content=bytes(chunks),
+                        request=streamed.request,
+                    )
             if not response.has_redirect_location:
                 return response
 
@@ -333,7 +348,9 @@ def _ensure_global_literal_ip(address: _IPAddress) -> None:
 
 
 def _ensure_not_local_hostname(hostname: str) -> None:
-    if hostname in _LOCAL_HOSTNAMES or any(hostname.endswith(suffix) for suffix in _LOCAL_HOST_SUFFIXES):
+    if hostname in _LOCAL_HOSTNAMES or any(
+        hostname.endswith(suffix) for suffix in _LOCAL_HOST_SUFFIXES
+    ):
         raise NetworkGuardError(f"local hostnames are not allowed: {hostname}")
     if "." not in hostname:
         raise NetworkGuardError(f"single-label hostnames are not allowed: {hostname}")
@@ -358,3 +375,24 @@ def _format_blocked_addresses(
             "web.resolution_mode=synthetic_dns and web.synthetic_dns_cidrs=<cidr>"
         )
     return message
+
+
+async def pinned_public_http_url(url: str) -> tuple[str, str]:
+    """Return a validated numeric destination plus original hostname for TLS SNI.
+
+    The caller must keep the original Host header and disable redirects/proxies.
+    Connecting to the returned IP avoids a second, unvalidated DNS resolution.
+    """
+    parsed = _validated_parsed_http_url(url)
+    hostname = _normalized_hostname(parsed.hostname)
+    if _parse_ip_literal(hostname) is None:
+        _ensure_not_local_hostname(hostname)
+    addresses = await _resolve_host_addresses(
+        hostname, parsed.port or _DEFAULT_PORTS[parsed.scheme]
+    )
+    if not addresses:
+        raise NetworkGuardError("Target host did not resolve")
+    for address in addresses:
+        _ensure_global_literal_ip(address)
+    address = sorted(addresses, key=str)[0]
+    return str(httpx.URL(url).copy_with(host=str(address))), hostname

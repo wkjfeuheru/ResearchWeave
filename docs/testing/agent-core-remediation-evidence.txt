@@ -1,0 +1,406 @@
+Agent core approved remediation evidence — 2026-10-09 Asia/Shanghai
+
+PASS means an executed command/automated assertion. No skipped check is counted as PASS.
+Backend preparation: Node 24.21.0, SRT 0.0.79, Docker server 26.1.3, bubblewrap and socat installed.
+Docker acceptance image: sha256:15e18b796a3f9b11e84b996eab4635f42666537a3aaecda046a848816e62812b
+Local image preparation completed from downloaded pinned wheels after online pip timed out. This is not proof of an online registry build.
+
+[Python 3.11 full regression]
+$ uv run pytest -q
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 19%]
+........................................................................ [ 26%]
+........................................................................ [ 32%]
+........................................................................ [ 39%]
+........................................................................ [ 45%]
+........................................................................ [ 52%]
+........................................................................ [ 58%]
+........................................................................ [ 65%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 84%]
+........................................................................ [ 91%]
+........................................................................ [ 97%]
+...........................                                              [100%]
+1107 passed in 211.95s (0:03:31)
+
+[Python 3.10 full regression]
+$ UV_PROJECT_ENVIRONMENT=/tmp/openharness-remediation-py310 uv run pytest -q
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 19%]
+........................................................................ [ 26%]
+........................................................................ [ 32%]
+........................................................................ [ 39%]
+........................................................................ [ 45%]
+........................................................................ [ 52%]
+........................................................................ [ 58%]
+........................................................................ [ 65%]
+........................................................................ [ 71%]
+........................................................................ [ 78%]
+........................................................................ [ 84%]
+........................................................................ [ 91%]
+........................................................................ [ 97%]
+...........................                                              [100%]
+1107 passed in 242.73s (0:04:02)
+
+[Strict Python 3.11: every production target]
+$ uv run python scripts/check_types.py
+Success: no issues found in 157 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 5 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 2 source files
+Success: no issues found in 2 source files
+Success: no issues found in 2 source files
+
+[Strict Python 3.10: every production target]
+$ UV_PROJECT_ENVIRONMENT=/tmp/openharness-remediation-py310 uv run python scripts/check_types.py --python-version 3.10
+Success: no issues found in 157 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 5 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 4 source files
+Success: no issues found in 2 source files
+Success: no issues found in 2 source files
+Success: no issues found in 2 source files
+
+[Real report backends and file exports]
+$ uv run pytest -q tests/test_research/test_report_sandbox.py
+..............                                                           [100%]
+14 passed in 21.99s
+
+[Real dispatch process crash]
+$ uv run pytest -q tests/test_research/test_dispatch_recovery.py
+......                                                                   [100%]
+6 passed in 8.46s
+
+[Existing real Docker E2E (missing dependencies fail)]
+$ OPENHARNESS_REQUIRE_SANDBOX=1 uv run pytest -q scripts/test_docker_sandbox_e2e.py
+...................                                                      [100%]
+19 passed in 101.30s (0:01:41)
+
+[Core statement and branch coverage]
+$ COVERAGE_FILE=/tmp/openharness-remediation-accepted.coverage uv run pytest -q tests/test_research tests/test_engine tests/test_sandbox tests/test_tools tests/test_hooks tests/test_entrypoints tests/test_web --cov=openharness.research --cov=openharness.engine.query --cov=openharness.engine.query_engine --cov=openharness.engine.subagents --cov=openharness.tools.research --cov=openharness.tools.dispatch_subagents_tool --cov=openharness.tools.base --cov=openharness.tools.research_memory_tool --cov=openharness.tools.bash_tool --cov=openharness.sandbox --cov-branch --cov-report=json:docs/testing/agent-core-remediation-coverage.json --cov-report=term
+........................................................................ [ 11%]
+........................................................................ [ 22%]
+........................................................................ [ 33%]
+........................................................................ [ 45%]
+........................................................................ [ 56%]
+........................................................................ [ 67%]
+........................................................................ [ 78%]
+........................................................................ [ 90%]
+................................................................         [100%]
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.11.17-final-0 _______________
+
+Name                                               Stmts   Miss Branch BrPart  Cover
+------------------------------------------------------------------------------------
+src/openharness/engine/query.py                      528     61    218     27    86%
+src/openharness/engine/query_engine.py               208     15     56      5    92%
+src/openharness/engine/subagents.py                   71      3     18      2    94%
+src/openharness/research/__init__.py                   3      0      0      0   100%
+src/openharness/research/completion.py               125      4     18      1    97%
+src/openharness/research/conflicts.py                276     14    142     23    91%
+src/openharness/research/dispatch_audit.py           126     22     44     11    81%
+src/openharness/research/errors.py                     1      0      0      0   100%
+src/openharness/research/models.py                   453      3     12      3    99%
+src/openharness/research/prompt.py                     2      0      0      0   100%
+src/openharness/research/repository.py               429     45    164     39    84%
+src/openharness/research/runtime.py                  220     17     80     15    89%
+src/openharness/research/source_specs.py               9      0      0      0   100%
+src/openharness/research/store.py                    716     78    404     74    86%
+src/openharness/research/tasks.py                    128     16     76     16    84%
+src/openharness/sandbox/__init__.py                    5      0      0      0   100%
+src/openharness/sandbox/adapter.py                    74      8     26      6    86%
+src/openharness/sandbox/docker_backend.py            122     17     34      5    85%
+src/openharness/sandbox/docker_image.py               44     22     12      1    45%
+src/openharness/sandbox/path_validator.py             18      2      2      0    90%
+src/openharness/sandbox/policy.py                     47      0      8      1    98%
+src/openharness/sandbox/session.py                    44      9     12      2    73%
+src/openharness/tools/base.py                        130      3     34      2    97%
+src/openharness/tools/bash_tool.py                   189     34     62     12    78%
+src/openharness/tools/dispatch_subagents_tool.py     263     32     84     16    84%
+src/openharness/tools/research/__init__.py             0      0      0      0   100%
+src/openharness/tools/research/planner.py             25      0      0      0   100%
+src/openharness/tools/research/planning.py            96     11     30      9    84%
+src/openharness/tools/research/project.py             83      4     22      3    91%
+src/openharness/tools/research/replanner.py           25      2      0      0    92%
+src/openharness/tools/research_memory_tool.py         63      5     20      5    88%
+------------------------------------------------------------------------------------
+TOTAL                                               4523    427   1578    278    87%
+Coverage JSON written to file docs/testing/agent-core-remediation-coverage.json
+640 passed in 469.06s (0:07:49)
+
+[Ruff]
+$ uv run ruff check src tests scripts evals hatch_build.py
+All checks passed!
+
+[Production format]
+$ uv run ruff format --check src evals scripts/check_types.py hatch_build.py
+236 files already formatted
+
+[Whitespace]
+$ git diff --check
+
+[Browser regression (cached browser)]
+$ OPENHARNESS_TEST_BROWSER=/home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome npm run test:e2e
+
+> openharness-research-web@0.1.0 test:e2e
+> playwright test
+
+[WebServer] INFO:     Started server process [37685]
+[WebServer] INFO:     Waiting for application startup.
+[WebServer] INFO:     Application startup complete.
+[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+
+Running 17 tests using 1 worker
+
+(node:37690) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 e2e/skills.spec.ts:3:1 › skill package metadata, selected entry loading and independent switches (4.4s)
+[WebServer] INFO:     127.0.0.1:60744 - "WebSocket /api/sessions/2d19bec43af9/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:60746 - "WebSocket /api/sessions/2d19bec43af9/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   2 e2e/workspace.spec.ts:3:1 › report project status and extended task states survive history refresh (1.7s)
+[WebServer] INFO:     127.0.0.1:60786 - "WebSocket /api/sessions/fdc59db61a25/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:60800 - "WebSocket /api/sessions/fdc59db61a25/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   3 e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: unresolved (1.7s)
+[WebServer] INFO:     127.0.0.1:60838 - "WebSocket /api/sessions/fc0dfcbeefa9/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:60846 - "WebSocket /api/sessions/fc0dfcbeefa9/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   4 e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: compatible (2.5s)
+[WebServer] INFO:     127.0.0.1:60888 - "WebSocket /api/sessions/98a5906b3b6d/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:60898 - "WebSocket /api/sessions/98a5906b3b6d/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   5 e2e/workspace.spec.ts:62:1 › long collapsed progress and website-only source rows survive refresh and copy (3.1s)
+[WebServer] INFO:     127.0.0.1:37550 - "WebSocket /api/sessions/4f45b9ae824a/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:37580 - "WebSocket /api/sessions/4f45b9ae824a/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:37584 - "WebSocket /api/sessions/ee5555385f5e/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   6 e2e/workspace.spec.ts:113:1 › session approvals skip repeated confirmations and remain isolated after refresh (10.4s)
+[WebServer] INFO:     127.0.0.1:34108 - "WebSocket /api/sessions/d33c2942b6a1/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:48248 - "WebSocket /api/sessions/d33c2942b6a1/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   7 e2e/workspace.spec.ts:169:1 › model configuration, skills, streaming, approvals, stop and recovery (17.6s)
+  ✓   8 e2e/workspace.spec.ts:259:1 › responsive navigation and empty skill search (1.3s)
+[WebServer] INFO:     127.0.0.1:49478 - "WebSocket /api/sessions/3a37a1653973/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:49532 - "WebSocket /api/sessions/3a37a1653973/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:49542 - "WebSocket /api/sessions/3a37a1653973/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:60818 - "WebSocket /api/sessions/3a37a1653973/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   9 e2e/workspace.spec.ts:272:1 › research progress, source footnotes and interrupt to replan (21.0s)
+[WebServer] INFO:     127.0.0.1:34846 - "WebSocket /api/sessions/7427609a1e81/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  10 e2e/workspace.spec.ts:335:1 › blocked research task stays expanded with its blocker (3.3s)
+[WebServer] INFO:     127.0.0.1:34924 - "WebSocket /api/sessions/ed57789c056d/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:37650 - "WebSocket /api/sessions/ed57789c056d/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  11 e2e/workspace.spec.ts:368:1 › two levels of process disclosure, final answer and refresh recovery (6.3s)
+[WebServer] INFO:     127.0.0.1:37706 - "WebSocket /api/sessions/1d51d2fbd9c7/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  12 e2e/workspace.spec.ts:401:1 › manual process disclosure survives completion and stopping preserves partial progress (6.2s)
+[WebServer] INFO:     127.0.0.1:37792 - "WebSocket /api/sessions/aa2e0bf6c23f/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:44164 - "WebSocket /api/sessions/aa2e0bf6c23f/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  13 e2e/workspace.spec.ts:421:1 › delete confirmation, failure retry, noncurrent and current session cleanup (8.5s)
+[WebServer] INFO:     127.0.0.1:44212 - "WebSocket /api/sessions/17c910ced2ae/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  14 e2e/workspace.spec.ts:462:1 › mobile deletion remains visible and returns to welcome (6.1s)
+[WebServer] INFO:     127.0.0.1:54246 - "WebSocket /api/sessions/090b6aebf41c/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:54260 - "WebSocket /api/sessions/090b6aebf41c/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  15 e2e/workspace.spec.ts:478:1 › disconnect marks pending activity interrupted and restores the saved process (4.1s)
+  ✓  16 e2e/workspace.spec.ts:515:1 › new stream content follows the bottom without interrupting reading above (5.2s)
+[WebServer] INFO:     127.0.0.1:49712 - "WebSocket /api/sessions/cad01ca73a0c/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:49758 - "WebSocket /api/sessions/cad01ca73a0c/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  17 e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation (7.1s)
+
+  17 passed (2.0m)
+
+[Authoring regression without corpus changes]
+$ uv run pytest -q tests/test_evaluation/test_authoring_contract.py tests/test_evaluation/test_dataset.py
+.....                                                                    [100%]
+5 passed in 1.80s
+
+[Bundled direct CLI regression]
+$ uv run pytest -q tests/test_skills/test_package_workflows.py
+...............                                                          [100%]
+15 passed in 6.73s
+
+[Failure before hardlink root fix — expected FAIL, not final acceptance]
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_________ test_report_rejects_preexisting_cross_project_hardlinks[srt] _________
+
+project = <openharness.research.runtime.ResearchAgentRuntime object at 0x7f27e3752790>
+tmp_path = PosixPath('/tmp/pytest-of-jason/pytest-48/test_report_rejects_preexistin0')
+backend = 'srt'
+
+    @pytest.mark.parametrize('backend', ['srt', 'docker'])
+    async def test_report_rejects_preexisting_cross_project_hardlinks(project, tmp_path, backend):
+        import os
+        root = project.resolve_workspace('P')
+        private = tmp_path / 'other-project-secret'
+        private.write_text('private')
+        os.link(private, root / 'artifacts/hardlink')
+        settings = Settings()
+        settings.sandbox.backend = backend
+        result = await BashTool().execute(
+            BashToolInput(command="python -c \"from pathlib import Path; Path('artifacts/hardlink').write_text('corrupt')\""),
+            ToolExecutionContext(cwd=root, settings=settings, metadata={'research_runtime':project}),
+        )
+>       assert result.is_error and 'hardlink' in result.output.lower()
+E       AssertionError: assert (False)
+E        +  where False = ToolResult(output='(no output)', is_error=False, metadata={'returncode': 0}).is_error
+
+tests/test_research/test_report_sandbox.py:289: AssertionError
+_______ test_report_rejects_preexisting_cross_project_hardlinks[docker] ________
+
+project = <openharness.research.runtime.ResearchAgentRuntime object at 0x7f27e3743590>
+tmp_path = PosixPath('/tmp/pytest-of-jason/pytest-48/test_report_rejects_preexistin1')
+backend = 'docker'
+
+    @pytest.mark.parametrize('backend', ['srt', 'docker'])
+    async def test_report_rejects_preexisting_cross_project_hardlinks(project, tmp_path, backend):
+        import os
+        root = project.resolve_workspace('P')
+        private = tmp_path / 'other-project-secret'
+        private.write_text('private')
+        os.link(private, root / 'artifacts/hardlink')
+        settings = Settings()
+        settings.sandbox.backend = backend
+        result = await BashTool().execute(
+            BashToolInput(command="python -c \"from pathlib import Path; Path('artifacts/hardlink').write_text('corrupt')\""),
+            ToolExecutionContext(cwd=root, settings=settings, metadata={'research_runtime':project}),
+        )
+>       assert result.is_error and 'hardlink' in result.output.lower()
+E       AssertionError: assert (False)
+E        +  where False = ToolResult(output='(no output)', is_error=False, metadata={'returncode': 0}).is_error
+
+tests/test_research/test_report_sandbox.py:289: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_research/test_report_sandbox.py::test_report_rejects_preexisting_cross_project_hardlinks[srt]
+FAILED tests/test_research/test_report_sandbox.py::test_report_rejects_preexisting_cross_project_hardlinks[docker]
+2 failed, 12 deselected in 5.51s
+
+[Intermediate browser failure — session creation not observed before assertions]
+ › delete confirmation, failure retry, noncurrent and current session cleanup 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByRole('button', { name: '停止生成' })
+    Expected: 0
+    Received: 1
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" getByRole('button', { name: '停止生成' }) with timeout 5000ms
+      - waiting for getByRole('button', { name: '停止生成' })
+        14 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+      413 | test('delete confirmation, failure retry, noncurrent and current session cleanup', async ({ page }) => {
+      414 |   await prepareProcessChat(page);
+    > 415 |   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+          |                                                            ^
+      416 |   const currentId = await page.evaluate(() => sessionStorage.getItem('openharness.web.session'));
+      417 |   const session = await (await page.request.get(`/api/sessions/${currentId}`)).json();
+      418 |   const other = await (await page.request.post('/api/sessions', { data: { profile_id: session.profile_id } })).json();
+        at /home/jason/pythonproject/OpenHarness/frontend/web/e2e/workspace.spec.ts:415:60
+
+    Error Context: test-results/workspace-delete-confirmat-d7338-and-current-session-cleanup/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-delete-confirmat-d7338-and-current-session-cleanup/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-delete-confirmat-d7338-and-current-session-cleanup/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e/workspace.spec.ts:413:1 › delete confirmation, failure retry, noncurrent and current session cleanup 
+  16 passed (2.0m)
+
+[Intermediate checks intentionally excluded]
+Coverage run remediation-regression-verified was interrupted after the hardlink fix/new tests, then replaced by the complete 640-test coverage run above. Mistyped narrow test paths collected no tests and were replaced by a successful 49-test compatibility command. Missing default Chromium was corrected by selecting the existing cached browser. Earlier strict checks that omitted outer evals were superseded by the unified all-production checks above.
+
+[MCP/Web/timeout/dispatch compatibility]
+.................................................                        [100%]
+49 passed in 14.37s
+
+[npm audit — FAIL]
+{"info": 0, "low": 0, "moderate": 0, "high": 2, "critical": 0, "total": 2}
+See agent-core-sandbox-dependency-audit.json and agent-core-risks.md. No SDK downgrade/crypto patch applied.
+
+[Web production build]
+$ npm run build
+
+> openharness-research-web@0.1.0 build
+> tsc -b && vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 1842 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.47 kB │ gzip:   0.32 kB
+dist/assets/index-BEGrye_3.css   23.84 kB │ gzip:   5.93 kB
+dist/assets/index-7kelptCU.js   435.80 kB │ gzip: 134.34 kB
+✓ built in 5.31s
+
+
+[Latest wheel build]
+$ uv build --wheel
+Building wheel...
+Successfully built dist/openharness_ai-0.1.9-py3-none-any.whl
+
+
+[Latest clean wheel smoke]
+$ uv pip install --reinstall-package openharness-ai --python /tmp/openharness-remediation-wheel-check/bin/python dist/openharness_ai-0.1.9-py3-none-any.whl[web]; /tmp/openharness-remediation-wheel-check/bin/python tests/test_install/wheel_smoke.py
+Using Python 3.12.15 environment at: /tmp/openharness-remediation-wheel-check
+Resolved 62 packages in 722ms
+Prepared 1 package in 27ms
+Uninstalled 1 package in 18ms
+Installed 1 package in 7ms
+ ~ openharness-ai==0.1.9 (from file:///home/jason/pythonproject/OpenHarness/dist/openharness_ai-0.1.9-py3-none-any.whl)
+PASS: 158 installed modules imported; no retired assets; Web/CLI/Shell/research persistence verified
+
+
+[Strengthened traversal assertion: Python 3.11; both real backends]
+Traversal points at the existing private fixture, rather than a nonexistent sibling path.
+..                                                                       [100%]
+2 passed, 12 deselected in 3.59s
+
+[Strengthened traversal assertion: Python 3.10; both real backends]
+Traversal points at the existing private fixture, rather than a nonexistent sibling path.
+..                                                                       [100%]
+2 passed, 12 deselected in 4.81s

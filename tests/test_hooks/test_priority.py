@@ -59,7 +59,9 @@ def test_registry_ties_keep_registration_order():
 
 def test_negative_priority_runs_last():
     registry = HookRegistry()
-    registry.register(HookEvent.SESSION_START, CommandHookDefinition(command="cleanup", priority=-10))
+    registry.register(
+        HookEvent.SESSION_START, CommandHookDefinition(command="cleanup", priority=-10)
+    )
     registry.register(HookEvent.SESSION_START, CommandHookDefinition(command="default"))
 
     commands = [hook.command for hook in registry.get(HookEvent.SESSION_START)]
@@ -83,12 +85,22 @@ def test_summary_includes_non_default_priority():
 async def test_executor_runs_hooks_in_priority_order(tmp_path: Path, monkeypatch):
     """End-to-end: execute() honours the priority-sorted registry order."""
     from openharness.utils import shell
+
     original = shell.resolve_shell_command
-    monkeypatch.setattr(shell, "resolve_shell_command", lambda command, **kwargs:
-                        [part if part != "-lc" else "-c" for part in original(command, **kwargs)])
+    monkeypatch.setattr(
+        shell,
+        "resolve_shell_command",
+        lambda command, **kwargs: [
+            part if part != "-lc" else "-c" for part in original(command, **kwargs)
+        ],
+    )
     registry = HookRegistry()
-    registry.register(HookEvent.PRE_TOOL_USE, CommandHookDefinition(command="printf 'low'", priority=1))
-    registry.register(HookEvent.PRE_TOOL_USE, CommandHookDefinition(command="printf 'high'", priority=10))
+    registry.register(
+        HookEvent.PRE_TOOL_USE, CommandHookDefinition(command="printf 'low'", priority=1)
+    )
+    registry.register(
+        HookEvent.PRE_TOOL_USE, CommandHookDefinition(command="printf 'high'", priority=10)
+    )
     executor = HookExecutor(
         registry,
         HookExecutionContext(

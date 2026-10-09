@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from openharness.config.settings import PermissionSettings
 from openharness.permissions.modes import PermissionMode
@@ -63,8 +64,14 @@ class PermissionChecker:
         # Parse path rules from settings
         self._path_rules: list[PathRule] = []
         for rule in getattr(settings, "path_rules", []):
-            pattern = getattr(rule, "pattern", None) or (rule.get("pattern") if isinstance(rule, dict) else None)
-            allow = getattr(rule, "allow", True) if not isinstance(rule, dict) else rule.get("allow", True)
+            pattern = getattr(rule, "pattern", None) or (
+                rule.get("pattern") if isinstance(rule, dict) else None
+            )
+            allow = (
+                getattr(rule, "allow", True)
+                if not isinstance(rule, dict)
+                else rule.get("allow", True)
+            )
             if isinstance(pattern, str) and pattern.strip():
                 self._path_rules.append(PathRule(pattern=pattern.strip(), allow=allow))
             else:
@@ -72,6 +79,10 @@ class PermissionChecker:
                     "Skipping path rule with missing, empty, or non-string 'pattern' field: %r",
                     rule,
                 )
+
+    @property
+    def mode(self) -> PermissionMode:
+        return self._settings.mode
 
     def evaluate(
         self,
@@ -87,24 +98,20 @@ class PermissionChecker:
         # defence-in-depth measure against LLM-directed or prompt-injection
         # driven access to credential files.
         if file_path:
+            file_path = str(Path(file_path).expanduser().resolve())
             for candidate_path in _policy_match_paths(file_path):
                 for pattern in SENSITIVE_PATH_PATTERNS:
                     if fnmatch.fnmatch(candidate_path, pattern):
                         return PermissionDecision(
                             allowed=False,
                             reason=(
-                                f"禁止访问：{file_path} 属于敏感凭据路径"
-                                f"（匹配内置规则：{pattern}）"
+                                f"禁止访问：{file_path} 属于敏感凭据路径（匹配内置规则：{pattern}）"
                             ),
                         )
 
         # Explicit tool deny list
         if tool_name in self._settings.denied_tools:
             return PermissionDecision(allowed=False, reason="此工具已被权限配置明确禁止。")
-
-        # Explicit tool allow list
-        if tool_name in self._settings.allowed_tools:
-            return PermissionDecision(allowed=True, reason="此工具已被权限配置明确允许。")
 
         # Check path-level rules
         if file_path and self._path_rules:
@@ -140,6 +147,10 @@ class PermissionChecker:
                 allowed=False,
                 reason="当前处于只读规划模式，请切换权限模式后再执行可能修改数据的操作。",
             )
+
+        # Explicit tool allow list
+        if tool_name in self._settings.allowed_tools:
+            return PermissionDecision(allowed=True, reason="此工具已被权限配置明确允许。")
 
         # Default mode: require confirmation for mutating tools
         bash_hint = _bash_permission_hint(command)
@@ -193,7 +204,5 @@ def _bash_permission_hint(command: str | None) -> str:
         "yarn init ",
     )
     if any(marker in lowered for marker in install_markers):
-        return (
-            "安装依赖或初始化项目会修改工作目录，因此需要你的确认。"
-        )
+        return "安装依赖或初始化项目会修改工作目录，因此需要你的确认。"
     return ""

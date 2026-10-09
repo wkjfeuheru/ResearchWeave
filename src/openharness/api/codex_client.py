@@ -14,13 +14,23 @@ import httpx
 from openharness.api.client import (
     ApiMessageCompleteEvent,
     ApiMessageRequest,
-    ApiRetryEvent,
     ApiStreamEvent,
     ApiTextDeltaEvent,
 )
-from openharness.api.errors import AuthenticationFailure, OpenHarnessApiError, RateLimitFailure, RequestFailure
+from openharness.api.errors import (
+    AuthenticationFailure,
+    OpenHarnessApiError,
+    RateLimitFailure,
+    RequestFailure,
+)
 from openharness.api.usage import UsageSnapshot, usage_from_provider
-from openharness.engine.messages import ConversationMessage, ImageBlock, TextBlock, ToolResultBlock, ToolUseBlock
+from openharness.engine.messages import (
+    ConversationMessage,
+    ImageBlock,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 JWT_CLAIM_PATH = "https://api.openai.com/auth"
@@ -86,40 +96,50 @@ def _convert_messages_to_codex(messages: list[ConversationMessage]) -> list[dict
             # every prior function_call immediately satisfied.
             for block in msg.api_content():
                 if isinstance(block, ToolResultBlock):
-                    result.append({
-                        "type": "function_call_output",
-                        "call_id": block.tool_use_id,
-                        "output": block.content,
-                    })
+                    result.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": block.tool_use_id,
+                            "output": block.content,
+                        }
+                    )
             user_content: list[dict[str, Any]] = []
             for block in msg.api_content():
                 if isinstance(block, TextBlock) and block.text.strip():
                     user_content.append({"type": "input_text", "text": block.text})
                 elif isinstance(block, ImageBlock):
-                    user_content.append({
-                        "type": "input_image",
-                        "image_url": f"data:{block.media_type};base64,{block.data}",
-                    })
+                    user_content.append(
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:{block.media_type};base64,{block.data}",
+                        }
+                    )
             if user_content:
                 result.append({"role": "user", "content": user_content})
             continue
 
-        assistant_text = "".join(block.text for block in msg.api_content() if isinstance(block, TextBlock))
+        assistant_text = "".join(
+            block.text for block in msg.api_content() if isinstance(block, TextBlock)
+        )
         if assistant_text:
-            result.append({
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": assistant_text, "annotations": []}],
-            })
+            result.append(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": assistant_text, "annotations": []}],
+                }
+            )
         for block in msg.api_content():
             if isinstance(block, ToolUseBlock):
-                result.append({
-                    "type": "function_call",
-                    "id": f"fc_{block.id[:58]}",
-                    "call_id": block.id,
-                    "name": block.name,
-                    "arguments": json.dumps(block.input, separators=(",", ":")),
-                })
+                result.append(
+                    {
+                        "type": "function_call",
+                        "id": f"fc_{block.id[:58]}",
+                        "call_id": block.id,
+                        "name": block.name,
+                        "arguments": json.dumps(block.input, separators=(",", ":")),
+                    }
+                )
     return result
 
 
@@ -189,9 +209,8 @@ def _format_codex_stream_error(event: dict[str, Any], *, fallback: str) -> str:
     payload = error if isinstance(error, dict) else event
     message = payload.get("message") if isinstance(payload, dict) else None
     code = payload.get("code") if isinstance(payload, dict) else None
-    request_id = (
-        (payload.get("request_id") if isinstance(payload, dict) else None)
-        or event.get("request_id")
+    request_id = (payload.get("request_id") if isinstance(payload, dict) else None) or event.get(
+        "request_id"
     )
 
     parts: list[str] = []
@@ -227,29 +246,17 @@ class CodexApiClient:
 
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         from openharness.services.context_budget import checked_request
-        request = checked_request(self, request)
-        last_error: Exception | None = None
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                async for event in self._stream_once(request):
-                    yield event
-                return
-            except Exception as exc:
-                last_error = exc
-                if attempt >= MAX_RETRIES or not self._is_retryable(exc):
-                    raise self._translate_error(exc) from exc
-                delay = min(BASE_DELAY_SECONDS * (2 ** attempt), MAX_DELAY_SECONDS)
-                import asyncio
 
-                yield ApiRetryEvent(
-                    message=str(exc),
-                    attempt=attempt + 1,
-                    max_attempts=MAX_RETRIES + 1,
-                    delay_seconds=delay,
-                )
-                await asyncio.sleep(delay)
-        if last_error is not None:
-            raise self._translate_error(last_error) from last_error
+        request = checked_request(self, request)
+        from openharness.api.retry import stream_with_retry
+
+        async for event in stream_with_retry(
+            self._stream_once,
+            request,
+            translate=self._translate_error,
+            max_attempts=MAX_RETRIES + 1,
+        ):
+            yield event
 
     def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
         body: dict[str, Any] = {
@@ -272,7 +279,9 @@ class CodexApiClient:
         return replace(request, prepared_payload=body)
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
-        body = (request if request.prepared_payload is not None else self.prepare_request(request)).prepared_payload
+        body = (
+            request if request.prepared_payload is not None else self.prepare_request(request)
+        ).prepared_payload
         content: list[TextBlock | ToolUseBlock] = []
         current_text_parts: list[str] = []
         completed_response: dict[str, Any] | None = None
@@ -282,8 +291,12 @@ class CodexApiClient:
             async with client.stream("POST", self._url, headers=headers, json=body) as response:
                 if response.status_code >= 400:
                     payload = await response.aread()
-                    message = _format_error_message(response.status_code, payload.decode("utf-8", "replace"))
-                    raise httpx.HTTPStatusError(message, request=response.request, response=response)
+                    message = _format_error_message(
+                        response.status_code, payload.decode("utf-8", "replace")
+                    )
+                    raise httpx.HTTPStatusError(
+                        message, request=response.request, response=response
+                    )
 
                 async for event in self._iter_sse_events(response):
                     event_type = event.get("type")
@@ -324,8 +337,15 @@ class CodexApiClient:
                             parsed_arguments = loaded if isinstance(loaded, dict) else {}
                             call_id = item.get("call_id")
                             name = item.get("name")
-                            if isinstance(call_id, str) and call_id and isinstance(name, str) and name:
-                                content.append(ToolUseBlock(id=call_id, name=name, input=parsed_arguments))
+                            if (
+                                isinstance(call_id, str)
+                                and call_id
+                                and isinstance(name, str)
+                                and name
+                            ):
+                                content.append(
+                                    ToolUseBlock(id=call_id, name=name, input=parsed_arguments)
+                                )
                     elif event_type == "response.completed":
                         response_payload = event.get("response")
                         if isinstance(response_payload, dict):
@@ -348,7 +368,7 @@ class CodexApiClient:
         if current_text_parts and not any(isinstance(block, TextBlock) for block in content):
             content.insert(0, TextBlock(text="".join(current_text_parts)))
 
-        final_message = ConversationMessage(role="assistant", content=content)
+        final_message = ConversationMessage(role="assistant", content=[block for block in content])
         usage = _usage_from_response(completed_response or {})
         stop_reason = _stop_reason_from_response(
             completed_response or {},
@@ -389,16 +409,9 @@ class CodexApiClient:
 
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:
-        if isinstance(exc, httpx.HTTPStatusError):
-            return exc.response.status_code in {429, 500, 502, 503, 504}
-        if isinstance(exc, RateLimitFailure):
-            return True
-        if isinstance(exc, RequestFailure):
-            message = str(exc).lower()
-            return any(term in message for term in ["timeout", "connect", "network", "rate", "overloaded"])
-        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
-            return True
-        return False
+        from openharness.api.retry import classify_error
+
+        return classify_error(exc) in {"transport", "rate_limit", "unavailable"}
 
     @staticmethod
     def _translate_error(exc: Exception) -> OpenHarnessApiError:

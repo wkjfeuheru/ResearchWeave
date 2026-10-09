@@ -16,15 +16,21 @@ class CostTracker:
         self._usage = UsageSnapshot(
             input_tokens=self._usage.input_tokens + usage.input_tokens,
             output_tokens=self._usage.output_tokens + usage.output_tokens,
-            cache_observed_input_tokens=self._usage.cache_observed_input_tokens + usage.cache_observed_input_tokens,
-            **{
-                key: (None if getattr(self._usage, key) is None and getattr(usage, key) is None
-                      else (getattr(self._usage, key) or 0) + (getattr(usage, key) or 0))
-                for key in ("cache_read_input_tokens", "cache_creation_input_tokens")
-            },
+            cache_observed_input_tokens=self._usage.cache_observed_input_tokens
+            + usage.cache_observed_input_tokens,
+            cache_read_input_tokens=_add_optional(
+                self._usage.cache_read_input_tokens, usage.cache_read_input_tokens
+            ),
+            cache_creation_input_tokens=_add_optional(
+                self._usage.cache_creation_input_tokens, usage.cache_creation_input_tokens
+            ),
         )
 
     @property
     def total(self) -> UsageSnapshot:
         """Return the aggregated usage."""
         return self._usage
+
+
+def _add_optional(left: int | None, right: int | None) -> int | None:
+    return None if left is None and right is None else (left or 0) + (right or 0)

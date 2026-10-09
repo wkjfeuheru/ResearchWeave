@@ -16,7 +16,11 @@ try:
 except NameError:  # pragma: no cover - Python < 3.11 compatibility
     from exceptiongroup import BaseExceptionGroup
 
-from openharness.mcp.client import McpClientManager, McpServerNotConnectedError, McpToolReturnedError
+from openharness.mcp.client import (
+    McpClientManager,
+    McpServerNotConnectedError,
+    McpToolReturnedError,
+)
 from openharness.mcp.types import McpConnectionStatus, McpStdioServerConfig, McpToolInfo
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.mcp_tool import McpToolAdapter
@@ -39,7 +43,9 @@ class _AsyncContextManager:
 
 @pytest.mark.asyncio
 async def test_transport_child_failure_does_not_cancel_research_or_other_server(monkeypatch):
-    manager = McpClientManager({name: McpStdioServerConfig(command="test") for name in ("bad", "good")})
+    manager = McpClientManager(
+        {name: McpStdioServerConfig(command="test") for name in ("bad", "good")}
+    )
     fail = asyncio.Event()
 
     async def crash():
@@ -57,9 +63,12 @@ async def test_transport_child_failure_does_not_cancel_research_or_other_server(
             async def request(*args):
                 fail.set()
                 await asyncio.Event().wait()
+
             session.call_tool.side_effect = request
         else:
-            session.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
+            session.call_tool.return_value = CallToolResult(
+                content=[TextContent(type="text", text="ok")]
+            )
         manager._stacks[name] = stack
         manager._sessions[name] = session
         manager._statuses[name].state = "connected"
@@ -112,7 +121,9 @@ async def test_call_tool_raises_when_server_failed_to_connect():
     config = McpStdioServerConfig(command="false", args=[])
     manager = McpClientManager({"bad": config})
     manager._statuses["bad"] = McpConnectionStatus(
-        name="bad", state="failed", detail="Connection refused",
+        name="bad",
+        state="failed",
+        detail="Connection refused",
     )
     with pytest.raises(McpServerNotConnectedError, match="Connection refused"):
         await manager.call_tool("bad", "tool", {})
@@ -164,7 +175,9 @@ async def test_request_timeout_cancels_wait_and_connection_can_be_reused(resourc
             await manager.call_tool("slow", "test", {})
     assert cancelled.is_set()
     session.call_tool.side_effect = None
-    session.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="recovered")])
+    session.call_tool.return_value = CallToolResult(
+        content=[TextContent(type="text", text="recovered")]
+    )
     assert await manager.call_tool("slow", "test", {}) == "recovered"
 
 
@@ -224,7 +237,11 @@ async def test_register_connected_session_tolerates_missing_resources_list():
 async def test_close_suppresses_known_runtime_error_from_stdio_cleanup():
     manager = McpClientManager({})
     stack = MagicMock()
-    stack.aclose = AsyncMock(side_effect=RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"))
+    stack.aclose = AsyncMock(
+        side_effect=RuntimeError(
+            "Attempted to exit cancel scope in a different task than it was entered in"
+        )
+    )
     manager._stacks["context7"] = stack
     manager._sessions["context7"] = AsyncMock()
 
@@ -339,12 +356,19 @@ async def test_mcp_error_flag_remains_an_error_in_tool_adapter():
     manager = McpClientManager({})
     session = AsyncMock()
     session.call_tool.return_value = CallToolResult(
-        content=[TextContent(type="text", text="Upstream document unavailable")], isError=True,
+        content=[TextContent(type="text", text="Upstream document unavailable")],
+        isError=True,
     )
     manager._sessions["reports"] = session
-    adapter = McpToolAdapter(manager, McpToolInfo(
-        server_name="reports", name="fetch", description="Read a report", input_schema={"type": "object"},
-    ))
+    adapter = McpToolAdapter(
+        manager,
+        McpToolInfo(
+            server_name="reports",
+            name="fetch",
+            description="Read a report",
+            input_schema={"type": "object"},
+        ),
+    )
     result = await adapter.execute(adapter.input_model(), ToolExecutionContext(cwd=Path(".")))
     assert result.is_error and "unavailable" in result.output
 
@@ -369,16 +393,25 @@ async def test_schema_mismatch_is_returned_error_without_disconnecting_or_fabric
     session.call_tool.side_effect = RuntimeError(
         "Invalid structured content returned by tool financials: None is not of type 'object'"
     )
-    manager._sessions['finance'] = session
+    manager._sessions["finance"] = session
     with pytest.raises(McpToolReturnedError) as error:
-        await manager.call_tool('finance', 'financials', {})
-    assert error.value.code == 'invalid_response'
-    adapter = McpToolAdapter(manager, McpToolInfo(server_name='finance', name='financials',
-                                                description='', input_schema={'type': 'object'}))
+        await manager.call_tool("finance", "financials", {})
+    assert error.value.code == "invalid_response"
+    adapter = McpToolAdapter(
+        manager,
+        McpToolInfo(
+            server_name="finance",
+            name="financials",
+            description="",
+            input_schema={"type": "object"},
+        ),
+    )
     result = await adapter.execute(adapter.input_model(), ToolExecutionContext(cwd=Path.cwd()))
-    assert result.is_error and result.metadata['error_code'] == 'invalid_response'
-    assert result.metadata['research_source_specs'] == []
-    assert 'finance/financials' in result.metadata['detail']
+    assert result.is_error and result.metadata["error_code"] == "invalid_response"
+    assert result.metadata["research_source_specs"] == []
+    assert "finance/financials" in result.metadata["detail"]
     session.call_tool.side_effect = None
-    session.call_tool.return_value = CallToolResult(content=[TextContent(type='text', text='recovered')])
-    assert await manager.call_tool('finance', 'financials', {}) == 'recovered'
+    session.call_tool.return_value = CallToolResult(
+        content=[TextContent(type="text", text="recovered")]
+    )
+    assert await manager.call_tool("finance", "financials", {}) == "recovered"

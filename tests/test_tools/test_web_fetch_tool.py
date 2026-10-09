@@ -47,30 +47,48 @@ async def test_web_fetch_tool_reads_html(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_web_fetch_keeps_article_links_and_resolves_against_redirect(tmp_path, monkeypatch):
     async def fetch(*args, **kwargs):
-        return httpx.Response(200, headers={"content-type": "text/html"},
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
             text='<title>能源统计</title><a href="../report/202609.html">全国<b>电力</b>统计</a>'
-                 '<a href="../report/202609.html">重复链接</a><a href="#top">顶部</a>'
-                 '<a href="javascript:alert(1)">脚本</a><a href="https://user:pass@example.org">凭证</a>',
-            request=httpx.Request("GET", "https://example.org/statistics/index.html"))
+            '<a href="../report/202609.html">重复链接</a><a href="#top">顶部</a>'
+            '<a href="javascript:alert(1)">脚本</a><a href="https://user:pass@example.org">凭证</a>',
+            request=httpx.Request("GET", "https://example.org/statistics/index.html"),
+        )
 
     monkeypatch.setitem(WebFetchTool.execute.__globals__, "fetch_public_http_response", fetch)
-    result = await WebFetchTool().execute(WebFetchToolInput(url="https://example.org/start"), ToolExecutionContext(cwd=tmp_path))
+    result = await WebFetchTool().execute(
+        WebFetchToolInput(url="https://example.org/start"), ToolExecutionContext(cwd=tmp_path)
+    )
     assert "全国 电力 统计: https://example.org/report/202609.html" in result.output
     assert result.output.count("https://example.org/report/202609.html") == 1
     assert "javascript:alert" not in result.output and "user:pass" not in result.output
-    assert result.metadata["research_source_specs"][0]["locator"] == "https://example.org/statistics/index.html"
-    assert "https://example.org/report/202609.html" in result.metadata["research_source_specs"][0]["content"]
+    assert (
+        result.metadata["research_source_specs"][0]["locator"]
+        == "https://example.org/statistics/index.html"
+    )
+    assert (
+        "https://example.org/report/202609.html"
+        in result.metadata["research_source_specs"][0]["content"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_web_fetch_omits_whole_links_but_snapshot_keeps_all(tmp_path, monkeypatch):
-    targets = [f'https://example.org/report/{i}/' + 'x' * 250 for i in range(100)]
+    targets = [f"https://example.org/report/{i}/" + "x" * 250 for i in range(100)]
+
     async def fetch(*args, **kwargs):
-        return httpx.Response(200, headers={"content-type": "text/html"},
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
             text="".join(f'<a href="{url}">报告{i}</a>' for i, url in enumerate(targets)),
-            request=httpx.Request("GET", "https://example.org/"))
+            request=httpx.Request("GET", "https://example.org/"),
+        )
+
     monkeypatch.setitem(WebFetchTool.execute.__globals__, "fetch_public_http_response", fetch)
-    result = await WebFetchTool().execute(WebFetchToolInput(url="https://example.org/"), ToolExecutionContext(cwd=tmp_path))
+    result = await WebFetchTool().execute(
+        WebFetchToolInput(url="https://example.org/"), ToolExecutionContext(cwd=tmp_path)
+    )
     assert "More complete links" in result.output
     assert targets[-1] not in result.output
     assert targets[-1] in result.metadata["research_source_specs"][0]["content"]
@@ -80,16 +98,24 @@ async def test_web_fetch_omits_whole_links_but_snapshot_keeps_all(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_page_navigation_prioritizes_requested_category_before_truncation(tmp_path, monkeypatch):
+async def test_page_navigation_prioritizes_requested_category_before_truncation(
+    tmp_path, monkeypatch
+):
     async def fetch(*args, **kwargs):
-        return httpx.Response(200, headers={"content-type": "text/html"},
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
             text='<meta name="publishdate" content="2026-09-30"><meta name="dateModified" content="2026-10-04">'
-                 + ''.join(f'<a href="/news/{i}">无关新闻{i}</a>' for i in range(100))
-                 + '<a href="/statistics/solar">光伏装机统计</a>',
-            request=httpx.Request("GET", "https://example.org/"))
+            + "".join(f'<a href="/news/{i}">无关新闻{i}</a>' for i in range(100))
+            + '<a href="/statistics/solar">光伏装机统计</a>',
+            request=httpx.Request("GET", "https://example.org/"),
+        )
+
     monkeypatch.setitem(WebFetchTool.execute.__globals__, "fetch_public_http_response", fetch)
-    result = await WebFetchTool().execute(WebFetchToolInput(url="https://example.org/", max_chars=1000,
-        link_query="光伏 统计"), ToolExecutionContext(cwd=tmp_path))
+    result = await WebFetchTool().execute(
+        WebFetchToolInput(url="https://example.org/", max_chars=1000, link_query="光伏 统计"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
     assert "光伏装机统计: https://example.org/statistics/solar" in result.output
     assert result.output.index("光伏装机统计:") < result.output.index("无关新闻0:")
     assert result.metadata["research_source_specs"][0]["published_at"] == "2026-09-30"
@@ -133,7 +159,7 @@ async def test_web_search_tool_reads_results(tmp_path, monkeypatch):
 
 def test_html_to_text_handles_large_html_quickly():
     html = "<html><head><style>.x{color:red}</style><script>var x=1;</script></head><body>"
-    html += ("<div><span>Issue item</span><a href='/x'>link</a></div>" * 6000)
+    html += "<div><span>Issue item</span><a href='/x'>link</a></div>" * 6000
     html += "</body></html>"
 
     started = time.time()
@@ -148,11 +174,14 @@ def test_html_to_text_handles_large_html_quickly():
 @pytest.mark.asyncio
 async def test_web_search_reports_empty_timeout_exception(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_WEB_SEARCH_URL", DEFAULT_SEARCH_URL)
+
     async def timeout(*args, **kwargs):
         raise httpx.ConnectTimeout("")
 
     monkeypatch.setitem(WebSearchTool.execute.__globals__, "fetch_public_http_response", timeout)
-    result = await WebSearchTool().execute(WebSearchToolInput(query="光伏"), ToolExecutionContext(cwd=tmp_path))
+    result = await WebSearchTool().execute(
+        WebSearchToolInput(query="光伏"), ToolExecutionContext(cwd=tmp_path)
+    )
     assert result.is_error
     assert "ConnectTimeout" in result.output
 
@@ -210,7 +239,10 @@ async def test_web_search_tool_uses_env_search_url(tmp_path, monkeypatch):
     monkeypatch.setitem(WebSearchTool.execute.__globals__, "fetch_public_http_response", fake_fetch)
 
     tool = WebSearchTool()
-    result = await tool.execute(WebSearchToolInput(query="openharness docs", scope="web"), ToolExecutionContext(cwd=tmp_path))
+    result = await tool.execute(
+        WebSearchToolInput(query="openharness docs", scope="web"),
+        ToolExecutionContext(cwd=tmp_path),
+    )
 
     assert result.is_error is False
     assert calls[0][0] == "https://search.example.com/html"
@@ -238,10 +270,13 @@ async def test_fetch_public_http_response_uses_openharness_web_proxy(monkeypatch
 
     monkeypatch.setenv("OPENHARNESS_WEB_PROXY", "http://proxy.example.com:7890")
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
     async def fake_ensure_public_http_url(url: str) -> None:
         return None
 
-    monkeypatch.setattr("openharness.utils.network_guard.ensure_public_http_url", fake_ensure_public_http_url)
+    monkeypatch.setattr(
+        "openharness.utils.network_guard.ensure_public_http_url", fake_ensure_public_http_url
+    )
 
     response = await fetch_public_http_response("https://example.com/")
 
@@ -297,6 +332,7 @@ def test_parse_bing_results_extracts_title_url_snippet():
 @pytest.mark.asyncio
 async def test_web_search_tool_html_provider_defaults_to_bing_endpoint(tmp_path, monkeypatch):
     from openharness.config import Settings, save_settings
+
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
     save_settings(Settings(web={"search_provider": "html"}))
     calls = []

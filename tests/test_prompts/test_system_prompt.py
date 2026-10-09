@@ -43,8 +43,6 @@ def test_build_system_prompt_no_git():
     assert "Git:" not in prompt
 
 
-
-
 def test_build_system_prompt_custom_prompt():
     env = _make_env()
     prompt = build_system_prompt(custom_prompt="You are a helpful bot.", env=env)

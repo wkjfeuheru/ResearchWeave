@@ -68,11 +68,11 @@ def _settings_with_rules(*rules) -> PermissionSettings:
 @pytest.mark.parametrize(
     "bad_rule",
     [
-        PathRuleConfig.model_construct(allow=False),                  # pattern attribute missing
-        PathRuleConfig.model_construct(pattern="", allow=False),      # pattern empty string
-        PathRuleConfig.model_construct(pattern="   ", allow=False),   # pattern whitespace-only
-        PathRuleConfig.model_construct(pattern=42, allow=False),      # pattern non-string
-        PathRuleConfig.model_construct(pattern=None, allow=False),    # pattern None
+        PathRuleConfig.model_construct(allow=False),  # pattern attribute missing
+        PathRuleConfig.model_construct(pattern="", allow=False),  # pattern empty string
+        PathRuleConfig.model_construct(pattern="   ", allow=False),  # pattern whitespace-only
+        PathRuleConfig.model_construct(pattern=42, allow=False),  # pattern non-string
+        PathRuleConfig.model_construct(pattern=None, allow=False),  # pattern None
     ],
     ids=["missing", "empty", "whitespace-only", "non-string", "none"],
 )
@@ -231,3 +231,30 @@ class TestSensitivePathProtection:
         checker = PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO))
         decision = checker.evaluate("read_file", is_read_only=True, file_path=test_path)
         assert decision.allowed is False, f"Pattern {pattern!r} did not block {test_path}"
+
+
+@pytest.mark.parametrize("mode", list(PermissionMode))
+@pytest.mark.parametrize("restriction", ["sensitive", "path", "command", "tool"])
+def test_allow_list_never_overrides_denials(mode, restriction, tmp_path):
+    path = str(tmp_path / (".ssh/key" if restriction == "sensitive" else "blocked/file"))
+    settings = PermissionSettings(
+        mode=mode,
+        allowed_tools=["write_file"],
+        denied_tools=["write_file"] if restriction == "tool" else [],
+        path_rules=[{"pattern": str(tmp_path / "blocked/*"), "allow": False}]
+        if restriction == "path"
+        else [],
+        denied_commands=["danger *"] if restriction == "command" else [],
+    )
+    decision = PermissionChecker(settings).evaluate(
+        "write_file", is_read_only=False, file_path=path, command="danger command"
+    )
+    assert not decision.allowed and not decision.requires_confirmation
+
+
+def test_allow_list_never_overrides_plan_write_limit():
+    checker = PermissionChecker(
+        PermissionSettings(mode=PermissionMode.PLAN, allowed_tools=["write_file"])
+    )
+    decision = checker.evaluate("write_file", is_read_only=False)
+    assert not decision.allowed and not decision.requires_confirmation

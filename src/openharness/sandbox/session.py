@@ -1,63 +1,62 @@
-"""Module-level Docker sandbox session registry."""
+"""Owned Docker sessions. A context-local legacy selection never crosses queries."""
 
 from __future__ import annotations
 
 import atexit
-import logging
+from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from openharness.config import Settings
-    from openharness.sandbox.docker_backend import DockerSandboxSession
+from openharness.config import Settings
+from openharness.sandbox.docker_backend import DockerSandboxSession, get_docker_availability
+from openharness.sandbox.adapter import SandboxUnavailableError
 
-logger = logging.getLogger(__name__)
-
-_active_session: DockerSandboxSession | None = None
+_sessions: dict[str, DockerSandboxSession] = {}
+_current_owner: ContextVar[str | None] = ContextVar("sandbox_owner", default=None)
 
 
-def get_docker_sandbox():
-    """Return the active Docker sandbox session, or ``None``."""
-    return _active_session
+def get_docker_sandbox(owner: str | None = None) -> DockerSandboxSession | None:
+    key = owner or _current_owner.get()
+    return _sessions.get(key) if key else None
 
 
 def is_docker_sandbox_active() -> bool:
-    """Return whether a Docker sandbox session is currently running."""
-    return _active_session is not None and _active_session.is_running
+    session = get_docker_sandbox()
+    return session is not None and session.is_running
 
 
 async def start_docker_sandbox(
-    settings: Settings,
-    session_id: str,
-    cwd: Path,
-) -> None:
-    """Start a Docker sandbox session for the current OpenHarness session."""
-    global _active_session  # noqa: PLW0603
-
-    from openharness.sandbox.docker_backend import DockerSandboxSession, get_docker_availability
-
+    settings: Settings, session_id: str, cwd: Path, *, report: bool = False
+) -> DockerSandboxSession | None:
     availability = get_docker_availability(settings)
     if not availability.available:
         if settings.sandbox.fail_if_unavailable:
-            from openharness.sandbox.adapter import SandboxUnavailableError
-
-            raise SandboxUnavailableError(
-                availability.reason or "Docker sandbox is unavailable"
-            )
-        logger.warning("Docker sandbox unavailable: %s", availability.reason)
-        return
-
-    session = DockerSandboxSession(settings=settings, session_id=session_id, cwd=cwd)
-    await session.start()
-    _active_session = session
-
-    # Safety net: stop the container if the process exits without close_runtime()
+            raise SandboxUnavailableError(availability.reason or "Docker sandbox is unavailable")
+        return None
+    session = DockerSandboxSession(settings=settings, session_id=session_id, cwd=cwd, report=report)
+    # Register before start: close/cancel can also clean up a partially started container.
+    _sessions[session_id] = session
+    try:
+        await session.start()
+    except BaseException:
+        await session.stop()
+        _sessions.pop(session_id, None)
+        raise
+    _current_owner.set(session_id)
     atexit.register(session.stop_sync)
+    return session
 
 
-async def stop_docker_sandbox() -> None:
-    """Stop the active Docker sandbox session, if any."""
-    global _active_session  # noqa: PLW0603
-    if _active_session is not None:
-        await _active_session.stop()
-        _active_session = None
+async def stop_docker_sandbox(owner: str | None = None) -> None:
+    key = owner or _current_owner.get()
+    session = _sessions.pop(key, None) if key else None
+    if session is not None:
+        await session.stop()
+        atexit.unregister(session.stop_sync)
+    if key == _current_owner.get():
+        _current_owner.set(None)
+
+
+async def stop_runtime_sandboxes(runtime_id: str) -> None:
+    for key in list(_sessions):
+        if key == runtime_id or key.startswith(runtime_id + ":"):
+            await stop_docker_sandbox(key)

@@ -1,0 +1,320 @@
+
+> openharness-research-web@0.1.0 test:e2e
+> playwright test
+
+[WebServer] INFO:     Started server process [64456]
+[WebServer] INFO:     Waiting for application startup.
+[WebServer] INFO:     Application startup complete.
+[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+
+Running 17 tests using 1 worker
+
+(node:64577) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   1 e2e/skills.spec.ts:3:1 › skill package metadata, selected entry loading and independent switches (4ms)
+(node:64592) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   2 e2e/workspace.spec.ts:3:1 › report project status and extended task states survive history refresh (4ms)
+(node:64613) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   3 e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: unresolved (4ms)
+(node:64627) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   4 e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: compatible (4ms)
+(node:64644) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   5 e2e/workspace.spec.ts:62:1 › long collapsed progress and website-only source rows survive refresh and copy (4ms)
+(node:64673) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   6 e2e/workspace.spec.ts:113:1 › session approvals skip repeated confirmations and remain isolated after refresh (3ms)
+(node:64716) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   7 e2e/workspace.spec.ts:169:1 › model configuration, skills, streaming, approvals, stop and recovery (4ms)
+(node:64730) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   8 e2e/workspace.spec.ts:259:1 › responsive navigation and empty skill search (4ms)
+(node:64750) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   9 e2e/workspace.spec.ts:272:1 › research progress, source footnotes and interrupt to replan (3ms)
+(node:64764) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  10 e2e/workspace.spec.ts:335:1 › blocked research task stays expanded with its blocker (4ms)
+(node:64797) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  11 e2e/workspace.spec.ts:368:1 › two levels of process disclosure, final answer and refresh recovery (4ms)
+(node:64841) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  12 e2e/workspace.spec.ts:401:1 › manual process disclosure survives completion and stopping preserves partial progress (5ms)
+(node:64857) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  13 e2e/workspace.spec.ts:421:1 › delete confirmation, failure retry, noncurrent and current session cleanup (4ms)
+(node:64877) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  14 e2e/workspace.spec.ts:462:1 › mobile deletion remains visible and returns to welcome (4ms)
+(node:64899) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  15 e2e/workspace.spec.ts:478:1 › disconnect marks pending activity interrupted and restores the saved process (4ms)
+(node:64912) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  16 e2e/workspace.spec.ts:515:1 › new stream content follows the bottom without interrupting reading above (4ms)
+(node:64947) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  17 e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation (3ms)
+
+
+  1) e2e/skills.spec.ts:3:1 › skill package metadata, selected entry loading and independent switches 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/skills-skill-package-metad-878aa-ng-and-independent-switches/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/skills-skill-package-metad-878aa-ng-and-independent-switches/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/skills-skill-package-metad-878aa-ng-and-independent-switches/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/workspace.spec.ts:3:1 › report project status and extended task states survive history refresh 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-report-project-s-da9c9-tes-survive-history-refresh/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-report-project-s-da9c9-tes-survive-history-refresh/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-report-project-s-da9c9-tes-survive-history-refresh/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: unresolved 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-conflict-outcome-039bf-history-restores-unresolved/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-conflict-outcome-039bf-history-restores-unresolved/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-conflict-outcome-039bf-history-restores-unresolved/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: compatible 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-conflict-outcome-06e25-history-restores-compatible/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-conflict-outcome-06e25-history-restores-compatible/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-conflict-outcome-06e25-history-restores-compatible/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5) e2e/workspace.spec.ts:62:1 › long collapsed progress and website-only source rows survive refresh and copy 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-long-collapsed-p-f1d5a-ws-survive-refresh-and-copy/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-long-collapsed-p-f1d5a-ws-survive-refresh-and-copy/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-long-collapsed-p-f1d5a-ws-survive-refresh-and-copy/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  6) e2e/workspace.spec.ts:113:1 › session approvals skip repeated confirmations and remain isolated after refresh 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-session-approval-299dd-main-isolated-after-refresh/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-session-approval-299dd-main-isolated-after-refresh/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-session-approval-299dd-main-isolated-after-refresh/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  7) e2e/workspace.spec.ts:169:1 › model configuration, skills, streaming, approvals, stop and recovery 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-model-configurat-68baa-approvals-stop-and-recovery/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-model-configurat-68baa-approvals-stop-and-recovery/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-model-configurat-68baa-approvals-stop-and-recovery/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  8) e2e/workspace.spec.ts:259:1 › responsive navigation and empty skill search ────────────────────
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-responsive-navigation-and-empty-skill-search/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-responsive-navigation-and-empty-skill-search/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-responsive-navigation-and-empty-skill-search/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  9) e2e/workspace.spec.ts:272:1 › research progress, source footnotes and interrupt to replan ─────
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-research-progres-d9f65-tes-and-interrupt-to-replan/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-research-progres-d9f65-tes-and-interrupt-to-replan/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-research-progres-d9f65-tes-and-interrupt-to-replan/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  10) e2e/workspace.spec.ts:335:1 › blocked research task stays expanded with its blocker ──────────
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-blocked-research-7b300-s-expanded-with-its-blocker/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-blocked-research-7b300-s-expanded-with-its-blocker/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-blocked-research-7b300-s-expanded-with-its-blocker/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  11) e2e/workspace.spec.ts:368:1 › two levels of process disclosure, final answer and refresh recovery 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-two-levels-of-pr-5b5a1-answer-and-refresh-recovery/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-two-levels-of-pr-5b5a1-answer-and-refresh-recovery/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-two-levels-of-pr-5b5a1-answer-and-refresh-recovery/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  12) e2e/workspace.spec.ts:401:1 › manual process disclosure survives completion and stopping preserves partial progress 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-manual-process-d-5d813--preserves-partial-progress/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-manual-process-d-5d813--preserves-partial-progress/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-manual-process-d-5d813--preserves-partial-progress/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  13) e2e/workspace.spec.ts:421:1 › delete confirmation, failure retry, noncurrent and current session cleanup 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-delete-confirmat-d7338-and-current-session-cleanup/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-delete-confirmat-d7338-and-current-session-cleanup/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-delete-confirmat-d7338-and-current-session-cleanup/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  14) e2e/workspace.spec.ts:462:1 › mobile deletion remains visible and returns to welcome ─────────
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-mobile-deletion--5bf65-ible-and-returns-to-welcome/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-mobile-deletion--5bf65-ible-and-returns-to-welcome/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-mobile-deletion--5bf65-ible-and-returns-to-welcome/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  15) e2e/workspace.spec.ts:478:1 › disconnect marks pending activity interrupted and restores the saved process 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-disconnect-marks-6761e--restores-the-saved-process/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-disconnect-marks-6761e--restores-the-saved-process/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-disconnect-marks-6761e--restores-the-saved-process/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  16) e2e/workspace.spec.ts:515:1 › new stream content follows the bottom without interrupting reading above 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-new-stream-conte-c49ef--interrupting-reading-above/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-new-stream-conte-c49ef--interrupting-reading-above/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-new-stream-conte-c49ef--interrupting-reading-above/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  17) e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation 
+
+    Error: browserType.launch: Failed to launch chromium because executable doesn't exist at /home/jason/.cache/ms-playwright/chromium-1140/chrome-linux/chrome
+
+    Error Context: test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  17 failed
+    e2e/skills.spec.ts:3:1 › skill package metadata, selected entry loading and independent switches 
+    e2e/workspace.spec.ts:3:1 › report project status and extended task states survive history refresh 
+    e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: unresolved 
+    e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: compatible 
+    e2e/workspace.spec.ts:62:1 › long collapsed progress and website-only source rows survive refresh and copy 
+    e2e/workspace.spec.ts:113:1 › session approvals skip repeated confirmations and remain isolated after refresh 
+    e2e/workspace.spec.ts:169:1 › model configuration, skills, streaming, approvals, stop and recovery 
+    e2e/workspace.spec.ts:259:1 › responsive navigation and empty skill search ─────────────────────
+    e2e/workspace.spec.ts:272:1 › research progress, source footnotes and interrupt to replan ──────
+    e2e/workspace.spec.ts:335:1 › blocked research task stays expanded with its blocker ────────────
+    e2e/workspace.spec.ts:368:1 › two levels of process disclosure, final answer and refresh recovery 
+    e2e/workspace.spec.ts:401:1 › manual process disclosure survives completion and stopping preserves partial progress 
+    e2e/workspace.spec.ts:421:1 › delete confirmation, failure retry, noncurrent and current session cleanup 
+    e2e/workspace.spec.ts:462:1 › mobile deletion remains visible and returns to welcome ───────────
+    e2e/workspace.spec.ts:478:1 › disconnect marks pending activity interrupted and restores the saved process 
+    e2e/workspace.spec.ts:515:1 › new stream content follows the bottom without interrupting reading above 
+    e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation 

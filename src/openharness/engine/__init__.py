@@ -34,8 +34,14 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
-    if name in {"ConversationMessage", "ImageBlock", "TextBlock", "ToolResultBlock", "ToolUseBlock"}:
+def __getattr__(name: str) -> object:
+    if name in {
+        "ConversationMessage",
+        "ImageBlock",
+        "TextBlock",
+        "ToolResultBlock",
+        "ToolUseBlock",
+    }:
         from openharness.engine.messages import (
             ConversationMessage,
             ImageBlock,

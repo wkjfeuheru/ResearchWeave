@@ -1,5 +1,9 @@
 """Independent model judgment with exact answer quotes and source references."""
 
+from __future__ import annotations
+from openharness.evaluation.models import RunArtifact, EvalCase
+from openharness.api.client import SupportsStreamingMessages
+
 import json
 import re
 import time
@@ -104,12 +108,12 @@ CitationReview.quote 必须来自 sources 中该 source_id 的原文，不能从
 """
 
 
-def report_marker(name, marker):
+def report_marker(name: str, marker: str) -> str:
     return f"[report:{fingerprint(name)[:8]}:{marker[1:-1]}]"
 
 
-def evaluated_text(artifact):
-    groups = {}
+def evaluated_text(artifact: RunArtifact) -> str:
+    groups: dict[str, tuple[str, str]] = {}
     priority = {".md": 0, ".docx": 1, ".xlsx": 2, ".json": 3}
     for name, content in artifact.artifacts.items():
         meta = artifact.artifact_metadata.get(name)
@@ -135,7 +139,7 @@ def evaluated_text(artifact):
     )
 
 
-def citation_map(artifact):
+def citation_map(artifact: RunArtifact) -> dict[str, str]:
     state = artifact.research_state
     answers = list(state.get("answers", {}).values())
     latest = next(
@@ -160,7 +164,14 @@ def citation_map(artifact):
     return result
 
 
-async def judge_case(case, artifact, client, model, *, context_window_tokens=None):
+async def judge_case(
+    case: EvalCase,
+    artifact: RunArtifact,
+    client: SupportsStreamingMessages,
+    model: str,
+    *,
+    context_window_tokens: int | None = None,
+) -> JudgeResult:
     artifact.provenance.update(
         {
             "judge_model": model,
@@ -276,8 +287,10 @@ async def judge_case(case, artifact, client, model, *, context_window_tokens=Non
     finally:
         artifact.provenance["judge_elapsed_ms"] = (time.monotonic() - started) * 1000
 
+    raise JudgeOutputError("Judge did not produce a validated result")
 
-def exact_quote(quote, original):
+
+def exact_quote(quote: str, original: str) -> str:
     """Recover only whitespace formatting differences; never accept paraphrases."""
     if not quote or quote in original:
         return quote
@@ -288,9 +301,17 @@ def exact_quote(quote, original):
     return match.group() if match else quote
 
 
-def located_quote(review, original, *, source=False):
-    start = review.source_line if source else review.answer_line
-    end = review.source_end_line if source else review.answer_end_line
+def located_quote(
+    review: RequirementReview | CitationReview | ClaimReview, original: str, *, source: bool = False
+) -> str:
+    if source:
+        if not isinstance(review, CitationReview):
+            raise JudgeOutputError("Source review requires citation coordinates")
+        start, end = review.source_line, review.source_end_line
+    else:
+        if isinstance(review, CitationReview):
+            raise JudgeOutputError("Answer review requires answer coordinates")
+        start, end = review.answer_line, review.answer_end_line
     if start is None:
         if end is not None:
             raise JudgeOutputError("裁判定位缺少起始行")
@@ -302,7 +323,7 @@ def located_quote(review, original, *, source=False):
     return "\n".join(lines[start - 1 : end])
 
 
-def validate_judgment(case, artifact, response):
+def validate_judgment(case: EvalCase, artifact: RunArtifact, response: str) -> JudgeResult:
     final = re.sub(r"^```(?:json)?\s*|\s*```$", "", response.strip())
     result = JudgeResult.model_validate_json(final)
     text = evaluated_text(artifact)
@@ -346,10 +367,11 @@ def validate_judgment(case, artifact, response):
             ):
                 continue
             citation.quote = located_quote(
-                citation, artifact.sources.get(citation.source_id, ""), source=True
+                citation, artifact.sources.get(citation.source_id or "", ""), source=True
             )
             if (
-                citation.source_id not in known
+                citation.source_id is None
+                or citation.source_id not in known
                 or (citation.supported and not citation.quote)
                 or citation.quote not in artifact.sources[citation.source_id]
             ):

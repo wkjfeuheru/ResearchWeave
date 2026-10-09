@@ -1,15 +1,18 @@
 """Anthropic API client wrapper with retry logic."""
 
 from __future__ import annotations
+from typing import Callable, TYPE_CHECKING
 
-import asyncio
+if TYPE_CHECKING:
+    from openharness.config.context_components import ContextComponentsSettings
+
 import json
 import logging
 import uuid
 from dataclasses import dataclass, field, replace
-from typing import Any, AsyncIterator, Callable, Protocol
+from typing import Any, AsyncIterator, Protocol
 
-from anthropic import APIError, APIStatusError, AsyncAnthropic
+from anthropic import APIError, AsyncAnthropic
 
 from openharness.api.errors import (
     AuthenticationFailure,
@@ -48,6 +51,13 @@ class ApiMessageRequest:
     effort: str | None = None
     context_window_tokens: int | None = None
     prepared_payload: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+    context_components: "ContextComponentsSettings | None" = field(
+        default=None, repr=False, compare=False
+    )
+    current_user_message_id: str | None = None
+    attempt_callback: Callable[[dict[str, Any]], None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,10 @@ class ApiRetryEvent:
     attempt: int
     max_attempts: int
     delay_seconds: float
+    request_id: str = ""
+    attempt_id: str = ""
+    error_category: str = "unknown"
+    usage_status: str = "unknown"
 
 
 ApiStreamEvent = ApiTextDeltaEvent | ApiMessageCompleteEvent | ApiRetryEvent
@@ -82,39 +96,20 @@ ApiStreamEvent = ApiTextDeltaEvent | ApiMessageCompleteEvent | ApiRetryEvent
 class SupportsStreamingMessages(Protocol):
     """Protocol used by the query engine in tests and production."""
 
-    async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
+    def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield streamed events for the request."""
 
 
 def _is_retryable(exc: Exception) -> bool:
-    """Check if an exception is retryable."""
-    if isinstance(exc, APIStatusError):
-        return exc.status_code in RETRYABLE_STATUS_CODES
-    if isinstance(exc, APIError):
-        return True  # Network errors are retryable
-    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
-        return True
-    return False
+    from openharness.api.retry import classify_error
+
+    return classify_error(exc) in {"transport", "rate_limit", "unavailable"}
 
 
 def _get_retry_delay(attempt: int, exc: Exception | None = None) -> float:
-    """Calculate delay with exponential backoff and jitter."""
-    import random
+    from openharness.api.retry import retry_delay
 
-    # Check for Retry-After header
-    if isinstance(exc, APIStatusError):
-        retry_after = getattr(exc, "headers", {})
-        if hasattr(retry_after, "get"):
-            val = retry_after.get("retry-after")
-            if val:
-                try:
-                    return min(float(val), MAX_DELAY)
-                except (ValueError, TypeError):
-                    pass
-
-    delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
-    jitter = random.uniform(0, delay * 0.25)
-    return delay + jitter
+    return retry_delay(attempt, exc)
 
 
 class AnthropicApiClient:
@@ -138,7 +133,7 @@ class AnthropicApiClient:
         self._client = self._create_client()
 
     def _create_client(self) -> AsyncAnthropic:
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, Any] = {"max_retries": 0}
         if self._api_key:
             kwargs["api_key"] = self._api_key
         if self._auth_token:
@@ -167,42 +162,20 @@ class AnthropicApiClient:
     async def stream_message(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         """Yield text deltas and the final assistant message with retry on transient errors."""
         from openharness.services.context_budget import checked_request
+
         request = checked_request(self, request)
-        last_error: Exception | None = None
+        from openharness.api.retry import stream_with_retry
 
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                self._refresh_client_auth()
-                async for event in self._stream_once(request):
-                    yield event
-                return  # Success
-            except OpenHarnessApiError:
-                raise  # Auth errors are not retried
-            except Exception as exc:
-                last_error = exc
-                if attempt >= MAX_RETRIES or not _is_retryable(exc):
-                    if isinstance(exc, APIError):
-                        raise _translate_api_error(exc) from exc
-                    raise RequestFailure(str(exc)) from exc
-
-                delay = _get_retry_delay(attempt, exc)
-                status = getattr(exc, "status_code", "?")
-                log.warning(
-                    "API request failed (attempt %d/%d, status=%s), retrying in %.1fs: %s",
-                    attempt + 1, MAX_RETRIES + 1, status, delay, exc,
-                )
-                yield ApiRetryEvent(
-                    message=str(exc),
-                    attempt=attempt + 1,
-                    max_attempts=MAX_RETRIES + 1,
-                    delay_seconds=delay,
-                )
-                await asyncio.sleep(delay)
-
-        if last_error is not None:
-            if isinstance(last_error, APIError):
-                raise _translate_api_error(last_error) from last_error
-            raise RequestFailure(str(last_error)) from last_error
+        async for event in stream_with_retry(
+            self._stream_once,
+            request,
+            translate=lambda exc: (
+                _translate_api_error(exc) if isinstance(exc, APIError) else RequestFailure(str(exc))
+            ),
+            max_attempts=MAX_RETRIES + 1,
+            before_attempt=self._refresh_client_auth,
+        ):
+            yield event
 
     def prepare_request(self, request: ApiMessageRequest) -> ApiMessageRequest:
         """Build once for both budgeting and transmission."""
@@ -216,9 +189,7 @@ class AnthropicApiClient:
         if self._claude_oauth:
             attribution = claude_attribution_header()
             params["system"] = (
-                f"{attribution}\n{params['system']}"
-                if params.get("system")
-                else attribution
+                f"{attribution}\n{params['system']}" if params.get("system") else attribution
             )
         if request.tools:
             params["tools"] = request.tools
@@ -239,7 +210,10 @@ class AnthropicApiClient:
         return replace(request, prepared_payload=params)
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
-        params = (request if request.prepared_payload is not None else self.prepare_request(request)).prepared_payload
+        params = (
+            request if request.prepared_payload is not None else self.prepare_request(request)
+        ).prepared_payload
+        assert params is not None
         try:
             stream_api = self._client.beta.messages if self._claude_oauth else self._client.messages
             async with stream_api.stream(**params) as stream:
@@ -254,10 +228,8 @@ class AnthropicApiClient:
                         yield ApiTextDeltaEvent(text=text)
 
                 final_message = await stream.get_final_message()
-        except APIError as exc:
-            if isinstance(exc, APIStatusError) and exc.status_code in RETRYABLE_STATUS_CODES:
-                raise  # Let retry logic handle it
-            raise _translate_api_error(exc) from exc
+        except APIError:
+            raise  # Classified once by the shared retry boundary.
 
         usage = getattr(final_message, "usage", None)
         yield ApiMessageCompleteEvent(

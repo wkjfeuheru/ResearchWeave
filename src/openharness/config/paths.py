@@ -75,14 +75,6 @@ def get_sessions_dir() -> Path:
     return sessions_dir
 
 
-
-
-
-
-
-
-
-
 def get_project_config_dir(cwd: str | Path) -> Path:
     """Return the per-project .openharness directory."""
     project_dir = Path(cwd).resolve() / ".openharness"

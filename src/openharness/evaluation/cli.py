@@ -3,6 +3,8 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Iterable
+from openharness.evaluation.models import EvalCase, RunArtifact
 from uuid import uuid4
 
 import typer
@@ -13,7 +15,7 @@ app = typer.Typer(name="eval", help="运行投研 Agent 四维评测和 Langfuse
 
 
 @app.command("validate")
-def validate(dataset: Path = typer.Option(DEFAULT_DATASET)):
+def validate(dataset: Path = typer.Option(DEFAULT_DATASET)) -> None:
     result = validate_dataset(dataset)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
     if not result["valid"]:
@@ -21,7 +23,9 @@ def validate(dataset: Path = typer.Option(DEFAULT_DATASET)):
 
 
 @app.command("sync")
-def sync(dataset: Path | None = typer.Option(None), results: Path | None = typer.Option(None)):
+def sync(
+    dataset: Path | None = typer.Option(None), results: Path | None = typer.Option(None)
+) -> None:
     from openharness.evaluation.langfuse_backend import (
         connect,
         import_sdk_experiments,
@@ -37,10 +41,10 @@ def sync(dataset: Path | None = typer.Option(None), results: Path | None = typer
             raise ValueError("请先修复数据集静态校验错误")
         client = connect()
         try:
-            name = sync_dataset(client, load_cases(dataset), version_id=checked["version"])
+            name = sync_dataset(client, load_cases(dataset), version_id=str(checked["version"]))
             if results:
 
-                def persist(artifact):
+                def persist(artifact: RunArtifact) -> None:
                     write_artifact(
                         results
                         / "results"
@@ -52,7 +56,7 @@ def sync(dataset: Path | None = typer.Option(None), results: Path | None = typer
                     client,
                     read_results(results),
                     load_cases(dataset),
-                    version_id=checked["version"],
+                    version_id=str(checked["version"]),
                     persist=persist,
                 )
                 typer.echo("补传状态：" + json.dumps(states, ensure_ascii=False))
@@ -66,7 +70,15 @@ def sync(dataset: Path | None = typer.Option(None), results: Path | None = typer
         raise typer.Exit(1) from None
 
 
-def select_cases(cases, *, limit=None, ids=(), environment=None, split=None, representative=False):
+def select_cases(
+    cases: list[EvalCase],
+    *,
+    limit: int | None = None,
+    ids: Iterable[str] = (),
+    environment: str | None = None,
+    split: str | None = None,
+    representative: bool = False,
+) -> list[EvalCase]:
     cases = [
         c
         for c in cases
@@ -110,7 +122,7 @@ def run(
     context_window_tokens: int | None = typer.Option(None, min=1024),
     judge_context_window_tokens: int | None = typer.Option(None, min=1024),
     resume: Path | None = typer.Option(None),
-):
+) -> None:
     from openharness.evaluation.runner import ExperimentRunner
     from openharness.evaluation.report import write_report
 
@@ -189,7 +201,7 @@ def run(
                 client.shutdown()
         else:
 
-            async def execute():
+            async def execute() -> None:
                 for repetition in range(1, repetitions + 1):
                     for case in selected:
                         if (case.id, repetition) in done:
@@ -219,7 +231,7 @@ def score(
     judge_profile: str = typer.Option(...),
     dataset: Path | None = typer.Option(None),
     judge_context_window_tokens: int | None = typer.Option(None, min=1024),
-):
+) -> None:
     from openharness.evaluation.judge import judge_case, JudgeOutputError
     from openharness.evaluation.report import read_results, write_report
     from openharness.evaluation.runner import resolve_profile, write_artifact
@@ -242,7 +254,7 @@ def score(
     if any(a.provenance.get("model") == settings.model for a in artifacts):
         raise typer.BadParameter("裁判必须与被测模型不同")
 
-    async def execute():
+    async def execute() -> None:
         from openharness.evaluation.models import RunArtifact
         from openharness.evaluation.observer import RecordingObserver
         from openharness.utils.redaction import evaluation_credentials
@@ -276,7 +288,9 @@ def score(
             finally:
                 if client:
                     try:
-                        await client.close()
+                        close = getattr(client, "close", None)
+                        if close:
+                            await close()
                     except Exception:
                         artifact.provenance["judge_close_error"] = "裁判连接关闭失败"
             artifact = RunArtifact.model_validate(cleaner.clean(artifact.model_dump()))
@@ -294,7 +308,7 @@ def score(
 
 
 @app.command("report")
-def report(results: Path = typer.Argument(...), compare: Path | None = typer.Option(None)):
+def report(results: Path = typer.Argument(...), compare: Path | None = typer.Option(None)) -> None:
     from openharness.evaluation.report import compare_runs, read_results, write_report
 
     artifacts = read_results(results)

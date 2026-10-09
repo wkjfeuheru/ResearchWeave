@@ -1,9 +1,17 @@
 """Shell command execution tool."""
 
 from __future__ import annotations
+from openharness.utils.session_files import FileManifest
+from typing import TYPE_CHECKING
+from openharness.engine.metadata import ExecutionLease
+
+if TYPE_CHECKING:
+    from openharness.research.runtime import ResearchAgentRuntime
 
 import asyncio
 import os
+import json
+from uuid import uuid4
 from pathlib import Path
 from typing import Iterable
 
@@ -11,7 +19,8 @@ from pydantic import BaseModel, Field
 
 from openharness.sandbox import SandboxUnavailableError
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from openharness.utils.shell import create_shell_subprocess
+from openharness.utils.shell import create_shell_subprocess, terminate_shell_process
+from openharness.sandbox.policy import ExecutionOwner, report_settings, report_environment
 
 
 _READ_REMAINING_OUTPUT_TIMEOUT_SECONDS = 2.0
@@ -25,15 +34,29 @@ class BashToolInput(BaseModel):
     timeout_seconds: int = Field(default=600, ge=1, le=600)
 
 
-class BashTool(BaseTool):
+class BashTool(BaseTool[BashToolInput]):
     """Execute a shell command with stdout/stderr capture."""
 
     name = "bash"
+    contract = {
+        "name": "bash",
+        "source": "builtin",
+        "effect": "unknown",
+        "required_capabilities": ("shell.execute",),
+        "resources_write": ("*",),
+    }
     description = "Run a shell command in the research workspace."
     input_model = BashToolInput
 
     async def execute(self, arguments: BashToolInput, context: ToolExecutionContext) -> ToolResult:
         cwd = Path(arguments.cwd).expanduser() if arguments.cwd else context.cwd
+        if context.workspace_runtime():
+            from openharness.research.errors import ResearchError
+
+            try:
+                cwd = context.resolve_path(arguments.cwd)
+            except (ResearchError, OSError) as exc:
+                return ToolResult(output=str(exc), is_error=True)
         preflight_error = _preflight_interactive_command(arguments.command)
         if preflight_error is not None:
             return ToolResult(
@@ -41,40 +64,98 @@ class BashTool(BaseTool):
                 is_error=True,
                 metadata={"interactive_required": True},
             )
-        env = dict(os.environ)
-        # Set per-process context; never mutate shared environment across sessions.
-        env.pop("OPENHARNESS_RESEARCH_SESSION_DIR", None)
-        env.pop("OPENHARNESS_RESEARCH_TASK_ID", None)
-        store = context.metadata.get("research_store")
-        if store is not None:
-            env["OPENHARNESS_RESEARCH_SESSION_DIR"] = str(store.directory)
-            task_id = store.load().research_state.current_task_id
-            if task_id:
-                env["OPENHARNESS_RESEARCH_TASK_ID"] = task_id
+        runtime = context.workspace_runtime()
+        settings = context.settings
+        owner = None
+        execution = context.metadata.get("research_execution")
+        if runtime:
+            from openharness.config import Settings
+            from openharness.research.errors import ResearchError
+
+            project = runtime.store.load().project
+            assert project is not None
+            workspace = runtime.resolve_workspace(project.id)
+            # Direct tool callers without trusted configuration also fail closed.
+            try:
+                settings = report_settings(settings or Settings(), workspace)
+            except (SandboxUnavailableError, OSError) as exc:
+                return ToolResult(output=str(exc), is_error=True)
+            owner = ExecutionOwner(
+                context.runtime_id or "direct",
+                project.id,
+                execution["id"] if execution else uuid4().hex,
+                workspace,
+            )
+            env = report_environment(workspace)
+        else:
+            env = dict(os.environ)
+            for key in (
+                "OPENHARNESS_RESEARCH_SESSION_DIR",
+                "OPENHARNESS_RESEARCH_TASK_ID",
+                "OPENHARNESS_RESEARCH_EXECUTION",
+            ):
+                env.pop(key, None)
+            store = context.metadata.get("research_store")
+            if store is not None:
+                env["OPENHARNESS_RESEARCH_SESSION_DIR"] = str(store.directory)
+                task_id = store.load().research_state.current_task_id
+                if task_id:
+                    env["OPENHARNESS_RESEARCH_TASK_ID"] = task_id
         process: asyncio.subprocess.Process | None = None
+        output_buffer = bytearray()
         try:
             process = await create_shell_subprocess(
                 arguments.command,
                 cwd=cwd,
+                settings=settings,
+                owner=owner,
                 env=env,
-                prefer_pty=True,
+                prefer_pty=owner is None,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
+
+            async def capture() -> None:
+                assert process is not None
+                if process.stdout:
+                    while chunk := await process.stdout.read(65536):
+                        # Drain continuously even after reaching the display bound.
+                        if len(output_buffer) < 1024 * 1024:
+                            output_buffer.extend(chunk)
+
+            reader = asyncio.create_task(capture())
+            try:
+                await asyncio.wait_for(process.wait(), timeout=arguments.timeout_seconds)
+                try:
+                    await asyncio.wait_for(reader, _READ_REMAINING_OUTPUT_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
+            finally:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+            if owner and settings and settings.sandbox.backend == "docker":
+                from openharness.sandbox.session import stop_docker_sandbox
+
+                await asyncio.shield(stop_docker_sandbox(owner.key))
+            metadata: dict[str, object] = {"returncode": process.returncode}
+            if runtime and execution and process.returncode == 0:
+                try:
+                    metadata["exported_files"] = _register_exports(
+                        output_buffer, context, runtime, execution
+                    )
+                except (ResearchError, ValueError, OSError) as exc:
+                    return ToolResult(output=f"Export registration rejected: {exc}", is_error=True)
+            return ToolResult(
+                output=_format_output(output_buffer),
+                is_error=process.returncode != 0,
+                metadata=metadata,
+            )
         except SandboxUnavailableError as exc:
             return ToolResult(output=str(exc), is_error=True)
-        except asyncio.CancelledError:
-            if process is not None:
-                await _terminate_process(process, force=False)
-            raise
-
-        try:
-            await asyncio.wait_for(process.wait(), timeout=arguments.timeout_seconds)
         except asyncio.TimeoutError:
-            output_buffer = await _drain_available_output(process.stdout)
-            await _terminate_process(process, force=True)
-            output_buffer.extend(await _read_remaining_output(process))
+            if process:
+                await terminate_shell_process(process, force=True)
             return ToolResult(
                 output=_format_timeout_output(
                     output_buffer,
@@ -82,34 +163,66 @@ class BashTool(BaseTool):
                     timeout_seconds=arguments.timeout_seconds,
                 ),
                 is_error=True,
-                metadata={"returncode": process.returncode, "timed_out": True},
+                metadata={"returncode": process.returncode if process else None, "timed_out": True},
             )
         except asyncio.CancelledError:
-            await _terminate_process(process, force=False)
+            if process:
+                await terminate_shell_process(process)
             raise
+        finally:
+            if owner and settings and settings.sandbox.backend == "docker":
+                from openharness.sandbox.session import stop_docker_sandbox
 
-        output_buffer = await _read_remaining_output(process)
-        text = _format_output(output_buffer)
-        return ToolResult(
-            output=text,
-            is_error=process.returncode != 0,
-            metadata={"returncode": process.returncode},
-        )
+                await asyncio.shield(stop_docker_sandbox(owner.key))
 
 
 async def _terminate_process(process: asyncio.subprocess.Process, *, force: bool) -> None:
-    if process.returncode is not None:
-        return
-    if force:
-        process.kill()
-        await process.wait()
-        return
-    process.terminate()
-    try:
-        await asyncio.wait_for(process.wait(), timeout=2.0)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+    await terminate_shell_process(process, force=force)
+
+
+def _register_exports(
+    output: bytearray,
+    context: ToolExecutionContext,
+    runtime: ResearchAgentRuntime,
+    execution: ExecutionLease,
+) -> list[FileManifest]:
+    """Import declarations on the host, only while the execution lease remains valid."""
+    from openharness.research.errors import ResearchError
+    from openharness.utils.file_lock import exclusive_file_lock
+    from openharness.utils.session_files import SessionFiles
+
+    declarations = []
+    for line in output.decode("utf-8", errors="replace").splitlines():
+        try:
+            packet = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(packet, dict) and isinstance(packet.get("files"), list):
+            for value in packet["files"]:
+                if not isinstance(value, str):
+                    raise ValueError("Export paths must be strings")
+                path = context.resolve_path(value)
+                if not any(
+                    path.is_relative_to(context.cwd / directory)
+                    for directory in ("reports", "artifacts")
+                ):
+                    raise ResearchError("Export must belong to current workspace reports/artifacts")
+                if not path.is_file() or path.stat().st_size > 30 * 1024 * 1024:
+                    raise ResearchError("Export file missing or too large")
+                declarations.append((path, str(packet.get("status", "candidate"))))
+    if len(declarations) > 50:
+        raise ValueError("Too many exported files")
+    with exclusive_file_lock(runtime.store.lock):
+        memory = runtime.store._load()
+        active = memory.executions.get(execution["id"])
+        if active is None or not runtime.repository.execution_valid(memory, active):
+            raise ResearchError("Export execution was revoked")
+        return [
+            SessionFiles(runtime.store.directory).register(
+                path, task_id=active.task_id, status=status, kind="export", execution=execution
+            )
+            for path, status in declarations
+        ]
 
 
 async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearray:

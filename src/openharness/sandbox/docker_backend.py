@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import hashlib
+import re
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,11 +68,17 @@ class DockerSandboxSession:
     settings: Settings
     session_id: str
     cwd: Path
+    report: bool = False
     _container_name: str = field(init=False)
     _running: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
-        self._container_name = f"openharness-sandbox-{self.session_id}"
+        suffix = (
+            self.session_id
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.session_id)
+            else hashlib.sha256(self.session_id.encode()).hexdigest()[:24]
+        )
+        self._container_name = "openharness-sandbox-" + suffix
 
     @property
     def container_name(self) -> str:
@@ -113,7 +122,36 @@ class DockerSandboxSession:
             argv.extend(["--memory", docker_cfg.memory_limit])
 
         # Bind-mount project directory at the same path
-        argv.extend(["-v", f"{cwd_str}:{cwd_str}"])
+        if self.report:
+            argv.extend(
+                [
+                    "--read-only",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--user",
+                    f"{os.getuid()}:{os.getgid()}",
+                    "--pids-limit",
+                    "128",
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,size=64m",
+                ]
+            )
+            argv.extend(["-v", f"{cwd_str}:{cwd_str}:ro"])
+            runtime_package = Path(__file__).resolve().parents[1]
+            argv.extend(
+                [
+                    "-v",
+                    f"{runtime_package}:{runtime_package}:ro",
+                    "-e",
+                    f"PYTHONPATH={runtime_package.parent}",
+                ]
+            )
+            for allowed in sandbox.filesystem.allow_write:
+                argv.extend(["-v", f"{allowed}:{allowed}:rw"])
+        else:
+            argv.extend(["-v", f"{cwd_str}:{cwd_str}"])
         argv.extend(["-w", cwd_str])
 
         # Extra mounts
@@ -132,9 +170,7 @@ class DockerSandboxSession:
         from openharness.sandbox.docker_image import ensure_image_available
 
         docker_cfg = self.settings.sandbox.docker
-        available = await ensure_image_available(
-            docker_cfg.image, docker_cfg.auto_build_image
-        )
+        available = await ensure_image_available(docker_cfg.image, docker_cfg.auto_build_image)
         if not available:
             raise SandboxUnavailableError(
                 f"Docker image {docker_cfg.image!r} is not available and "
@@ -144,6 +180,7 @@ class DockerSandboxSession:
         argv = self._build_run_argv()
         logger.info("Starting Docker sandbox: %s", " ".join(argv))
 
+        self._running = True
         process = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
@@ -164,11 +201,11 @@ class DockerSandboxSession:
         docker = shutil.which("docker") or "docker"
         try:
             process = await asyncio.create_subprocess_exec(
-                docker,
-                "stop",
-                "-t",
-                "5",
-                self._container_name,
+                *(
+                    [docker, "rm", "-f", self._container_name]
+                    if self.report
+                    else [docker, "stop", "-t", "5", self._container_name]
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -186,7 +223,9 @@ class DockerSandboxSession:
         docker = shutil.which("docker") or "docker"
         try:
             subprocess.run(
-                [docker, "stop", "-t", "3", self._container_name],
+                [docker, "rm", "-f", self._container_name]
+                if self.report
+                else [docker, "stop", "-t", "3", self._container_name],
                 capture_output=True,
                 timeout=10,
             )
@@ -229,4 +268,5 @@ class DockerSandboxSession:
             stdin=stdin,
             stdout=stdout,
             stderr=stderr,
+            start_new_session=os.name != "nt",
         )

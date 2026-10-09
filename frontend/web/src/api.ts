@@ -19,11 +19,10 @@ export interface Skill {
   label: string;
   description: string;
   version: string;
-  author: string;
   enabled: boolean;
   category: string;
   example: string;
-  skills: { name: string; description: string; content: string; metadata: { status: string; scope: string; permissions: string[]; required_tools: string[]; optional_tools: string[]; compatible_models: string[]; content_hash: string; deprecation: Record<string, string> | null } }[];
+  skills: { name: string; description: string; enabled: boolean; metadata: { owner: string; status: string; scope: string; permissions: string[]; required_tools: string[]; optional_tools: string[]; compatible_models: string[]; content_hash: string; deprecation: Record<string, string> | null } }[];
 }
 
 export interface SessionFile {
@@ -78,11 +77,14 @@ export interface ResearchProgress {
   plan_id: string | null;
   title: string;
   current_task_id: string | null;
-  tasks: { id: string; title: string; status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled';
+  tasks: { id: string; title: string; status: 'pending' | 'ready' | 'in_progress' | 'validating' | 'completed' | 'blocked' | 'failed' | 'cancelled';
     blocker: string; completion_note: string; updated_at: string; started_at: string | null; completed_at: string | null }[];
   completed: number;
   total: number;
   replan_required: boolean;
+  project_status?: 'created' | 'planning' | 'running' | 'replanning' | 'suspended' | 'validating' | 'completed' | 'failed' | 'cancelled';
+  plan_revision?: number;
+  objective_revision?: number;
   conflicts?: { id: string; question: string; core: boolean;
     status: 'open' | 'investigating' | 'awaiting_review' | 'resolved' | 'unresolved' | 'interrupted' }[];
 }

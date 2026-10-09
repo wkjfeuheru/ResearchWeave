@@ -1,6 +1,10 @@
 """Persistent browser conversations and research progress."""
 
 from __future__ import annotations
+from typing import cast
+from openharness.api.usage import UsageSnapshot
+from openharness.engine.metadata import ExecutionMetadata
+from openharness.web.types import WebSessionRecord
 
 import json
 import re
@@ -33,9 +37,9 @@ class WebSessionBackend:
             raise ValueError("无效的会话 ID")
         return self.directory / f"{session_id}.json"
 
-    def create(self, profile_id: str) -> dict:
+    def create(self, profile_id: str) -> WebSessionRecord:
         now = time.time()
-        record = {
+        record: WebSessionRecord = {
             "session_id": uuid4().hex[:12],
             "source": "web",
             "cwd": self.cwd,
@@ -52,7 +56,7 @@ class WebSessionBackend:
         self.write(record)
         return record
 
-    def write(self, record: dict) -> None:
+    def write(self, record: WebSessionRecord) -> None:
         atomic_write_text(
             self._path(record["session_id"]),
             json.dumps(record, ensure_ascii=False, indent=2) + "\n",
@@ -71,13 +75,13 @@ class WebSessionBackend:
     def save_snapshot(
         self,
         *,
-        cwd,
-        model,
-        system_prompt,
-        messages,
-        usage,
-        session_id=None,
-        tool_metadata=None,
+        cwd: str | Path,
+        model: str,
+        system_prompt: str,
+        messages: list[ConversationMessage],
+        usage: UsageSnapshot,
+        session_id: str | None = None,
+        tool_metadata: ExecutionMetadata | None = None,
     ) -> Path:
         record = self.load_by_id(cwd, session_id) if session_id else None
         if record is None:
@@ -85,19 +89,23 @@ class WebSessionBackend:
         messages = sanitize_conversation_messages(messages)
         first_user = next((m.text for m in messages if m.role == "user" and m.text), "")
         record.update(
-            model=model,
-            system_prompt=system_prompt,
-            messages=[m.model_dump(mode="json") for m in messages],
-            usage=usage.model_dump(mode="json"),
-            tool_metadata=_persistable_tool_metadata(tool_metadata),
-            summary=first_user[:60] or record["summary"],
-            message_count=len(messages),
-            updated_at=time.time(),
+            {
+                "model": model,
+                "system_prompt": system_prompt,
+                "messages": [m.model_dump(mode="json") for m in messages],
+                "usage": usage.model_dump(mode="json"),
+                "tool_metadata": _persistable_tool_metadata(tool_metadata),
+                "summary": first_user[:60] or record["summary"],
+                "message_count": len(messages),
+                "updated_at": time.time(),
+            }
         )
         self.write(record)
         return self._path(record["session_id"])
 
-    def load_by_id(self, cwd, session_id, *, include_research_progress: bool = True) -> dict | None:
+    def load_by_id(
+        self, cwd: str | Path, session_id: str, *, include_research_progress: bool = True
+    ) -> WebSessionRecord | None:
         path = self._path(session_id)
         if not path.exists():
             return None
@@ -111,12 +119,14 @@ class WebSessionBackend:
             research = ResearchStore(self.cwd, session_id)
             memory = research.load()
             if record.get("display_messages"):
-                record["display_messages"] = project_answer_rows(record["display_messages"], memory.answers)
+                record["display_messages"] = project_answer_rows(
+                    record["display_messages"], memory.answers
+                )
             if include_research_progress:
                 record["research_progress"] = research.progress(memory)
-        return record
+        return cast(WebSessionRecord, record)
 
-    def list_snapshots(self, cwd, limit=100) -> list[dict]:
+    def list_snapshots(self, cwd: str | Path, limit: int = 100) -> list[WebSessionRecord]:
         records = []
         for path in self.directory.glob("*.json"):
             try:
@@ -127,10 +137,10 @@ class WebSessionBackend:
                 continue
         return sorted(records, key=lambda r: r["updated_at"], reverse=True)[:limit]
 
-    def load_latest(self, cwd) -> dict | None:
+    def load_latest(self, cwd: str | Path) -> WebSessionRecord | None:
         return next(iter(self.list_snapshots(cwd, limit=1)), None)
 
-    def export_markdown(self, *, cwd, messages) -> Path:
+    def export_markdown(self, *, cwd: str | Path, messages: list[ConversationMessage]) -> Path:
         path = self.directory / "conversation.md"
         atomic_write_text(path, "\n\n".join(f"## {m.role}\n\n{m.text}" for m in messages))
         return path

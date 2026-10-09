@@ -7,6 +7,7 @@ config; evaluation files contain only fixtures, generated results and audits.
 from __future__ import annotations
 
 import argparse
+from openharness.utils.async_timeout import timeout as async_timeout
 import asyncio
 import json
 import os
@@ -28,7 +29,12 @@ from openharness.web.catalog import profile_settings
 from importlib import import_module
 
 SKILL_FUNCTIONS = {
-    "financial": ("financial-statement-analysis", "analyze_statements", "calculate_financial", "FinancialResult"),
+    "financial": (
+        "financial-statement-analysis",
+        "analyze_statements",
+        "calculate_financial",
+        "FinancialResult",
+    ),
     "monitor": ("company-event-monitor", "normalize_events", "normalize_monitor", "MonitorResult"),
     "digest": ("research-report-digest", "digest_reports", "normalize_digest", "DigestResult"),
     "deep": ("deep-investment-report", "forecast", "calculate_deep", "DeepResult"),
@@ -36,10 +42,12 @@ SKILL_FUNCTIONS = {
 RESULT_TYPES = {}
 FUNCTIONS = {}
 for kind, (plugin, script, function, result_type) in SKILL_FUNCTIONS.items():
-    module = import_module(f"openharness.plugins.bundled.{plugin}.skills.{plugin}.scripts.{script}")
+    package = "report-generation" if kind == "deep" else "analysis-modeling"
+    module = import_module(
+        f"openharness.plugins.bundled.{package}.skills.{plugin}.scripts.{script}"
+    )
     RESULT_TYPES[kind] = getattr(module, result_type)
     FUNCTIONS[kind] = getattr(module, function)
-
 
 
 async def run(args):
@@ -77,7 +85,7 @@ async def run(args):
         )
         task = asyncio.create_task(server.serve())
         try:
-            async with asyncio.timeout(20):
+            async with async_timeout(20):
                 while not server.started:
                     if task.done():
                         await task
@@ -131,7 +139,7 @@ async def run(args):
                         "可读写本会话目录，使用skill返回的Python解释器，执行技能自己的业务脚本，再执行export_report.py导出，不只解释方法。"
                     )
                     events = []
-                    async with asyncio.timeout(args.turn_timeout):
+                    async with async_timeout(args.turn_timeout):
                         async with websockets.connect(
                             f"ws://127.0.0.1:{args.port}/api/sessions/{sid}/ws",
                             origin=base,

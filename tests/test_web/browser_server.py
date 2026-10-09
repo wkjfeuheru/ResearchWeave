@@ -32,50 +32,93 @@ class BrowserModel:
 
     async def stream_message(self, request):
         last = next(message for message in reversed(request.messages) if message.content)
-        user_text = next((message.text for message in reversed(request.messages) if message.role == "user" and message.text), "")
+        user_text = next(
+            (
+                message.text
+                for message in reversed(request.messages)
+                if message.role == "user" and message.text
+            ),
+            "",
+        )
         if user_text in {"开展测试研究", "慢速研究公司 A", "改为研究公司 B"}:
             if self.research is None:
-                context = next(message.runtime_context for message in reversed(request.messages) if message.runtime_context)
-                data = json.loads(re.search(r"<research_memory>\n(.*?)\n</research_memory>", context, re.S).group(1))
-                self.research = ResearchModel(WORKSPACE, data["session_id"], slow=user_text == "慢速研究公司 A",
+                context = next(
+                    message.runtime_context
+                    for message in reversed(request.messages)
+                    if message.runtime_context
+                )
+                data = json.loads(
+                    re.search(r"<research_memory>\n(.*?)\n</research_memory>", context, re.S).group(
+                        1
+                    )
+                )
+                self.research = ResearchModel(
+                    WORKSPACE,
+                    data["session_id"],
+                    slow=user_text == "慢速研究公司 A",
                     title="公司 B 简要研究" if user_text == "改为研究公司 B" else "公司 A 简要研究",
-                    step_delay=0.25)
+                    step_delay=0.25,
+                )
             async for event in self.research.stream_message(request):
                 yield event
             return
         if user_text == "查看执行过程":
-            if last.role == 'user' and last.text:
-                text = '我先读取两份资料，再整理结论。'
+            if last.role == "user" and last.text:
+                text = "我先读取两份资料，再整理结论。"
                 yield ApiTextDeltaEvent(text)
-                message = ConversationMessage(role='assistant', content=[
-                    TextBlock(text=text),
-                    ToolUseBlock(id='process-read-ok', name='read_file', input={'path': 'report.txt'}),
-                    ToolUseBlock(id='process-read-fail', name='read_file', input={'path': 'missing.txt'}),
-                ])
+                message = ConversationMessage(
+                    role="assistant",
+                    content=[
+                        TextBlock(text=text),
+                        ToolUseBlock(
+                            id="process-read-ok", name="read_file", input={"path": "report.txt"}
+                        ),
+                        ToolUseBlock(
+                            id="process-read-fail", name="read_file", input={"path": "missing.txt"}
+                        ),
+                    ],
+                )
             else:
                 # Keep the process running long enough to exercise disclosure controls.
                 await asyncio.sleep(3)
-                text = '已整理资料；第二份文件不可用。'
+                text = "已整理资料；第二份文件不可用。"
                 yield ApiTextDeltaEvent(text)
-                message = ConversationMessage(role='assistant', content=[TextBlock(text=text)])
-            yield ApiMessageCompleteEvent(message=message, usage=UsageSnapshot(input_tokens=10, output_tokens=5))
+                message = ConversationMessage(role="assistant", content=[TextBlock(text=text)])
+            yield ApiMessageCompleteEvent(
+                message=message, usage=UsageSnapshot(input_tokens=10, output_tokens=5)
+            )
             return
         if last.text.startswith("导出固定验收产物"):
-            scripts = Path(__file__).parents[2] / "src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/scripts"
+            scripts = (
+                Path(__file__).parents[2]
+                / "src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts"
+            )
             python = shlex.quote(sys.executable)
             process = f"{python} {shlex.quote(str(scripts / 'digest_reports.py'))} --input fixtures/digest.json --output browser-artifacts/computed.json"
             export = f"{python} {shlex.quote(str(scripts / 'export_report.py'))} --input browser-artifacts/computed.json --output-dir browser-artifacts"
             command = process + " && " + export
-            message = ConversationMessage(role="assistant", content=[ToolUseBlock(name="bash", input={"command": command})])
+            message = ConversationMessage(
+                role="assistant", content=[ToolUseBlock(name="bash", input={"command": command})]
+            )
         elif last.text == "并行确认测试":
-            message = ConversationMessage(role="assistant", content=[
-                ToolUseBlock(name="write_file", input={"path": f"parallel-{i}.txt", "content": "测试"})
-                for i in range(4)
-            ])
+            message = ConversationMessage(
+                role="assistant",
+                content=[
+                    ToolUseBlock(
+                        name="write_file", input={"path": f"parallel-{i}.txt", "content": "测试"}
+                    )
+                    for i in range(4)
+                ],
+            )
         elif last.text == "请写入测试文件":
-            message = ConversationMessage(role="assistant", content=[
-                ToolUseBlock(name="write_file", input={"path": "approval.txt", "content": "测试"}),
-            ])
+            message = ConversationMessage(
+                role="assistant",
+                content=[
+                    ToolUseBlock(
+                        name="write_file", input={"path": "approval.txt", "content": "测试"}
+                    ),
+                ],
+            )
         elif last.text == "请提问":
             message = ConversationMessage(
                 role="assistant",
@@ -97,7 +140,13 @@ class BrowserModel:
                 await asyncio.sleep(0.1)
             message = ConversationMessage(role="assistant", content=[TextBlock(text=text)])
         yield ApiMessageCompleteEvent(
-            message=message, usage=UsageSnapshot(input_tokens=10, output_tokens=5, cache_read_input_tokens=0, cache_observed_input_tokens=10)
+            message=message,
+            usage=UsageSnapshot(
+                input_tokens=10,
+                output_tokens=5,
+                cache_read_input_tokens=0,
+                cache_observed_input_tokens=10,
+            ),
         )
 
 
@@ -114,77 +163,150 @@ if __name__ == "__main__":
             "OPENHARNESS_PROFILE",
         ):
             os.environ.pop(name, None)
-        save_settings(Settings(memory={"enabled": False}))
+        # Synthetic model names have no provider context-window entry.
+        save_settings(Settings(context_window_tokens=200_000))
         (root / "workspace").mkdir()
         WORKSPACE = root / "workspace"
-        shutil.copytree(Path(__file__).parents[1] / "fixtures/research_skills", WORKSPACE / "fixtures")
+        shutil.copytree(
+            Path(__file__).parents[1] / "fixtures/research_skills", WORKSPACE / "fixtures"
+        )
         (WORKSPACE / "report.txt").write_text("测试资料：营业收入同比增长。", encoding="utf-8")
         agent_runtime._resolve_api_client_from_settings = lambda settings: BrowserModel()
         web_app._resolve_api_client_from_settings = lambda settings: BrowserModel()
         app = web_app.create_app(str(root / "workspace"))
 
-        @app.post('/__test/citation-layout')
+        @app.post("/__test/citation-layout")
         def citation_layout(profile_id: str):
             from uuid import uuid4
             from openharness.research.store import ResearchStore
 
             record = app.state.workspace.store.create(profile_id)
-            store = ResearchStore(WORKSPACE, record['session_id'])
+            store = ResearchStore(WORKSPACE, record["session_id"])
 
             def update(action, **fields):
-                return store.apply(dict(action=action, operation_id=uuid4().hex,
-                                        expected_revision=store.load().revision, **fields))
+                return store.apply(
+                    dict(
+                        action=action,
+                        operation_id=uuid4().hex,
+                        expected_revision=store.load().revision,
+                        **fields,
+                    )
+                )
 
-            user = store.capture(origin_id='user-layout', kind='user', content='研究光伏行业')
-            update('set_context', goal='光伏研究', user_source_ids=[user.id])
-            update('create_plan', title='光伏行业景气度与供需变化分析' * 5,
-                   tasks=['收集国内新增装机及组件出口月度量价数据' * 4])
+            user = store.capture(origin_id="user-layout", kind="user", content="研究光伏行业")
+            update("set_context", goal="光伏研究", user_source_ids=[user.id])
+            update(
+                "create_plan",
+                title="光伏行业景气度与供需变化分析" * 5,
+                tasks=["收集国内新增装机及组件出口月度量价数据" * 4],
+            )
             task = next(iter(store.load().plans.values())).tasks[0]
-            update('update_task', task_id=task.id, status='in_progress')
+            update("update_task", task_id=task.id, status="in_progress")
             keys = []
-            for index, kind in enumerate(['mcp', 'web', 'tool', 'search']):
-                source = store.capture(origin_id=f'source-{index}', kind=kind,
-                                       title='外部网页资料与光伏行业最新供需数据' * 5 if kind in {'web', 'search'} else '内部数据',
-                                       locator=f'https://example.org/report/{index}', content='资料')
-                keys.append(update('add_evidence', source_id=source.id, statement='资料')['evidence_id'])
-            raw = '；'.join(f'结论{index}[E:{key}]' for index, key in enumerate(keys))
-            raw += f'；重复[E:{keys[1]}]'
-            rendered, frozen = store.render_answer(raw, 'layout-answer')
-            record['messages'] = [ConversationMessage(role='assistant', content=[TextBlock(text=rendered)],
-                                                      research_citations=frozen).model_dump(mode='json')]
-            record['display_messages'] = [dict(id='layout-row', role='assistant', text=rendered,
-                                               turn_id='layout', turn_status='completed', phase='final')]
+            for index, kind in enumerate(["mcp", "web", "tool", "search"]):
+                source = store.capture(
+                    origin_id=f"source-{index}",
+                    kind=kind,
+                    title="外部网页资料与光伏行业最新供需数据" * 5
+                    if kind in {"web", "search"}
+                    else "内部数据",
+                    locator=f"https://example.org/report/{index}",
+                    content="资料",
+                )
+                keys.append(
+                    update("add_evidence", source_id=source.id, statement="资料")["evidence_id"]
+                )
+            raw = "；".join(f"结论{index}[E:{key}]" for index, key in enumerate(keys))
+            raw += f"；重复[E:{keys[1]}]"
+            rendered, frozen = store.render_answer(raw, "layout-answer")
+            record["messages"] = [
+                ConversationMessage(
+                    role="assistant", content=[TextBlock(text=rendered)], research_citations=frozen
+                ).model_dump(mode="json")
+            ]
+            record["display_messages"] = [
+                dict(
+                    id="layout-row",
+                    role="assistant",
+                    text=rendered,
+                    turn_id="layout",
+                    turn_status="completed",
+                    phase="final",
+                )
+            ]
             app.state.workspace.store.write(record)
-            return {'session_id': record['session_id']}
+            return {"session_id": record["session_id"]}
 
-        @app.post('/__test/conflict-progress')
-        def conflict_progress(profile_id: str, outcome: str = 'unresolved'):
+        @app.post("/__test/conflict-progress")
+        def conflict_progress(profile_id: str, outcome: str = "unresolved"):
             from uuid import uuid4
             from openharness.research.store import ResearchStore
 
             seeded = citation_layout(profile_id)
-            store = ResearchStore(WORKSPACE, seeded['session_id'])
+            store = ResearchStore(WORKSPACE, seeded["session_id"])
 
             def update(action, **fields):
-                return store.apply(dict(action=action, operation_id=uuid4().hex,
-                                        expected_revision=store.load().revision, **fields))
+                return store.apply(
+                    dict(
+                        action=action,
+                        operation_id=uuid4().hex,
+                        expected_revision=store.load().revision,
+                        **fields,
+                    )
+                )
 
             evidence_ids = list(store.load().evidence_pool)[:2]
-            step = update('add_reasoning', evidence_ids=evidence_ids, method='比较两份原始资料',
-                          result='数字口径存在分歧', output='需要澄清口径')['step_id']
-            cid = update('add_conflict', question='两份公告的营收数字为何不同？', kind='scope',
-                         sides=[dict(statement=f'公告{index}口径', evidence_ids=[key], step_ids=[step])
-                                for index, key in enumerate(evidence_ids)])['conflict_id']
+            step = update(
+                "add_reasoning",
+                evidence_ids=evidence_ids,
+                method="比较两份原始资料",
+                result="数字口径存在分歧",
+                output="需要澄清口径",
+            )["step_id"]
+            cid = update(
+                "add_conflict",
+                question="两份公告的营收数字为何不同？",
+                kind="scope",
+                sides=[
+                    dict(statement=f"公告{index}口径", evidence_ids=[key], step_ids=[step])
+                    for index, key in enumerate(evidence_ids)
+                ],
+            )["conflict_id"]
             arbitration, _ = store.begin_investigation(cid)
-            report = dict(outcome=outcome, statement='需按公告统计口径分别判断', rationale='已比对双方原文及期间',
-                          evidence_ids=evidence_ids, step_ids=[step], remaining_gaps=['尚缺统计范围说明'] if outcome == 'unresolved' else [],
-                          assessments=[dict(evidence_id=key, originality='已检查原始出处', directness='原表直接列示',
-                                            scope_match='口径需要区分', timing_and_corrections='已检查公告时点',
-                                            independence='保留各自出处', reproducibility='原文可复核') for key in evidence_ids])
+            report = dict(
+                outcome=outcome,
+                statement="需按公告统计口径分别判断",
+                rationale="已比对双方原文及期间",
+                evidence_ids=evidence_ids,
+                step_ids=[step],
+                remaining_gaps=["尚缺统计范围说明"] if outcome == "unresolved" else [],
+                assessments=[
+                    dict(
+                        evidence_id=key,
+                        originality="已检查原始出处",
+                        directness="原表直接列示",
+                        scope_match="口径需要区分",
+                        timing_and_corrections="已检查公告时点",
+                        independence="保留各自出处",
+                        reproducibility="原文可复核",
+                    )
+                    for key in evidence_ids
+                ],
+            )
             from openharness.research.models import ArbitrationDecision
-            store.finish_investigation(arbitration.id, report=ArbitrationDecision.model_validate(report))
-            update('resolve_conflict', conflict_id=cid, arbitration_id=arbitration.id, decision=report)
-            update('update_task', task_id=store.load().research_state.current_task_id, status='completed', completion_note='核查已完成')
+
+            store.finish_investigation(
+                arbitration.id, report=ArbitrationDecision.model_validate(report)
+            )
+            update(
+                "resolve_conflict", conflict_id=cid, arbitration_id=arbitration.id, decision=report
+            )
+            update(
+                "update_task",
+                task_id=store.load().research_state.current_task_id,
+                status="completed",
+                completion_note="核查已完成",
+            )
             return seeded
 
         uvicorn.run(app, host="127.0.0.1", port=8765)

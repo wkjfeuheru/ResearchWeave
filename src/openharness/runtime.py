@@ -1,10 +1,17 @@
 """Investment research runtime, independent of its Web transport."""
 
 from __future__ import annotations
+from openharness.config import Settings
+from openharness.engine.metadata import ExecutionMetadata
+from openharness.plugins.types import LoadedPlugin
+from openharness.config.settings import ResolvedAuth
+from openharness.research.store import ResearchStore
+from openharness.evaluation.observer import RecordingObserver
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 import sys
+from uuid import uuid4
 from openharness.api.client import AnthropicApiClient, SupportsStreamingMessages
 from openharness.api.codex_client import CodexApiClient
 from openharness.api.copilot_client import CopilotClient
@@ -20,7 +27,7 @@ from openharness.permissions import PermissionChecker
 from openharness.plugins import load_plugins
 from openharness.prompts import build_runtime_prompt
 from openharness.services.session_storage import _persistable_tool_metadata
-from openharness.tools import ToolRegistry, create_research_tool_registry
+from openharness.tools import RESEARCH_EXCLUDED_TOOLS, ToolRegistry, create_research_tool_registry
 
 PermissionPrompt = Callable[[str, str], Awaitable[bool]]
 AskUserPrompt = Callable[[str], Awaitable[str]]
@@ -28,7 +35,7 @@ EditApprovalPrompt = Callable[[str, str, int, int], Awaitable[str]]
 StreamRenderer = Callable[[StreamEvent], Awaitable[None]]
 
 
-def _resolve_image_generation_config(settings) -> dict[str, str]:
+def _resolve_image_generation_config(settings: Settings) -> dict[str, str]:
     """Resolve image generation configuration from settings, environment, and Codex auth."""
     from openharness.config.settings import ImageGenerationConfig, ProviderProfile
 
@@ -67,7 +74,7 @@ def _resolve_image_generation_config(settings) -> dict[str, str]:
     return resolved
 
 
-def _resolve_vision_config(settings) -> dict[str, str]:
+def _resolve_vision_config(settings: Settings) -> dict[str, str]:
     """Resolve the vision model configuration from settings or environment.
 
     Priority: settings.vision fields > environment variables > empty.
@@ -103,23 +110,24 @@ class RuntimeBundle:
     hook_executor: HookExecutor
     engine: QueryEngine
     session_id: str
+    runtime_id: str = ""
     settings_overrides: dict[str, Any] = field(default_factory=dict)
     extra_skill_dirs: tuple[str, ...] = ()
     extra_plugin_roots: tuple[str, ...] = ()
 
-    def current_settings(self):
+    def current_settings(self) -> Settings:
         return load_settings().merge_cli_overrides(**self.settings_overrides)
 
-    def current_plugins(self):
+    def current_plugins(self) -> list[LoadedPlugin]:
         return load_plugins(self.current_settings(), self.cwd, extra_roots=self.extra_plugin_roots)
 
 
-def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
+def _resolve_api_client_from_settings(settings: Settings) -> SupportsStreamingMessages:
     """Build the appropriate API client for the resolved settings."""
     # Ensure profile fields (base_url, model, api_format) are projected to settings
     settings = settings.materialize_active_profile()
 
-    def _safe_resolve_auth():
+    def _safe_resolve_auth() -> ResolvedAuth:
         try:
             return settings.resolve_auth()
         except Exception as exc:
@@ -163,7 +171,7 @@ def _resolve_api_client_from_settings(settings) -> SupportsStreamingMessages:
     )
 
 
-def _print_auth_resolution_error(settings, exc: Exception) -> None:
+def _print_auth_resolution_error(settings: Settings, exc: Exception) -> None:
     """Render auth failures without collapsing subscription errors into API-key advice."""
     try:
         profile_name, profile = settings.resolve_profile()
@@ -212,17 +220,17 @@ async def build_runtime(
     permission_prompt: PermissionPrompt | None = None,
     ask_user_prompt: AskUserPrompt | None = None,
     edit_approval_prompt: EditApprovalPrompt | None = None,
-    restore_usage: dict | None = None,
-    restore_messages: list[dict] | None = None,
-    restore_tool_metadata: dict[str, object] | None = None,
+    restore_usage: dict[str, object] | None = None,
+    restore_messages: list[dict[str, object]] | None = None,
+    restore_tool_metadata: ExecutionMetadata | None = None,
     enforce_max_turns: bool = True,
     permission_mode: str | None = None,
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
     session_id: str | None = None,
-    observer=None,
-    settings_override=None,
-    research_store_override=None,
+    observer: RecordingObserver | None = None,
+    settings_override: Settings | None = None,
+    research_store_override: ResearchStore | None = None,
     connect_mcp: bool = True,
     context_window_tokens: int | None = None,
 ) -> RuntimeBundle:
@@ -266,16 +274,28 @@ async def build_runtime(
             if close:
                 await close()
             raise
-    tool_registry = create_research_tool_registry(mcp_manager)
-    # Register plugin-provided tools
-    for plugin in plugins:
-        if plugin.enabled and plugin.tools:
-            for tool in plugin.tools:
-                tool_registry.register(tool)
+    try:
+        tool_registry = create_research_tool_registry(mcp_manager)
+        # Register plugin-provided tools
+        for plugin in plugins:
+            if plugin.enabled and plugin.tools:
+                for tool in plugin.tools:
+                    if tool.name not in RESEARCH_EXCLUDED_TOOLS:
+                        tool_registry.register(tool)
+        # Plugins cannot reintroduce removed names to the research product surface.
+        for name in RESEARCH_EXCLUDED_TOOLS:
+            tool_registry.unregister(name)
+    except BaseException:
+        await mcp_manager.close()
+        close = getattr(resolved_api_client, "close", None)
+        if close:
+            await close()
+        raise
     hook_executor = HookExecutor(
         load_hook_registry(settings, plugins),
         HookExecutionContext(
             cwd=Path(cwd).resolve(),
+            settings=settings,
             api_client=resolved_api_client,
             default_model=settings.model,
             context_window_tokens=settings.context_window_tokens,
@@ -305,11 +325,27 @@ async def build_runtime(
             settings.research_memory.injection_budget_tokens
         )
         restored_metadata["conflict_max_turns"] = settings.research_memory.conflict_max_turns
-        restored_metadata["conflict_timeout_seconds"] = settings.research_memory.conflict_timeout_seconds
+        restored_metadata["conflict_timeout_seconds"] = (
+            settings.research_memory.conflict_timeout_seconds
+        )
+        restored_metadata["research_workspace_root"] = settings.research_memory.workspace_root
+        restored_metadata["memory_auto_inject_max_chars"] = (
+            settings.research_memory.memory_auto_inject_max_chars
+        )
+        restored_metadata["subagent_max_concurrency"] = (
+            settings.research_memory.subagent_max_concurrency
+        )
+        restored_metadata["subagent_max_calls"] = settings.research_memory.subagent_max_calls
+        restored_metadata["subagent_timeout_seconds"] = (
+            settings.research_memory.subagent_timeout_seconds
+        )
     else:
         tool_registry.unregister("research_memory")
         tool_registry.unregister("investigate_conflict")
+        for name in ("planner", "replanner", "research_project", "dispatch_subagents"):
+            tool_registry.unregister(name)
 
+    runtime_id = uuid4().hex
     engine = QueryEngine(
         api_client=resolved_api_client,
         tool_registry=tool_registry,
@@ -326,6 +362,8 @@ async def build_runtime(
         hook_executor=hook_executor,
         settings=settings,
         tool_metadata={
+            "trusted_settings": settings.model_copy(deep=True),
+            "runtime_id": runtime_id,
             "mcp_manager": mcp_manager,
             "extra_skill_dirs": normalized_skill_dirs,
             "extra_plugin_roots": normalized_plugin_roots,
@@ -336,19 +374,23 @@ async def build_runtime(
             **restored_metadata,
         },
     )
+    hook_executor._context.account_usage = engine.tool_metadata.get("account_subagent_usage")
     engine.restore_usage(restore_usage)
     # Restore messages from a saved session if provided
     if restore_messages:
-        restored = sanitize_conversation_messages(
-            [ConversationMessage.model_validate(m) for m in restore_messages]
-        )
-        engine.load_messages(restored)
+        engine.load_messages([ConversationMessage.model_validate(m) for m in restore_messages])
+        engine.load_messages(sanitize_conversation_messages(engine.messages))
 
     # Start Docker sandbox if configured
-    if settings.sandbox.enabled and settings.sandbox.backend == "docker":
+    sandbox_store = engine.tool_metadata.get("research_store")
+    if (
+        settings.sandbox.enabled
+        and settings.sandbox.backend == "docker"
+        and (sandbox_store is None or sandbox_store.load().project is None)
+    ):
         from openharness.sandbox.session import start_docker_sandbox
 
-        await start_docker_sandbox(settings, session_id, Path(cwd))
+        await start_docker_sandbox(settings, runtime_id, Path(cwd))
 
     return RuntimeBundle(
         api_client=resolved_api_client,
@@ -358,6 +400,7 @@ async def build_runtime(
         hook_executor=hook_executor,
         engine=engine,
         session_id=session_id,
+        runtime_id=runtime_id,
         settings_overrides=settings_overrides,
         extra_skill_dirs=normalized_skill_dirs,
         extra_plugin_roots=normalized_plugin_roots,
@@ -374,10 +417,10 @@ async def start_runtime(bundle: RuntimeBundle) -> None:
 
 async def close_runtime(bundle: RuntimeBundle) -> None:
     """Close runtime-owned resources."""
-    from openharness.sandbox.session import stop_docker_sandbox
+    from openharness.sandbox.session import stop_runtime_sandboxes
 
     try:
-        await stop_docker_sandbox()
+        await stop_runtime_sandboxes(bundle.runtime_id)
     finally:
         try:
             await bundle.mcp_manager.close()

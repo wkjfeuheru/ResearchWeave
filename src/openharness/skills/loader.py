@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from typing_extensions import TypedDict
+from openharness.config import Settings
 import logging
 from pathlib import Path
 from typing import Iterable
 from pydantic import ValidationError
-
 from openharness.config.paths import get_config_dir
 from openharness.config.settings import load_settings
 from openharness.skills._frontmatter import (
@@ -14,10 +15,21 @@ from openharness.skills._frontmatter import (
     parse_bool_frontmatter,
     parse_skill_frontmatter,
     parse_skill_metadata,
+    read_discovery_header,
 )
 from openharness.skills.registry import SkillRegistry
 from openharness.skills.metadata import read_metadata
 from openharness.skills.types import SkillDefinition
+
+
+class SkillHeader(TypedDict):
+    name: str
+    description: str
+    user_invocable: bool
+    disable_model_invocation: bool
+    model: str | None
+    argument_hint: str | None
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +49,10 @@ def get_user_skills_dir() -> Path:
 
 def get_user_skill_dirs() -> list[Path]:
     """Return user-level skill directories loaded by default."""
-    return [get_user_skills_dir(), *(Path.home().joinpath(*parts) for parts in _USER_COMPAT_SKILL_DIRS)]
+    return [
+        get_user_skills_dir(),
+        *(Path.home().joinpath(*parts) for parts in _USER_COMPAT_SKILL_DIRS),
+    ]
 
 
 def load_skill_registry(
@@ -45,14 +60,16 @@ def load_skill_registry(
     *,
     extra_skill_dirs: Iterable[str | Path] | None = None,
     extra_plugin_roots: Iterable[str | Path] | None = None,
-    settings=None,
+    settings: Settings | None = None,
 ) -> SkillRegistry:
     """Load user-defined, project, and enabled plugin skills."""
     registry = SkillRegistry()
     resolved_settings = settings or load_settings()
-    from openharness.plugins.loader import BUNDLED_PLUGINS_DIR, load_plugins
+    from openharness.plugins.loader import BUNDLED_PLUGINS_DIR, load_plugins, skill_enabled
 
-    plugins = load_plugins(resolved_settings, cwd or Path.cwd(), extra_roots=extra_plugin_roots)
+    plugins = load_plugins(
+        resolved_settings, cwd or Path.cwd(), extra_roots=extra_plugin_roots, metadata_only=True
+    )
     packaged_root = BUNDLED_PLUGINS_DIR.resolve()
     for plugin in plugins:
         if plugin.enabled and plugin.path.resolve().is_relative_to(packaged_root):
@@ -78,6 +95,15 @@ def load_skill_registry(
             for skill in plugin.skills:
                 registry.register(skill)
 
+    enabled_skills = getattr(resolved_settings, "enabled_skills", {})
+    # Standalone user/project overrides retain precedence, while explicit switches
+    # and legacy business switches apply to the final selected definition too.
+    registry.retain(
+        lambda skill: (
+            skill.enabled
+            and skill_enabled(skill, resolved_settings.enabled_plugins, enabled_skills)
+        )
+    )
     return registry
 
 
@@ -177,25 +203,44 @@ def load_skills_from_dirs(
             root.mkdir(parents=True, exist_ok=True)
         elif not root.is_dir():
             continue
-        directory_names = {child.name for child in root.iterdir()
-                           if child.is_dir() and (child / "SKILL.md").is_file()}
-        candidates = [root / "SKILL.md"] if (root / "SKILL.md").is_file() else [
-            *(path for path in sorted(root.glob("*.md")) if path.stem not in directory_names),
-            *(child / "SKILL.md" for child in sorted(root.iterdir())
-              if child.is_dir() and (child / "SKILL.md").is_file()),
-        ]
+        directory_names = {
+            child.name
+            for child in root.iterdir()
+            if child.is_dir() and (child / "SKILL.md").is_file()
+        }
+        candidates = (
+            [root / "SKILL.md"]
+            if (root / "SKILL.md").is_file()
+            else [
+                *(path for path in sorted(root.glob("*.md")) if path.stem not in directory_names),
+                *(
+                    child / "SKILL.md"
+                    for child in sorted(root.iterdir())
+                    if child.is_dir() and (child / "SKILL.md").is_file()
+                ),
+            ]
+        )
         definitions: dict[str, SkillDefinition] = {}
         for path in candidates:
             if path in seen:
                 continue
             seen.add(path)
-            content = path.read_text(encoding="utf-8")
+            if not path.resolve().is_relative_to(path.parent.resolve()):
+                logger.warning("Ignoring entrypoint outside its Skill root: %s", path)
+                continue
+            content = read_discovery_header(path)
             default_name = path.parent.name if path.name == "SKILL.md" else path.stem
             metadata = _parse_skill_metadata(default_name, content)
             try:
-                lifecycle = read_metadata(metadata["name"], parse_skill_metadata(default_name, content)["frontmatter"], path)
+                lifecycle = read_metadata(
+                    metadata["name"],
+                    parse_skill_metadata(default_name, content)["frontmatter"],
+                    path,
+                )
             except (ValidationError, ValueError, OSError):
-                logger.warning("Ignoring skill with invalid metadata or unreadable resources: %s", path)
+                logger.warning(
+                    "Ignoring skill with invalid metadata or unreadable resources: %s", path
+                )
                 continue
             name = metadata["name"]
             description = metadata["description"]
@@ -203,7 +248,7 @@ def load_skills_from_dirs(
             definitions[name] = SkillDefinition(
                 name=name,
                 description=description,
-                content=content,
+                content=None,
                 source=source,
                 path=str(path),
                 base_dir=str(path.parent),
@@ -224,14 +269,14 @@ def _parse_skill_markdown(default_name: str, content: str) -> tuple[str, str]:
     return parse_skill_frontmatter(default_name, content, fallback_template="Skill: {name}")
 
 
-def _parse_skill_metadata(default_name: str, content: str) -> dict:
+def _parse_skill_metadata(default_name: str, content: str) -> SkillHeader:
     parsed = parse_skill_metadata(default_name, content, fallback_template="Skill: {name}")
     frontmatter = parsed.get("frontmatter")
     if not isinstance(frontmatter, dict):
         frontmatter = {}
     return {
         "name": str(parsed["name"]),
-        "description": str(parsed["description"]),
+        "description": " ".join(str(parsed["description"]).split())[:300],
         "user_invocable": parse_bool_frontmatter(frontmatter.get("user-invocable"), default=True),
         "disable_model_invocation": parse_bool_frontmatter(
             frontmatter.get("disable-model-invocation"),

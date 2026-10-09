@@ -1,6 +1,8 @@
 """CLI entry point using typer."""
 
 from __future__ import annotations
+from openharness.config.settings import ProviderProfile
+from openharness.auth.manager import AuthManager
 
 import json
 import sys
@@ -9,7 +11,10 @@ from typing import Optional
 
 import typer
 
+from openharness.evaluation.cli import app as eval_app
+
 __version__ = "0.1.9"
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -41,7 +46,6 @@ app.add_typer(plugin_app)
 app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(config_app)
-from openharness.evaluation.cli import app as eval_app
 app.add_typer(eval_app)
 
 
@@ -63,6 +67,7 @@ def web_cmd(
 
 # ---- mcp subcommands ----
 
+
 @mcp_app.command("list")
 def mcp_list() -> None:
     """List configured MCP servers."""
@@ -77,7 +82,7 @@ def mcp_list() -> None:
         print("No MCP servers configured.")
         return
     for name, cfg in configs.items():
-        transport = cfg.get("transport", cfg.get("command", "unknown"))
+        transport = cfg.type
         print(f"  {name}: {transport}")
 
 
@@ -120,6 +125,7 @@ def mcp_remove(
 
 # ---- plugin subcommands ----
 
+
 @plugin_app.command("list")
 def plugin_list() -> None:
     """List installed plugins."""
@@ -161,22 +167,6 @@ def plugin_uninstall(
     except ValueError as exc:
         raise typer.BadParameter("invalid plugin name") from exc
     print(f"Uninstalled plugin: {name}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ---- auth subcommands ----
@@ -257,7 +247,7 @@ def _text_prompt(message: str, *, default: str = "") -> str:
         if result is None:
             raise typer.Abort()
         return str(result)
-    return typer.prompt(message, default=default)
+    return str(typer.prompt(message, default=default))
 
 
 def _secret_prompt(message: str) -> str:
@@ -269,7 +259,7 @@ def _secret_prompt(message: str) -> str:
         if result is None:
             raise typer.Abort()
         return str(result)
-    return typer.prompt(message, hide_input=True)
+    return str(typer.prompt(message, hide_input=True))
 
 
 def _confirm_prompt(message: str, *, default: bool = False) -> bool:
@@ -308,7 +298,7 @@ def _select_from_menu(
     return selected[0]
 
 
-def _prompt_model_for_profile(profile) -> str:
+def _prompt_model_for_profile(profile: ProviderProfile) -> str:
     from openharness.config.settings import (
         CLAUDE_MODEL_ALIAS_OPTIONS,
         display_model_setting,
@@ -318,16 +308,27 @@ def _prompt_model_for_profile(profile) -> str:
     current = display_model_setting(profile)
     if profile.allowed_models:
         if len(profile.allowed_models) == 1:
-            return profile.allowed_models[0]
+            return str(profile.allowed_models[0])
         options = [(value, value) for value in profile.allowed_models]
-        return _select_from_menu("Choose a model setting:", options, default_value=current if current in profile.allowed_models else profile.allowed_models[0])
+        return _select_from_menu(
+            "Choose a model setting:",
+            options,
+            default_value=current
+            if current in profile.allowed_models
+            else profile.allowed_models[0],
+        )
     if is_claude_family_provider(profile.provider):
-        options = [(value, f"{label} - {description}") for value, label, description in CLAUDE_MODEL_ALIAS_OPTIONS]
+        options = [
+            (value, f"{label} - {description}")
+            for value, label, description in CLAUDE_MODEL_ALIAS_OPTIONS
+        ]
         options.append(("__custom__", "Custom model ID"))
         selection = _select_from_menu(
             "Choose a model setting:",
             options,
-            default_value=current if any(value == current for value, _, _ in CLAUDE_MODEL_ALIAS_OPTIONS) else "__custom__",
+            default_value=current
+            if any(value == current for value, _, _ in CLAUDE_MODEL_ALIAS_OPTIONS)
+            else "__custom__",
         )
         if selection != "__custom__":
             return selection
@@ -369,7 +370,7 @@ def _select_setup_workflow(
             missing = _styled_missing_suffix(info)
             if hint is None:
                 if missing is None:
-                    title = label
+                    title: str | list[tuple[str, str]] = label
                 else:
                     suffix, suffix_style = missing
                     title = [("", label), (suffix_style, suffix)]
@@ -388,9 +389,13 @@ def _select_setup_workflow(
                         ("", "  "),
                         (suffix_style, suffix.strip()),
                     ]
-            choices.append(questionary.Choice(title=title, value=name, checked=(name == default_value)))
+            choices.append(
+                questionary.Choice(title=title, value=name, checked=(name == default_value))
+            )
 
-        result = questionary.select("Choose a provider workflow:", choices=choices, default=default_value).ask()
+        result = questionary.select(
+            "Choose a provider workflow:", choices=choices, default=default_value
+        ).ask()
         if result is None:
             raise typer.Abort()
         return str(result)
@@ -422,7 +427,7 @@ def _prompt_api_key_for_profile(label: str) -> str:
     return key
 
 
-def _configure_custom_profile_via_setup(manager) -> str:
+def _configure_custom_profile_via_setup(manager: AuthManager) -> str:
     from openharness.config.settings import ProviderProfile, default_auth_source_for_provider
 
     family = _select_from_menu(
@@ -464,7 +469,7 @@ def _configure_custom_profile_via_setup(manager) -> str:
 
 
 def _ensure_preset_profile(
-    manager,
+    manager: AuthManager,
     *,
     name: str,
     label: str,
@@ -493,7 +498,7 @@ def _ensure_preset_profile(
     return name
 
 
-def _specialize_setup_target(manager, target: str) -> str:
+def _specialize_setup_target(manager: AuthManager, target: str) -> str:
     """Expand a top-level family choice into a concrete workflow profile."""
     from openharness.config.settings import default_auth_source_for_provider
 
@@ -511,7 +516,11 @@ def _specialize_setup_target(manager, target: str) -> str:
         if choice == "claude-api":
             return choice
         defaults = {
-            "kimi-anthropic": ("Kimi (Anthropic-compatible)", "https://api.moonshot.cn/anthropic", "kimi-k2.5"),
+            "kimi-anthropic": (
+                "Kimi (Anthropic-compatible)",
+                "https://api.moonshot.cn/anthropic",
+                "kimi-k2.5",
+            ),
             "glm-anthropic": ("GLM (Anthropic-compatible)", "", "glm-4.5"),
             "minimax-anthropic": ("MiniMax (Anthropic-compatible)", "", "MiniMax-M2.7"),
         }
@@ -566,7 +575,7 @@ def _specialize_setup_target(manager, target: str) -> str:
     return target
 
 
-def _ensure_profile_auth(manager, profile_name: str) -> None:
+def _ensure_profile_auth(manager: AuthManager, profile_name: str) -> None:
     from openharness.auth.flows import ApiKeyFlow
     from openharness.config.settings import auth_source_provider_name, auth_source_uses_api_key
 
@@ -588,7 +597,7 @@ def _ensure_profile_auth(manager, profile_name: str) -> None:
     print(f"{profile.label} API key saved.", flush=True)
 
 
-def _maybe_update_profile_auth(manager, profile_name: str) -> bool:
+def _maybe_update_profile_auth(manager: AuthManager, profile_name: str) -> bool:
     """Ask whether to replace an already configured profile API key."""
     from openharness.config.settings import auth_source_uses_api_key
 
@@ -686,7 +695,17 @@ def _login_provider(provider: str) -> None:
         _bind_external_provider(provider)
         return
 
-    if provider in ("anthropic", "openai", "dashscope", "bedrock", "vertex", "moonshot", "gemini", "minimax", "modelscope"):
+    if provider in (
+        "anthropic",
+        "openai",
+        "dashscope",
+        "bedrock",
+        "vertex",
+        "moonshot",
+        "gemini",
+        "minimax",
+        "modelscope",
+    ):
         label = _PROVIDER_LABELS.get(provider, provider)
         flow = ApiKeyFlow(provider=provider, prompt_text=f"Enter your {label} API key")
         try:
@@ -766,7 +785,9 @@ def setup_cmd(
 
 @auth_app.command("login")
 def auth_login(
-    provider: Optional[str] = typer.Argument(None, help="Provider or service name (anthropic, openai, copilot, tavily, …)"),
+    provider: Optional[str] = typer.Argument(
+        None, help="Provider or service name (anthropic, openai, copilot, tavily, …)"
+    ),
 ) -> None:
     """Interactively authenticate with a provider.
 
@@ -814,19 +835,26 @@ def auth_status_cmd() -> None:
 
     print()
     from openharness.utils.tavily_search import resolve_tavily_key
-    print("Search service: Tavily — " + ("configured" if resolve_tavily_key() else "missing API key"))
+
+    print(
+        "Search service: Tavily — " + ("configured" if resolve_tavily_key() else "missing API key")
+    )
     print("Provider profiles:")
     print(f"{'Profile':<20} {'Provider':<18} {'Auth source':<22} {'State':<12} Active")
     print("-" * 92)
     for name, info in profiles.items():
         status_str = "ready" if info["configured"] else info.get("auth_state", "missing auth")
         active_str = "<-- active" if info["active"] else ""
-        print(f"{name:<20} {info['provider']:<18} {info['auth_source']:<22} {status_str:<12} {active_str}")
+        print(
+            f"{name:<20} {info['provider']:<18} {info['auth_source']:<22} {status_str:<12} {active_str}"
+        )
 
 
 @auth_app.command("logout")
 def auth_logout(
-    provider: Optional[str] = typer.Argument(None, help="Provider to log out (default: active provider)"),
+    provider: Optional[str] = typer.Argument(
+        None, help="Provider to log out (default: active provider)"
+    ),
 ) -> None:
     """Clear stored authentication for a provider."""
     from openharness.auth.manager import AuthManager
@@ -839,8 +867,12 @@ def auth_logout(
         return
     if provider == "tavily":
         from openharness.auth.storage import clear_provider_credentials
+
         clear_provider_credentials("tavily")
-        print("Tavily stored key cleared; environment variables, if set, remain effective.", flush=True)
+        print(
+            "Tavily stored key cleared; environment variables, if set, remain effective.",
+            flush=True,
+        )
         return
     manager.clear_credential(provider)
     print(f"Authentication cleared for provider: {provider}", flush=True)
@@ -1041,11 +1073,21 @@ def provider_add(
     auth_source: str = typer.Option(..., "--auth-source", help="Auth source name"),
     model: str = typer.Option(..., "--model", help="Default model"),
     base_url: str | None = typer.Option(None, "--base-url", help="Optional base URL"),
-    credential_slot: str | None = typer.Option(None, "--credential-slot", help="Optional profile-specific credential slot"),
+    credential_slot: str | None = typer.Option(
+        None, "--credential-slot", help="Optional profile-specific credential slot"
+    ),
     api_key: str | None = typer.Option(None, "--api-key", help="Set the profile API key"),
-    allowed_models: list[str] | None = typer.Option(None, "--allowed-model", help="Allowed model values for this profile"),
-    context_window_tokens: int | None = typer.Option(None, "--context-window-tokens", help="Optional context window override for auto-compact"),
-    auto_compact_threshold_tokens: int | None = typer.Option(None, "--auto-compact-threshold-tokens", help="Optional explicit auto-compact threshold override"),
+    allowed_models: list[str] | None = typer.Option(
+        None, "--allowed-model", help="Allowed model values for this profile"
+    ),
+    context_window_tokens: int | None = typer.Option(
+        None, "--context-window-tokens", help="Optional context window override for auto-compact"
+    ),
+    auto_compact_threshold_tokens: int | None = typer.Option(
+        None,
+        "--auto-compact-threshold-tokens",
+        help="Optional explicit auto-compact threshold override",
+    ),
 ) -> None:
     """Create a provider profile."""
     from openharness.auth.manager import AuthManager
@@ -1062,8 +1104,14 @@ def provider_add(
             default_model=model,
             last_model=model,
             base_url=base_url,
-            credential_slot=credential_slot or _default_credential_slot_for_profile(name, auth_source),
-            allowed_models=allowed_models or ([model] if credential_slot or _default_credential_slot_for_profile(name, auth_source) else []),
+            credential_slot=credential_slot
+            or _default_credential_slot_for_profile(name, auth_source),
+            allowed_models=allowed_models
+            or (
+                [model]
+                if credential_slot or _default_credential_slot_for_profile(name, auth_source)
+                else []
+            ),
             context_window_tokens=context_window_tokens,
             auto_compact_threshold_tokens=auto_compact_threshold_tokens,
         ),
@@ -1085,11 +1133,21 @@ def provider_edit(
     auth_source: str | None = typer.Option(None, "--auth-source", help="Auth source name"),
     model: str | None = typer.Option(None, "--model", help="Default model"),
     base_url: str | None = typer.Option(None, "--base-url", help="Optional base URL"),
-    credential_slot: str | None = typer.Option(None, "--credential-slot", help="Optional profile-specific credential slot"),
+    credential_slot: str | None = typer.Option(
+        None, "--credential-slot", help="Optional profile-specific credential slot"
+    ),
     api_key: str | None = typer.Option(None, "--api-key", help="Replace the profile API key"),
-    allowed_models: list[str] | None = typer.Option(None, "--allowed-model", help="Allowed model values for this profile"),
-    context_window_tokens: int | None = typer.Option(None, "--context-window-tokens", help="Optional context window override for auto-compact"),
-    auto_compact_threshold_tokens: int | None = typer.Option(None, "--auto-compact-threshold-tokens", help="Optional explicit auto-compact threshold override"),
+    allowed_models: list[str] | None = typer.Option(
+        None, "--allowed-model", help="Allowed model values for this profile"
+    ),
+    context_window_tokens: int | None = typer.Option(
+        None, "--context-window-tokens", help="Optional context window override for auto-compact"
+    ),
+    auto_compact_threshold_tokens: int | None = typer.Option(
+        None,
+        "--auto-compact-threshold-tokens",
+        help="Optional explicit auto-compact threshold override",
+    ),
 ) -> None:
     """Edit a provider profile."""
     from openharness.auth.manager import AuthManager
@@ -1137,15 +1195,23 @@ def provider_remove(
         raise typer.Exit(1)
     print(f"Removed provider profile: {name}", flush=True)
 
+
 # ---------------------------------------------------------------------------
 # Main command
 # ---------------------------------------------------------------------------
 
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    version: bool = typer.Option(False, "--version", "-v", help="Show version and exit",
-                                 callback=_version_callback, is_eager=True),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-v",
+        help="Show version and exit",
+        callback=_version_callback,
+        is_eager=True,
+    ),
 ) -> None:
     """Manage the research workspace; no terminal coding conversation is launched."""
     if ctx.invoked_subcommand is None:

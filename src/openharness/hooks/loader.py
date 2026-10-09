@@ -1,6 +1,8 @@
 """Load hooks from settings."""
 
 from __future__ import annotations
+from openharness.config import Settings
+from openharness.plugins.types import LoadedPlugin
 
 from collections import defaultdict
 from openharness.hooks.events import HookEvent
@@ -36,7 +38,12 @@ class HookRegistry:
             lines.append(f"{event.value}:")
             for hook in hooks:
                 matcher = getattr(hook, "matcher", None)
-                detail = getattr(hook, "command", None) or getattr(hook, "prompt", None) or getattr(hook, "url", None) or ""
+                detail = (
+                    getattr(hook, "command", None)
+                    or getattr(hook, "prompt", None)
+                    or getattr(hook, "url", None)
+                    or ""
+                )
                 suffix = f" matcher={matcher}" if matcher else ""
                 priority = getattr(hook, "priority", 0)
                 if priority:
@@ -45,7 +52,9 @@ class HookRegistry:
         return "\n".join(lines)
 
 
-def load_hook_registry(settings, plugins=None) -> HookRegistry:
+def load_hook_registry(
+    settings: Settings, plugins: list[LoadedPlugin] | None = None
+) -> HookRegistry:
     """Load hooks from the current settings object."""
     registry = HookRegistry()
     for raw_event, hooks in settings.hooks.items():

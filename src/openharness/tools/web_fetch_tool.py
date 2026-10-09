@@ -32,17 +32,29 @@ class WebFetchToolInput(BaseModel):
 
     url: str = Field(description="HTTP or HTTPS URL to fetch")
     max_chars: int = Field(default=12000, ge=500, le=50000)
-    link_query: str | None = Field(default=None, description="Optional space-separated keywords to prioritize matching page links when navigating a site, for example a company or data category.")
+    link_query: str | None = Field(
+        default=None,
+        description="Optional space-separated keywords to prioritize matching page links when navigating a site, for example a company or data category.",
+    )
 
 
-class WebFetchTool(BaseTool):
+class WebFetchTool(BaseTool[WebFetchToolInput]):
     """Fetch one web page and return a compact text summary."""
 
     name = "web_fetch"
+    contract = {
+        "name": "web_fetch",
+        "source": "builtin",
+        "effect": "read_only",
+        "required_capabilities": ("network.http",),
+        "resources_read": ("*",),
+    }
     description = "Fetch a research web page and label its final source. Catalogue membership does not verify facts; outside links remain readable."
     input_model = WebFetchToolInput
 
-    async def execute(self, arguments: WebFetchToolInput, context: ToolExecutionContext) -> ToolResult:
+    async def execute(
+        self, arguments: WebFetchToolInput, context: ToolExecutionContext
+    ) -> ToolResult:
         del context
         is_valid, error_message = _validate_url(arguments.url)
         if not is_valid:
@@ -56,7 +68,9 @@ class WebFetchTool(BaseTool):
             )
             response.raise_for_status()
         except (httpx.HTTPError, NetworkGuardError) as exc:
-            return ToolResult(output=f"web_fetch failed: {type(exc).__name__}: {exc}", is_error=True)
+            return ToolResult(
+                output=f"web_fetch failed: {type(exc).__name__}: {exc}", is_error=True
+            )
 
         content_type = response.headers.get("content-type", "")
         body = response.text
@@ -76,16 +90,31 @@ class WebFetchTool(BaseTool):
             for label, href in parser.links:
                 target = urljoin(str(response.url), href)
                 parsed = urlsplit(target)
-                if parsed.scheme not in {"https", "http"} or not parsed.netloc or parsed.username or parsed.password:
+                if (
+                    parsed.scheme not in {"https", "http"}
+                    or not parsed.netloc
+                    or parsed.username
+                    or parsed.password
+                ):
                     continue
                 if target in seen or href.startswith("#"):
                     continue
                 seen.add(target)
                 resolved_links.append(f"- {label}: {target}")
             if resolved_links:
-                links = "Page links (locators only; fetch the linked page before citing its contents):\n" + "\n".join(resolved_links)
+                links = (
+                    "Page links (locators only; fetch the linked page before citing its contents):\n"
+                    + "\n".join(resolved_links)
+                )
                 terms = (arguments.link_query or "").casefold().split()
-                display_order = sorted(resolved_links, key=lambda entry: not any(term in entry.casefold() for term in terms)) if terms else resolved_links
+                display_order = (
+                    sorted(
+                        resolved_links,
+                        key=lambda entry: not any(term in entry.casefold() for term in terms),
+                    )
+                    if terms
+                    else resolved_links
+                )
                 entries = []
                 size = 0
                 for entry in display_order:
@@ -112,9 +141,19 @@ class WebFetchTool(BaseTool):
                 + (visible_links + "\n\n" if visible_links else "")
                 + f"{body}"
             ),
-            metadata={"source_classification": source, "research_source_specs": [{"kind": "web", "title": title,
-                "locator": str(response.url), "content": snapshot, "fragment": False,
-                "published_at": published_at}]},
+            metadata={
+                "source_classification": source,
+                "research_source_specs": [
+                    {
+                        "kind": "web",
+                        "title": title,
+                        "locator": str(response.url),
+                        "content": snapshot,
+                        "fragment": False,
+                        "published_at": published_at,
+                    }
+                ],
+            },
         )
 
     def is_read_only(self, arguments: BaseModel) -> bool:
@@ -131,7 +170,9 @@ def _html_to_text(html: str) -> str:
 
 def _normalize_text(parts: list[str]) -> str:
     text = " ".join(parts)
-    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    text = (
+        text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    )
     return re.sub(r"[ \t\r\f\v]+", " ", text).replace(" \n", "\n").strip()
 
 
@@ -159,15 +200,28 @@ class _HTMLTextExtractor(HTMLParser):
         self._anchor_href: str | None = None
         self._anchor_parts: list[str] = []
 
-    def handle_starttag(self, tag: str, attrs) -> None:  # type: ignore[override]
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
         if tag == "a" and not self._skip_depth:
             self._anchor_href = attributes.get("href")
             self._anchor_parts = []
         if tag == "title" and not self._title_captured:
             self._in_title = True
-        date_field = (attributes.get("property") or attributes.get("name") or attributes.get("itemprop") or "").casefold()
-        if tag == "meta" and not self.published_at and date_field in {"article:published_time", "datepublished", "publishdate", "pubdate", "dc.date.issued"}:
+        date_field = (
+            attributes.get("property") or attributes.get("name") or attributes.get("itemprop") or ""
+        ).casefold()
+        if (
+            tag == "meta"
+            and not self.published_at
+            and date_field
+            in {
+                "article:published_time",
+                "datepublished",
+                "publishdate",
+                "pubdate",
+                "dc.date.issued",
+            }
+        ):
             candidate = attributes.get("content") or ""
             try:
                 datetime.fromisoformat(candidate.replace("Z", "+00:00"))
@@ -177,10 +231,10 @@ class _HTMLTextExtractor(HTMLParser):
                 self.published_at = candidate
         if tag in {"script", "style"}:
             self._skip_depth += 1
-        if tag == "script" and attributes.get("type", "").lower() == "application/ld+json":
+        if tag == "script" and (attributes.get("type") or "").lower() == "application/ld+json":
             self._schema_parts = []
 
-    def handle_endtag(self, tag: str) -> None:  # type: ignore[override]
+    def handle_endtag(self, tag: str) -> None:
         if tag == "a" and self._anchor_href:
             label = " ".join(self._anchor_parts).strip()
             if label:
@@ -201,7 +255,7 @@ class _HTMLTextExtractor(HTMLParser):
         if tag in {"script", "style"} and self._skip_depth:
             self._skip_depth -= 1
 
-    def handle_data(self, data: str) -> None:  # type: ignore[override]
+    def handle_data(self, data: str) -> None:
         if self._schema_parts is not None:
             self._schema_parts.append(data)
         if self._in_title:
@@ -214,7 +268,7 @@ class _HTMLTextExtractor(HTMLParser):
             if self._anchor_href:
                 self._anchor_parts.append(stripped)
 
-    def _schema_publication(self, value) -> None:
+    def _schema_publication(self, value: object) -> None:
         if self.published_at:
             return
         if isinstance(value, list):
@@ -223,7 +277,12 @@ class _HTMLTextExtractor(HTMLParser):
         elif isinstance(value, dict):
             types = value.get("@type", [])
             types = [types] if isinstance(types, str) else types
-            if isinstance(types, list) and {item for item in types if isinstance(item, str)} & {"Article", "NewsArticle", "BlogPosting", "Report"}:
+            if isinstance(types, list) and {item for item in types if isinstance(item, str)} & {
+                "Article",
+                "NewsArticle",
+                "BlogPosting",
+                "Report",
+            }:
                 candidate = value.get("datePublished")
                 if isinstance(candidate, str):
                     # Some publishers suffix a date-only value with Z. Preserve

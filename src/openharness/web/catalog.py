@@ -2,19 +2,43 @@
 
 from __future__ import annotations
 
+from typing import cast
 from uuid import uuid4
 
 from fastapi import HTTPException
 
 from openharness.auth.manager import AuthManager
-from openharness.config import load_settings, save_settings
+from openharness.config import Settings, load_settings, save_settings
 from openharness.config.settings import ProviderProfile, builtin_provider_profile_names
 from openharness.plugins import load_plugins
 from openharness.web.models import ModelInput
 
 
+from typing_extensions import TypedDict
 
-def profile_settings(profile_id: str):
+
+class ModelCard(TypedDict):
+    id: str
+    label: str
+    api_format: str
+    model: str
+    base_url: str | None
+    context_window_tokens: int | None
+    auto_compact_threshold_tokens: int | None
+    configured: bool
+    active: bool
+    supported: bool
+    editable: bool
+    auth_source: str
+    builtin: bool
+
+
+class ModelCatalog(TypedDict):
+    active_profile: str
+    items: list[ModelCard]
+
+
+def profile_settings(profile_id: str) -> Settings:
     settings = load_settings()
     profile = settings.merged_profiles().get(profile_id)
     if profile is None:
@@ -24,19 +48,24 @@ def profile_settings(profile_id: str):
     return settings.model_copy(update={"active_profile": profile_id}).materialize_active_profile()
 
 
-def models_list() -> dict:
+def models_list() -> ModelCatalog:
     manager = AuthManager()
     active = manager.get_active_profile()
     builtins = builtin_provider_profile_names()
-    items = []
+    items: list[ModelCard] = []
     for name, profile in manager.list_profiles().items():
         supported = profile.api_format in {"openai", "openai_compat", "anthropic", "copilot"}
-        editable = profile.auth_source not in {"codex_subscription", "claude_subscription", "copilot_oauth"}
+        editable = profile.auth_source not in {
+            "codex_subscription",
+            "claude_subscription",
+            "copilot_oauth",
+        }
         configured = False
         if supported:
             try:
                 if profile.auth_source == "copilot_oauth":
                     from openharness.api.copilot_auth import load_copilot_auth
+
                     configured = load_copilot_auth() is not None
                 else:
                     configured = bool(profile_settings(name).resolve_auth().value)
@@ -82,11 +111,20 @@ def save_model(data: ModelInput, profile_id: str | None = None) -> str:
         last_model=data.model,
         base_url=data.base_url,
         credential_slot=old.credential_slot if old else profile_id,
-        context_window_tokens=(data.context_window_tokens if "context_window_tokens" in data.model_fields_set
-            else old.context_window_tokens if old and old.resolved_model == data.model else None),
-        auto_compact_threshold_tokens=(data.auto_compact_threshold_tokens
+        context_window_tokens=(
+            data.context_window_tokens
+            if "context_window_tokens" in data.model_fields_set
+            else old.context_window_tokens
+            if old and old.resolved_model == data.model
+            else None
+        ),
+        auto_compact_threshold_tokens=(
+            data.auto_compact_threshold_tokens
             if "auto_compact_threshold_tokens" in data.model_fields_set
-            else old.auto_compact_threshold_tokens if old else None),
+            else old.auto_compact_threshold_tokens
+            if old
+            else None
+        ),
     )
     manager.upsert_profile(profile_id, profile)
     if data.api_key and data.api_key.get_secret_value().strip():
@@ -96,27 +134,25 @@ def save_model(data: ModelInput, profile_id: str | None = None) -> str:
     return profile_id
 
 
-def skills_list(cwd: str) -> list[dict]:
-    plugins = load_plugins(load_settings(), cwd)
+def skills_list(cwd: str) -> list[dict[str, object]]:
+    plugins = load_plugins(load_settings(), cwd, metadata_only=True)
     cards = []
     for plugin in plugins:
-        author = plugin.manifest.author or {}
         cards.append(
             {
                 "id": plugin.name,
                 "label": plugin.manifest.display_name or plugin.name,
                 "description": plugin.description,
                 "version": plugin.manifest.version,
-                "author": author.get("name", "社区贡献者"),
                 "enabled": plugin.enabled,
                 "diagnostics": plugin.diagnostics,
-                                "category": plugin.manifest.category,
+                "category": plugin.manifest.category,
                 "example": plugin.manifest.example,
                 "skills": [
                     {
                         "name": s.command_name or s.name,
                         "description": s.description,
-                        "content": s.content,
+                        "enabled": s.enabled,
                         "metadata": s.metadata.model_dump(),
                         "entrypoint": str(s.path),
                         "base_dir": str(s.base_dir),
@@ -129,8 +165,43 @@ def skills_list(cwd: str) -> list[dict]:
 
 
 def toggle_skill(cwd: str, plugin_id: str, enabled: bool) -> None:
-    if not any(p["id"] == plugin_id for p in skills_list(cwd)):
-        raise HTTPException(404, "技能插件不存在")
     settings = load_settings()
-    updated = {**settings.enabled_plugins, plugin_id: enabled}
-    save_settings(settings.model_copy(update={"enabled_plugins": updated}))
+    cards = skills_list(cwd)
+    if any(p["id"] == plugin_id for p in cards):
+        updated = {**settings.enabled_plugins, plugin_id: enabled}
+        save_settings(settings.model_copy(update={"enabled_plugins": updated}))
+    elif any(
+        s["name"] == plugin_id for p in cards for s in cast(list[dict[str, object]], p["skills"])
+    ):
+        # Retain PATCH /skills/<old-business-plugin-id> for old clients/configs.
+        selected = next(
+            s
+            for p in cards
+            for s in cast(list[dict[str, object]], p["skills"])
+            if s["name"] == plugin_id
+        )
+        metadata = selected["metadata"]
+        key = (
+            str(metadata.get("skill_id") or plugin_id) if isinstance(metadata, dict) else plugin_id
+        )
+        updated = {**settings.enabled_skills, key: enabled}
+        save_settings(settings.model_copy(update={"enabled_skills": updated}))
+    else:
+        raise HTTPException(404, "技能插件不存在")
+
+
+def skill_detail(cwd: str, plugin_id: str, name: str) -> dict[str, object]:
+    """Only a specifically requested entrypoint is read; resources remain unloaded."""
+    for plugin in load_plugins(load_settings(), cwd, metadata_only=True):
+        if plugin.name != plugin_id:
+            continue
+        for skill in plugin.skills:
+            if name not in {skill.name, skill.command_name}:
+                continue
+            if not skill.enabled or skill.metadata.status in {"draft", "retired"}:
+                raise HTTPException(409, "技能已禁用或未发布")
+            try:
+                return {"name": name, "content": skill.load_content()}
+            except (ValueError, OSError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(404, "技能不存在")

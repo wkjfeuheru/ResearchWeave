@@ -97,13 +97,17 @@ class PromptTooLongThenSuccessApiClient:
             raise RequestFailure("prompt too long")
         if self._calls == 2:
             yield ApiMessageCompleteEvent(
-                message=ConversationMessage(role="assistant", content=[TextBlock(text="<summary>compressed</summary>")]),
+                message=ConversationMessage(
+                    role="assistant", content=[TextBlock(text="<summary>compressed</summary>")]
+                ),
                 usage=UsageSnapshot(input_tokens=1, output_tokens=1),
                 stop_reason=None,
             )
             return
         yield ApiMessageCompleteEvent(
-            message=ConversationMessage(role="assistant", content=[TextBlock(text="after reactive compact")]),
+            message=ConversationMessage(
+                role="assistant", content=[TextBlock(text="after reactive compact")]
+            ),
             usage=UsageSnapshot(input_tokens=1, output_tokens=1),
             stop_reason=None,
         )
@@ -135,7 +139,9 @@ class MaxTokensTooLargeThenSuccessApiClient:
                 "32000 completion tokens, whereas you provided 120000."
             )
         yield ApiMessageCompleteEvent(
-            message=ConversationMessage(role="assistant", content=[TextBlock(text="after token clamp")]),
+            message=ConversationMessage(
+                role="assistant", content=[TextBlock(text="after token clamp")]
+            ),
             usage=UsageSnapshot(input_tokens=1, output_tokens=1),
             stop_reason=None,
         )
@@ -182,7 +188,10 @@ class CoordinatorLoopApiClient:
             )
             return
         yield ApiMessageCompleteEvent(
-            message=ConversationMessage(role="assistant", content=[TextBlock(text="Worker launched; coordinator mode is active.")]),
+            message=ConversationMessage(
+                role="assistant",
+                content=[TextBlock(text="Worker launched; coordinator mode is active.")],
+            ),
             usage=UsageSnapshot(input_tokens=2, output_tokens=2),
             stop_reason=None,
         )
@@ -261,12 +270,17 @@ async def test_query_engine_clamps_oversized_max_tokens_before_request(tmp_path:
     events = [event async for event in engine.submit_message("hello")]
 
     assert client.requests[0].max_tokens == 128_000
-    assert any(isinstance(event, StatusEvent) and "safe per-request output cap" in event.message for event in events)
+    assert any(
+        isinstance(event, StatusEvent) and "safe per-request output cap" in event.message
+        for event in events
+    )
     assert isinstance(events[-1], AssistantTurnComplete)
 
 
 @pytest.mark.asyncio
-async def test_query_engine_retries_with_provider_completion_token_limit(tmp_path: Path, monkeypatch):
+async def test_query_engine_retries_with_provider_completion_token_limit(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
     client = MaxTokensTooLargeThenSuccessApiClient()
     engine = QueryEngine(
@@ -284,7 +298,10 @@ async def test_query_engine_retries_with_provider_completion_token_limit(tmp_pat
     events = [event async for event in engine.submit_message("hello")]
 
     assert [request.max_tokens for request in client.requests] == [120_000, 32_000]
-    assert any(isinstance(event, StatusEvent) and "provider limit 32000" in event.message for event in events)
+    assert any(
+        isinstance(event, StatusEvent) and "provider limit 32000" in event.message
+        for event in events
+    )
     assert isinstance(events[-1], AssistantTurnComplete)
 
 
@@ -336,8 +353,6 @@ async def test_query_engine_executes_tool_calls(tmp_path: Path, monkeypatch):
     assert isinstance(events[-1], AssistantTurnComplete)
     assert "alpha and beta" in events[-1].message.text
     assert len(engine.messages) == 4
-
-
 
 
 @pytest.mark.asyncio
@@ -399,7 +414,9 @@ async def test_query_engine_surfaces_retry_status_events(tmp_path: Path):
 
     events = [event async for event in engine.submit_message("hello")]
 
-    assert any(isinstance(event, StatusEvent) and "retrying in 1.5s" in event.message for event in events)
+    assert any(
+        isinstance(event, StatusEvent) and "retrying in 1.5s" in event.message for event in events
+    )
     assert isinstance(events[-1], AssistantTurnComplete)
 
 
@@ -410,11 +427,15 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
         api_client=FakeApiClient(
             [
                 _FakeResponse(
-                    message=ConversationMessage(role="assistant", content=[TextBlock(text="<summary>trimmed</summary>")]),
+                    message=ConversationMessage(
+                        role="assistant", content=[TextBlock(text="<summary>trimmed</summary>")]
+                    ),
                     usage=UsageSnapshot(input_tokens=1, output_tokens=1),
                 ),
                 _FakeResponse(
-                    message=ConversationMessage(role="assistant", content=[TextBlock(text="after compact")]),
+                    message=ConversationMessage(
+                        role="assistant", content=[TextBlock(text="after compact")]
+                    ),
                     usage=UsageSnapshot(input_tokens=1, output_tokens=1),
                 ),
             ]
@@ -443,12 +464,24 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
         message.content = [TextBlock(text="recent detail")]
     events = [event async for event in engine.submit_message("hello")]
 
-    hooks_start_index = next(i for i, event in enumerate(events) if isinstance(event, CompactProgressEvent) and event.phase == "hooks_start")
-    compact_start_index = next(i for i, event in enumerate(events) if isinstance(event, CompactProgressEvent) and event.phase == "compact_start")
-    final_index = next(i for i, event in enumerate(events) if isinstance(event, AssistantTurnComplete))
+    hooks_start_index = next(
+        i
+        for i, event in enumerate(events)
+        if isinstance(event, CompactProgressEvent) and event.phase == "hooks_start"
+    )
+    compact_start_index = next(
+        i
+        for i, event in enumerate(events)
+        if isinstance(event, CompactProgressEvent) and event.phase == "compact_start"
+    )
+    final_index = next(
+        i for i, event in enumerate(events) if isinstance(event, AssistantTurnComplete)
+    )
     assert hooks_start_index < compact_start_index
     assert compact_start_index < final_index
-    assert any(isinstance(event, CompactProgressEvent) and event.phase == "compact_end" for event in events)
+    assert any(
+        isinstance(event, CompactProgressEvent) and event.phase == "compact_end" for event in events
+    )
 
 
 @pytest.mark.asyncio
@@ -761,9 +794,9 @@ async def test_notification_hook_fires_on_permission_prompt(tmp_path: Path, monk
     assert prompt_tool_calls
 
 
-
-
-def _tool_context(tmp_path: Path, registry: ToolRegistry, settings: PermissionSettings) -> QueryContext:
+def _tool_context(
+    tmp_path: Path, registry: ToolRegistry, settings: PermissionSettings
+) -> QueryContext:
     return QueryContext(
         api_client=_NoopApiClient(),
         tool_registry=registry,
@@ -824,7 +857,9 @@ async def test_execute_tool_call_applies_path_rules_to_directory_roots(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_call_returns_actionable_reason_when_user_denies_confirmation(tmp_path: Path):
+async def test_execute_tool_call_returns_actionable_reason_when_user_denies_confirmation(
+    tmp_path: Path,
+):
     async def _deny(_tool_name: str, _reason: str) -> bool:
         return False
 
@@ -1007,6 +1042,15 @@ class _OkInput(BaseModel):
 
 
 class _OkTool(BaseTool):
+    @property
+    def contract(self):
+        return {
+            "name": self.name,
+            "effect": "read_only",
+            "parallelism": "resources",
+            "resources_read": ["test-fixture"],
+        }
+
     name = "ok_tool"
     description = "Returns success."
     input_model = _OkInput
@@ -1150,7 +1194,9 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
         [
             ConversationMessage.from_user_text(f"historical user request {index}")
             if index % 2 == 0
-            else ConversationMessage(role="assistant", content=[TextBlock(text=f"historical answer {index}")])
+            else ConversationMessage(
+                role="assistant", content=[TextBlock(text=f"historical answer {index}")]
+            )
             for index in range(8)
         ]
     )
@@ -1158,7 +1204,9 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
     engine._messages[0].content = [TextBlock(text="historical detail " * 2000)]
     events = [event async for event in engine.submit_message("new request after compact")]
 
-    assert any(isinstance(event, CompactProgressEvent) and event.phase == "compact_end" for event in events)
+    assert any(
+        isinstance(event, CompactProgressEvent) and event.phase == "compact_end" for event in events
+    )
     assert any("This session is being continued" in message.text for message in engine.messages)
     assert any(
         isinstance(block, ToolUseBlock) and block.id == "toolu_ok_after_compact"
@@ -1224,16 +1272,22 @@ async def test_query_engine_synthesizes_tool_result_when_parallel_tool_raises(tm
     assert set(completed_by_name) == {"ok_tool", "boom_tool"}
     assert completed_by_name["ok_tool"].is_error is False
     assert completed_by_name["ok_tool"].output == "ok"
-    assert completed_by_name["ok_tool"].metadata == {"sentinel": "metadata"}
+    assert completed_by_name["ok_tool"].metadata["sentinel"] == "metadata"
+    assert completed_by_name["ok_tool"].metadata["status"] == "success"
+    assert completed_by_name["ok_tool"].metadata["operation_id"]
     assert completed_by_name["boom_tool"].is_error is True
     assert "RuntimeError" in completed_by_name["boom_tool"].output
     assert "boom" in completed_by_name["boom_tool"].output
 
     user_tool_messages = [
-        msg for msg in engine.messages if msg.role == "user" and any(isinstance(block, ToolResultBlock) for block in msg.content)
+        msg
+        for msg in engine.messages
+        if msg.role == "user" and any(isinstance(block, ToolResultBlock) for block in msg.content)
     ]
     assert len(user_tool_messages) == 1
-    result_blocks = [block for block in user_tool_messages[0].content if isinstance(block, ToolResultBlock)]
+    result_blocks = [
+        block for block in user_tool_messages[0].content if isinstance(block, ToolResultBlock)
+    ]
     assert {block.tool_use_id for block in result_blocks} == {"toolu_ok", "toolu_boom"}
 
     assert isinstance(events[-1], AssistantTurnComplete)
@@ -1262,17 +1316,29 @@ async def test_parallel_fast_result_is_emitted_before_slow_tool_settles(tmp_path
     registry.register(SlowTool())
     registry.register(_OkTool())
     engine = QueryEngine(
-        api_client=FakeApiClient([
-            _FakeResponse(ConversationMessage(role="assistant", content=[
-                ToolUseBlock(id="slow", name="slow_tool", input={}),
-                ToolUseBlock(id="fast", name="ok_tool", input={}),
-            ]), UsageSnapshot(input_tokens=1, output_tokens=1)),
-            _FakeResponse(ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
-                          UsageSnapshot(input_tokens=1, output_tokens=1)),
-        ]),
+        api_client=FakeApiClient(
+            [
+                _FakeResponse(
+                    ConversationMessage(
+                        role="assistant",
+                        content=[
+                            ToolUseBlock(id="slow", name="slow_tool", input={}),
+                            ToolUseBlock(id="fast", name="ok_tool", input={}),
+                        ],
+                    ),
+                    UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+                _FakeResponse(
+                    ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                    UsageSnapshot(input_tokens=1, output_tokens=1),
+                ),
+            ]
+        ),
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
-        cwd=tmp_path, model="claude-sonnet-4-6", system_prompt="system",
+        cwd=tmp_path,
+        model="claude-sonnet-4-6",
+        system_prompt="system",
     )
     fast_received = asyncio.Event()
 
@@ -1294,8 +1360,12 @@ async def test_parallel_fast_result_is_emitted_before_slow_tool_settles(tmp_path
         else:
             release.set()
             await asyncio.wait_for(run, 2)
-            results = [block.tool_use_id for message in engine.messages for block in message.content
-                       if isinstance(block, ToolResultBlock)]
+            results = [
+                block.tool_use_id
+                for message in engine.messages
+                for block in message.content
+                if isinstance(block, ToolResultBlock)
+            ]
             assert results == ["slow", "fast"]
         assert settled.is_set()
     finally:
@@ -1315,13 +1385,15 @@ async def test_query_engine_sanitizes_dangling_tool_use_before_new_prompt(tmp_pa
         model="claude-sonnet-4-6",
         system_prompt="system",
     )
-    engine.load_messages([
-        ConversationMessage.from_user_text("previous request"),
-        ConversationMessage(
-            role="assistant",
-            content=[ToolUseBlock(id="call_missing_output", name="ok_tool", input={})],
-        ),
-    ])
+    engine.load_messages(
+        [
+            ConversationMessage.from_user_text("previous request"),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="call_missing_output", name="ok_tool", input={})],
+            ),
+        ]
+    )
 
     events = [event async for event in engine.submit_message("new prompt")]
 
@@ -1344,13 +1416,15 @@ async def test_query_engine_continue_pending_sanitizes_dangling_tool_use(tmp_pat
         model="claude-sonnet-4-6",
         system_prompt="system",
     )
-    engine.load_messages([
-        ConversationMessage.from_user_text("previous request"),
-        ConversationMessage(
-            role="assistant",
-            content=[ToolUseBlock(id="call_missing_output", name="ok_tool", input={})],
-        ),
-    ])
+    engine.load_messages(
+        [
+            ConversationMessage.from_user_text("previous request"),
+            ConversationMessage(
+                role="assistant",
+                content=[ToolUseBlock(id="call_missing_output", name="ok_tool", input={})],
+            ),
+        ]
+    )
 
     events = [event async for event in engine.continue_pending()]
 
@@ -1409,14 +1483,20 @@ async def test_query_engine_offloads_large_tool_result_outputs(tmp_path: Path, m
     assert "snapshot-line" in completed[0].output
 
     user_tool_messages = [
-        msg for msg in engine.messages if msg.role == "user" and any(isinstance(block, ToolResultBlock) for block in msg.content)
+        msg
+        for msg in engine.messages
+        if msg.role == "user" and any(isinstance(block, ToolResultBlock) for block in msg.content)
     ]
-    result_blocks = [block for block in user_tool_messages[0].content if isinstance(block, ToolResultBlock)]
+    result_blocks = [
+        block for block in user_tool_messages[0].content if isinstance(block, ToolResultBlock)
+    ]
     inline = result_blocks[0].content
     assert "Full output saved to:" in inline
     assert "Original size:" in inline
     assert inline.count("snapshot-line") < 40
-    artifact_line = next(line for line in inline.splitlines() if line.startswith("Full output saved to:"))
+    artifact_line = next(
+        line for line in inline.splitlines() if line.startswith("Full output saved to:")
+    )
     artifact_path = Path(artifact_line.removeprefix("Full output saved to:").strip())
     assert artifact_path.exists()
     assert artifact_path.read_text(encoding="utf-8") == "snapshot-line\n" * 40
@@ -1455,28 +1535,49 @@ async def test_same_name_parallel_tools_keep_ids_when_completion_order_reverses(
         async def execute(self, arguments, context):
             if arguments.wait:
                 await release.wait()
-            return ToolResult(output='slow' if arguments.wait else 'fast')
+            return ToolResult(output="slow" if arguments.wait else "fast")
 
     registry = ToolRegistry()
     registry.register(OrderedTool())
     engine = QueryEngine(
-        api_client=FakeApiClient([
-            _FakeResponse(ConversationMessage(role='assistant', content=[
-                ToolUseBlock(id='slow', name='ok_tool', input={'wait': True}),
-                ToolUseBlock(id='fast', name='ok_tool', input={'wait': False}),
-            ]), UsageSnapshot()),
-            _FakeResponse(ConversationMessage(role='assistant', content=[TextBlock(text='done')]), UsageSnapshot()),
-        ]),
+        api_client=FakeApiClient(
+            [
+                _FakeResponse(
+                    ConversationMessage(
+                        role="assistant",
+                        content=[
+                            ToolUseBlock(id="slow", name="ok_tool", input={"wait": True}),
+                            ToolUseBlock(id="fast", name="ok_tool", input={"wait": False}),
+                        ],
+                    ),
+                    UsageSnapshot(),
+                ),
+                _FakeResponse(
+                    ConversationMessage(role="assistant", content=[TextBlock(text="done")]),
+                    UsageSnapshot(),
+                ),
+            ]
+        ),
         tool_registry=registry,
         permission_checker=PermissionChecker(PermissionSettings(mode=PermissionMode.FULL_AUTO)),
-        cwd=tmp_path, model='claude-sonnet-4-6', system_prompt='system',
+        cwd=tmp_path,
+        model="claude-sonnet-4-6",
+        system_prompt="system",
     )
     events = []
+
     async def consume():
-        async for event in engine.submit_message('run both'):
+        async for event in engine.submit_message("run both"):
             events.append(event)
-            if isinstance(event, ToolExecutionCompleted) and event.tool_use_id == 'fast':
+            if isinstance(event, ToolExecutionCompleted) and event.tool_use_id == "fast":
                 release.set()
+
     await asyncio.wait_for(consume(), 3)
-    assert [event.tool_use_id for event in events if isinstance(event, ToolExecutionStarted)] == ['slow', 'fast']
-    assert [event.tool_use_id for event in events if isinstance(event, ToolExecutionCompleted)] == ['fast', 'slow']
+    assert [event.tool_use_id for event in events if isinstance(event, ToolExecutionStarted)] == [
+        "slow",
+        "fast",
+    ]
+    assert [event.tool_use_id for event in events if isinstance(event, ToolExecutionCompleted)] == [
+        "fast",
+        "slow",
+    ]

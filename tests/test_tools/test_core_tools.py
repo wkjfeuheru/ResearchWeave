@@ -182,7 +182,6 @@ async def test_tool_search_tools(tmp_path: Path):
     assert "read_file" in search_result.output
 
 
-
 @pytest.mark.asyncio
 async def test_skill_and_config_tools(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
@@ -228,8 +227,6 @@ async def test_skill_tool_rejects_user_only_skills(tmp_path: Path, monkeypatch):
 
     assert result.is_error is True
     assert "can only be invoked by the user as /deploy" in result.output
-
-
 
 
 @pytest.mark.asyncio

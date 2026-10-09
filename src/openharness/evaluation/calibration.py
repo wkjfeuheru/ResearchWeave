@@ -1,5 +1,8 @@
 """Stratified review packets and auditable judge/human disagreements."""
 
+from __future__ import annotations
+from openharness.evaluation.models import EvalCase, RunArtifact
+
 import json
 import math
 from pathlib import Path
@@ -7,7 +10,7 @@ from pathlib import Path
 from openharness.utils.fs import atomic_write_text
 
 
-def calibration_cases(cases):
+def calibration_cases(cases: list[EvalCase]) -> list[EvalCase]:
     selected = []
     for category in ("financial", "events", "digest", "deep", "cross"):
         if category in {"financial", "events"}:
@@ -55,7 +58,7 @@ def calibration_cases(cases):
     return selected
 
 
-def review_report(directory, artifacts):
+def review_report(directory: str | Path, artifacts: list[RunArtifact]) -> dict[str, object]:
     directory = Path(directory)
     source = directory / "dataset" / "calibration.jsonl"
     if not source.is_file():
@@ -105,7 +108,7 @@ def review_report(directory, artifacts):
                 if name in metrics
             )
         )
-        if valid:
+        if valid and a is not None:
             reviewed += 1
             signatures.add(
                 (

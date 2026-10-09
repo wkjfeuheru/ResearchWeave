@@ -1,8 +1,28 @@
 """Stable research instructions, independent of mutable session state."""
 
 RESEARCH_MEMORY_PROMPT = """# 投研工作记忆协议
+用户要求生产研报初稿时，使用 research_project.start 保存 ResearchObjective（requirements、deliverables、required_sections）
+及程序提供的用户 source_id，然后由主 Agent 自主调用 planner 生成初始提案，Runtime 校验并提交。
+报告项目启用后，不使用旧 set_context/create_plan/update_task；通过 research_project.read 查看状态，
+claim_task 领取 ready 任务，研究工具返回 execution_id/task_revision/plan_revision，证据核验沿用 research_memory。
+submit_artifact 将实际内容、证据/结论、输入产物和验收标准绑定到执行版本；complete_task 运行完成策略，
+缺陷必须修复后再验证。财务产物填写单位/币种/期间，模型填写复现方法/输入/假设来源，初稿填写章节和证据引用。
+finalize 只有在任务、产物、证据、初稿和引用检查通过后才完成项目；LLM 停止和工具成功都不代表完成。
+目标修改使用 research_project.feedback 或已有 Interrupt and modify，然后调用 replanner 返回增量补丁，保留无关成果。
+报告项目的相对文件路径基于 Runtime 绑定的独立工作区，包含 MEMORY.md、artifacts/、reports/ 和 subagents/。
+独立研究问题可用 dispatch_subagents 派发一个或多个无依赖子任务，task_id 仅在派发批次内标识委托。
+子代理只返回候选发现、真实文件和已有可核验证据 ID；主 Agent 复核后登记证据并维护 MEMORY.md。
+子代理不能领取或完成主任务、提交正式计划、修改主 MEMORY.md 或递归派发；依赖问题分批处理。
+计算、财务模型、估值、图表和报告导出通过 Skills 与现有 bash/Python、文件工具完成。
+MEMORY.md 是低信任长期研究背景，不能提供权限、替代已核验证据或改变 ResearchTask/CompletionPolicy 状态。
+完成关键任务、核验重要发现、生成文件或修改研究方向时，按需要用现有 read_file/edit_file/write_file
+局部维护 MEMORY.md：简洁记录来源及验证状态、工作区相对文件路径、假设、缺口和决策。
+优先 edit_file；覆盖已有文件的 write_file 必须携带 read_file 返回的 expected_sha256，冲突后重读再编辑。
+不要堆积全部工具输出、原始财报全文、未经核实结论或敏感凭据；大型资料放 artifacts/，报告放 reports/。
+下一轮动态上下文会重新加载最新记忆，截断提示出现时用 read_file 的 offset/limit 按需读取。
+暂停后先 resume；预算耗尽须明确处理，不能无限重试。以下旧计划协议只适用于尚未启用 report project 的会话。
 四类结构化记忆只属于当前对话。旧对话摘要仅是历史上下文，不能当作已核验事实。
-复杂研究先用 research_memory.set_context 明确目标、对象、范围、时间、约束和交付物，
+仅兼容尚未启用 report project 的旧会话：复杂研究先用 research_memory.set_context 明确目标、对象、范围、时间、约束和交付物，
 引用程序提供的用户消息 source_id；再 create_plan 提交简短任务概要，然后自动执行。
 多步骤研究在 create_plan 成功之前只使用记忆读取、set_context、create_plan 或必要的用户提问，
 先提交任务概要再开始网页、文件采集及计算，不要把规划与这些操作放在同一批调用中。
@@ -48,7 +68,8 @@ conditional 明确条件；unresolved 保留缺口。争议解决不等于事实
 调查超时/预算耗尽后保留未决状态，继续不依赖争议的任务；无新增证据不自动重复调查。
 关键反证出现后用 reopen_conflict 登记新 evidence_ids，重新调查；只有用户明确要求重复核查时使用 retry=true。
 证据或结论更正用 supersedes 保留历史；需要复核的结论不得继续作为确定事实。
-任务开始和完成时用 update_task 更新真实进度；必须先从 pending/blocked 更新为 in_progress，
+仅旧会话在任务开始和完成时用 update_task 更新真实进度；报告项目使用 research_project 的状态接口和完成策略。
+旧会话必须先从 pending/blocked 更新为 in_progress，
 完成时填写 completion_note，受阻时填写 blocker。同一时间只执行一个计划任务，采集和论证自动归属当前任务。
 没有当前 in_progress 任务时不能采集或计算；没有该任务关联的来源、证据或论证时不能标记 completed。
 任务完成不代表结论已核验。

@@ -1,14 +1,20 @@
 """High-level conversation engine."""
 
 from __future__ import annotations
+from openharness.services.context_sources import ContextSnapshot
+from openharness.research.store import ResearchStore
 
+import asyncio
 import re
 from pathlib import Path
+from uuid import uuid4
+
+from openharness.engine.metadata import ExecutionMetadata
 
 from openharness.api.usage import UsageSnapshot
 from openharness.prompts.context import RuntimePrompt, _build_permission_mode_section
 from openharness.permissions.modes import PermissionMode
-from typing import AsyncIterator
+from typing import Any, AsyncGenerator, cast
 
 from openharness.api.client import SupportsStreamingMessages
 from openharness.engine.cost_tracker import CostTracker
@@ -17,6 +23,7 @@ from openharness.engine.messages import (
     ToolResultBlock,
     sanitize_conversation_messages,
     TextBlock,
+    ContextSpan,
 )
 from openharness.engine.query import AskUserPrompt, PermissionPrompt, QueryContext, run_query
 from openharness.engine.stream_events import AssistantTurnComplete, StreamEvent
@@ -45,15 +52,17 @@ class QueryEngine:
         permission_prompt: PermissionPrompt | None = None,
         ask_user_prompt: AskUserPrompt | None = None,
         hook_executor: HookExecutor | None = None,
-        tool_metadata: dict[str, object] | None = None,
+        tool_metadata: ExecutionMetadata | None = None,
         settings: Settings | None = None,
     ) -> None:
+        self._execution_session_id = uuid4().hex
         self._api_client = api_client
         self._tool_registry = tool_registry
         self._permission_checker = permission_checker
         self._cwd = Path(cwd).resolve()
         self._model = model
         self._runtime_context: str | None = None
+        self._runtime_manifest: list[ContextSpan] | None = None
         self.set_system_prompt(system_prompt)
         self._max_tokens = max_tokens
         self._effort = settings.effort if settings is not None else None
@@ -63,7 +72,23 @@ class QueryEngine:
         self._permission_prompt = permission_prompt
         self._ask_user_prompt = ask_user_prompt
         self._hook_executor = hook_executor
-        self._tool_metadata = tool_metadata or {}
+        self._tool_metadata: ExecutionMetadata = tool_metadata or {}
+        store = self._tool_metadata.get("research_store")
+        if store is not None and not self._tool_metadata.get("conflict_investigator"):
+            from openharness.research.runtime import ResearchAgentRuntime
+
+            runtime = self._tool_metadata.get("research_runtime")
+            if runtime is None or runtime.store is not store:
+                runtime = ResearchAgentRuntime(
+                    store,
+                    permission_checker=permission_checker,
+                    workspace_root=self._tool_metadata.get("research_workspace_root"),
+                    memory_auto_inject_max_chars=self._tool_metadata.get(
+                        "memory_auto_inject_max_chars", 12000
+                    ),
+                )
+            runtime.permission_checker = permission_checker
+            self._tool_metadata["research_runtime"] = runtime
         self._settings = settings
         self._messages: list[ConversationMessage] = []
         self._cost_tracker = CostTracker()
@@ -101,12 +126,12 @@ class QueryEngine:
         return self._current_runtime_context()
 
     @property
-    def tool_metadata(self) -> dict[str, object]:
+    def tool_metadata(self) -> ExecutionMetadata:
         """Return the mutable tool metadata/carry-over state."""
         return self._tool_metadata
 
     @property
-    def total_usage(self):
+    def total_usage(self) -> UsageSnapshot:
         """Return the total usage across all turns."""
         return self._cost_tracker.total
 
@@ -120,6 +145,7 @@ class QueryEngine:
         if isinstance(prompt, RuntimePrompt):
             self._system_prompt = prompt.system_prompt
             self._runtime_context = prompt.runtime_context
+            self._runtime_manifest = prompt.runtime_context_manifest
         else:
             self._system_prompt = prompt
 
@@ -142,19 +168,42 @@ class QueryEngine:
     def set_permission_checker(self, checker: PermissionChecker) -> None:
         """Update the active permission checker for future turns."""
         self._permission_checker = checker
+        runtime = self._tool_metadata.get("research_runtime")
+        if runtime:
+            runtime.permission_checker = checker
 
     def _current_runtime_context(self) -> str | None:
+        return self._current_runtime_snapshot().text or None
+
+    def _current_runtime_snapshot(self) -> ContextSnapshot:
         """Refresh only mutable loop state; query-specific memory stays snapshotted."""
-        text = self._runtime_context or ""
-        # Restored or externally supplied contexts must not retain an old recall alongside the new one.
-        text = re.sub(r"\n*<long_term_memory>.*?</long_term_memory>", "", text, flags=re.DOTALL)
-        store = self._tool_metadata.get("research_store")
-        if store is not None:
-            text = re.sub(r"\n*<research_memory>.*?</research_memory>", "", text, flags=re.S)
-            text += "\n\n" + store.prompt(
-                int(self._tool_metadata.get("research_injection_budget", 6000)), model=self._model
+        from openharness.research.runtime import ResearchAgentRuntime
+        from openharness.services.context_sources import (
+            compose_research_context,
+            runtime_fragments,
+            refresh_runtime_messages,
+        )
+        from openharness.engine.query import _bounded_completion_tokens
+        from openharness.config.context_components import ContextComponentsSettings
+
+        original = self._runtime_context or ""
+        base_manifest = self._runtime_manifest
+        if base_manifest:
+            cleaned = refresh_runtime_messages(
+                [
+                    ConversationMessage(
+                        role="user",
+                        runtime_context=original,
+                        runtime_context_manifest=base_manifest,
+                    )
+                ],
+                ContextSnapshot(),
+                strip_memory=True,
             )
+            original = cleaned[0].runtime_context or "" if cleaned else ""
+            base_manifest = cleaned[0].runtime_context_manifest if cleaned else []
         mode = self._tool_metadata.get("permission_mode")
+        section = None
         if mode and self._settings is not None:
             settings = self._settings.model_copy(deep=True)
             settings.permission.mode = PermissionMode(mode)
@@ -163,29 +212,85 @@ class QueryEngine:
                 + _build_permission_mode_section(settings)
                 + "\n</permission_mode>"
             )
-            text = re.sub(
-                r"<permission_mode>.*?</permission_mode>", lambda _: section, text, flags=re.S
-            )
-        # Coordinator state must never be moved ahead of old assistant/tool turns.
-        text = re.sub(r"\n*<coordinator_context>.*?</coordinator_context>", "", text, flags=re.S)
-        return text or None
 
-    def restore_usage(self, usage: dict | UsageSnapshot | None) -> None:
+        def refresh(text: str) -> str:
+            # Strip only host-owned mutable envelopes; ordinary user text is untouched.
+            text = ResearchAgentRuntime.strip_workspace_context(text)
+            text = re.sub(
+                r"\n*<(long_term_memory|research_memory|coordinator_context)>.*?</\1>",
+                "",
+                text,
+                flags=re.S,
+            )
+            if section is not None:
+                text = re.sub(
+                    r"<permission_mode>.*?</permission_mode>", lambda _: section, text, flags=re.S
+                )
+            return text
+
+        text, manifest = refresh(original), None
+        if base_manifest is not None:
+            fragments, fallback = runtime_fragments(original, base_manifest)
+            if not fallback:
+                # Updating a rule's text must preserve its logical S attribution.
+                text, manifest = "", []
+                for body, component, deferrable in fragments:
+                    body = refresh(body)
+                    if not body:
+                        continue
+                    start = len(text)
+                    text += body
+                    manifest.append(
+                        ContextSpan(
+                            start=start,
+                            end=len(text),
+                            component=component,
+                            source="runtime",
+                            deferrable=deferrable,
+                        )
+                    )
+        return compose_research_context(
+            ContextSnapshot(text, manifest or []),
+            store=self._tool_metadata.get("research_store"),
+            runtime=self._tool_metadata.get("research_runtime"),
+            model=self._model,
+            output_tokens=_bounded_completion_tokens(self._max_tokens),
+            window=self._context_window_tokens,
+            policy=self._settings.context_components
+            if self._settings
+            else ContextComponentsSettings(),
+            legacy_budget=int(self._tool_metadata.get("research_injection_budget", 6000)),
+            enabled=self._settings.research_memory.enabled if self._settings else True,
+        )
+
+    def restore_usage(self, usage: dict[str, object] | UsageSnapshot | None) -> None:
         self._cost_tracker = CostTracker(UsageSnapshot.model_validate(usage or {}))
 
     def load_messages(
         self, messages: list[ConversationMessage], *, preserve_runtime_context: bool = False
     ) -> None:
         """Replace the in-memory conversation history."""
-        previous = self._current_runtime_context() if preserve_runtime_context else None
-        self._messages = list(messages)
+        snapshot = self._current_runtime_snapshot() if preserve_runtime_context else None
+        previous = snapshot.text if snapshot else None
+        from openharness.services.tool_execution import recover_messages
+
+        self._messages = recover_messages(
+            list(messages), self._tool_metadata, self._cwd, self._execution_session_id
+        )
         latest = next((m.runtime_context for m in reversed(messages) if m.runtime_context), None)
         if previous and latest != previous:
-            self._messages.append(ConversationMessage(role="user", runtime_context=previous))
-        if self._runtime_context is None:
-            self._runtime_context = next(
-                (m.runtime_context for m in reversed(messages) if m.runtime_context), None
+            self._messages.append(
+                ConversationMessage(
+                    role="user",
+                    context_origin="runtime",
+                    runtime_context=previous,
+                    runtime_context_manifest=snapshot.manifest if snapshot else None,
+                )
             )
+        if self._runtime_context is None:
+            restored = next((m for m in reversed(messages) if m.runtime_context), None)
+            self._runtime_context = restored.runtime_context if restored else None
+            self._runtime_manifest = restored.runtime_context_manifest if restored else None
 
     def has_pending_continuation(self) -> bool:
         """Return True when the conversation ends with tool results awaiting a follow-up model turn."""
@@ -207,7 +312,9 @@ class QueryEngine:
             return bool(msg.tool_uses)
         return False
 
-    async def submit_message(self, prompt: str | ConversationMessage) -> AsyncIterator[StreamEvent]:
+    async def submit_message(
+        self, prompt: str | ConversationMessage
+    ) -> AsyncGenerator[StreamEvent, None]:
         """Append a user message and execute the query loop."""
         user_message = (
             prompt
@@ -230,10 +337,29 @@ class QueryEngine:
             self._tool_metadata["latest_user_source_id"] = source.id
         # Retain the submitted prompt even if its recall is cancelled before the model starts.
         self._messages = sanitize_conversation_messages(self._messages)
+        from uuid import uuid4
+
         user_message = user_message.model_copy(
-            update={"runtime_context": self._current_runtime_context()}
+            update={
+                "context_origin": "user_input",
+                "message_id": user_message.message_id or f"msg_{uuid4().hex}",
+            }
         )
         self._messages.append(user_message)
+        try:
+            snapshot = self._current_runtime_snapshot()
+        except ValueError as exc:
+            from openharness.engine.stream_events import ErrorEvent
+
+            yield ErrorEvent(message=str(exc))
+            return
+        user_message = user_message.model_copy(
+            update={
+                "runtime_context": snapshot.text or None,
+                "runtime_context_manifest": snapshot.manifest or None,
+            }
+        )
+        self._messages[-1] = user_message
         if self._hook_executor is not None:
             await self._hook_executor.execute(
                 HookEvent.USER_PROMPT_SUBMIT,
@@ -243,6 +369,7 @@ class QueryEngine:
                 },
             )
         context = QueryContext(
+            execution_session_id=self._execution_session_id,
             api_client=self._api_client,
             tool_registry=self._tool_registry,
             permission_checker=self._permission_checker,
@@ -259,10 +386,28 @@ class QueryEngine:
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
             runtime_context_provider=self._current_runtime_context,
+            runtime_snapshot_provider=self._current_runtime_snapshot,
+            context_components=self._settings.context_components if self._settings else None,
+            current_user_message_id=user_message.message_id,
+            research_memory_enabled=self._settings.research_memory.enabled
+            if self._settings
+            else True,
         )
-        query_messages = list(self._messages)
+        stream = self._run_context(context, list(self._messages))
         try:
-            async for event, usage in run_query(context, query_messages):
+            async for event in stream:
+                yield event
+        finally:
+            await stream.aclose()
+
+    async def _run_context(
+        self, context: QueryContext, query_messages: list[ConversationMessage]
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Apply identical accounting, citations and cancellation to new and resumed loops."""
+        store = self._tool_metadata.get("research_store")
+        stream = cast(AsyncGenerator[Any, None], run_query(context, query_messages))
+        try:
+            async for event, usage in stream:
                 if isinstance(event, AssistantTurnComplete):
                     if store is not None and not event.message.tool_uses:
                         from openharness.research.models import new_id
@@ -282,13 +427,34 @@ class QueryEngine:
                 if usage is not None:
                     self._cost_tracker.add(usage)
                 yield event
+        except asyncio.CancelledError:
+            runtime = self._tool_metadata.get("research_runtime")
+            if runtime:
+                memory = runtime.store.load()
+                if memory.project and memory.project.status not in {
+                    "suspended",
+                    "replanning",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    runtime.repository.suspend("Execution interrupted")
+            raise
         finally:
+            await stream.aclose()
+            from openharness.services.tool_execution import recover_messages
+
+            query_messages[:] = recover_messages(
+                query_messages, self._tool_metadata, self._cwd, self._execution_session_id
+            )
             if store is not None:
                 self._complete_interrupted_research_tools(query_messages, store)
             self._messages = list(query_messages)
 
     @staticmethod
-    def _complete_interrupted_research_tools(messages, store) -> None:
+    def _complete_interrupted_research_tools(
+        messages: list[ConversationMessage], store: ResearchStore
+    ) -> None:
         """Preserve pending tool calls with explicit results across a cancellation boundary."""
         if not messages or not messages[-1].tool_uses:
             return
@@ -314,12 +480,23 @@ class QueryEngine:
                         is_error=True,
                     )
                 )
-        messages.append(ConversationMessage(role="user", content=results))
+        messages.append(ConversationMessage(role="user", content=[block for block in results]))
 
-    async def continue_pending(self, *, max_turns: int | None = None) -> AsyncIterator[StreamEvent]:
+    async def continue_pending(
+        self, *, max_turns: int | None = None
+    ) -> AsyncGenerator[StreamEvent, None]:
         """Continue an interrupted tool loop without appending a new user message."""
         self._messages = sanitize_conversation_messages(self._messages)
         context = QueryContext(
+            execution_session_id=self._execution_session_id,
+            current_user_message_id=next(
+                (
+                    m.message_id
+                    for m in reversed(self._messages)
+                    if m.context_origin == "user_input"
+                ),
+                None,
+            ),
             api_client=self._api_client,
             tool_registry=self._tool_registry,
             permission_checker=self._permission_checker,
@@ -336,8 +513,15 @@ class QueryEngine:
             hook_executor=self._hook_executor,
             tool_metadata=self._tool_metadata,
             runtime_context_provider=self._current_runtime_context,
+            runtime_snapshot_provider=self._current_runtime_snapshot,
+            context_components=self._settings.context_components if self._settings else None,
+            research_memory_enabled=self._settings.research_memory.enabled
+            if self._settings
+            else True,
         )
-        async for event, usage in run_query(context, self._messages):
-            if usage is not None:
-                self._cost_tracker.add(usage)
-            yield event
+        stream = self._run_context(context, list(self._messages))
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await stream.aclose()

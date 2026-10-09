@@ -1,0 +1,88 @@
+
+> openharness-research-web@0.1.0 test:e2e
+> playwright test
+
+[WebServer] INFO:     Started server process [87051]
+[WebServer] INFO:     Waiting for application startup.
+[WebServer] INFO:     Application startup complete.
+[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+
+Running 17 tests using 1 worker
+
+(node:87066) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 e2e/skills.spec.ts:3:1 › skill package metadata, selected entry loading and independent switches (4.9s)
+[WebServer] INFO:     127.0.0.1:58786 - "WebSocket /api/sessions/0ec9721fd671/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:58796 - "WebSocket /api/sessions/0ec9721fd671/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   2 e2e/workspace.spec.ts:3:1 › report project status and extended task states survive history refresh (1.6s)
+[WebServer] INFO:     127.0.0.1:58832 - "WebSocket /api/sessions/a9b8132d0d4b/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:58840 - "WebSocket /api/sessions/a9b8132d0d4b/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   3 e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: unresolved (1.9s)
+[WebServer] INFO:     127.0.0.1:58892 - "WebSocket /api/sessions/955e6aadcd16/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:58908 - "WebSocket /api/sessions/955e6aadcd16/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   4 e2e/workspace.spec.ts:38:3 › conflict outcomes remain visible after tasks complete and history restores: compatible (2.1s)
+[WebServer] INFO:     127.0.0.1:58936 - "WebSocket /api/sessions/17cfa7073606/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:58938 - "WebSocket /api/sessions/17cfa7073606/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   5 e2e/workspace.spec.ts:62:1 › long collapsed progress and website-only source rows survive refresh and copy (2.3s)
+[WebServer] INFO:     127.0.0.1:58994 - "WebSocket /api/sessions/1716791cd1a6/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:40532 - "WebSocket /api/sessions/1716791cd1a6/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:40542 - "WebSocket /api/sessions/15b3a33e8bf9/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   6 e2e/workspace.spec.ts:113:1 › session approvals skip repeated confirmations and remain isolated after refresh (10.7s)
+[WebServer] INFO:     127.0.0.1:38636 - "WebSocket /api/sessions/0e08bec454a7/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:49994 - "WebSocket /api/sessions/0e08bec454a7/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   7 e2e/workspace.spec.ts:169:1 › model configuration, skills, streaming, approvals, stop and recovery (14.7s)
+  ✓   8 e2e/workspace.spec.ts:259:1 › responsive navigation and empty skill search (1.3s)
+[WebServer] INFO:     127.0.0.1:50070 - "WebSocket /api/sessions/7a9de469a9cd/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:50436 - "WebSocket /api/sessions/7a9de469a9cd/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:50444 - "WebSocket /api/sessions/7a9de469a9cd/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:53278 - "WebSocket /api/sessions/7a9de469a9cd/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓   9 e2e/workspace.spec.ts:272:1 › research progress, source footnotes and interrupt to replan (18.1s)
+[WebServer] INFO:     127.0.0.1:53308 - "WebSocket /api/sessions/6131c40a9160/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  10 e2e/workspace.spec.ts:335:1 › blocked research task stays expanded with its blocker (3.1s)
+[WebServer] INFO:     127.0.0.1:53368 - "WebSocket /api/sessions/98dbead6e41f/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:51490 - "WebSocket /api/sessions/98dbead6e41f/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  11 e2e/workspace.spec.ts:368:1 › two levels of process disclosure, final answer and refresh recovery (6.8s)
+[WebServer] INFO:     127.0.0.1:51530 - "WebSocket /api/sessions/a17aa1a8e0ad/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  12 e2e/workspace.spec.ts:401:1 › manual process disclosure survives completion and stopping preserves partial progress (6.3s)
+[WebServer] INFO:     127.0.0.1:51592 - "WebSocket /api/sessions/c65f200ffce0/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:40304 - "WebSocket /api/sessions/c65f200ffce0/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  13 e2e/workspace.spec.ts:421:1 › delete confirmation, failure retry, noncurrent and current session cleanup (7.1s)
+[WebServer] INFO:     127.0.0.1:40348 - "WebSocket /api/sessions/ae7fac096e5d/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  14 e2e/workspace.spec.ts:462:1 › mobile deletion remains visible and returns to welcome (5.4s)
+[WebServer] INFO:     127.0.0.1:33194 - "WebSocket /api/sessions/9fe5d61ff825/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:33198 - "WebSocket /api/sessions/9fe5d61ff825/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  15 e2e/workspace.spec.ts:478:1 › disconnect marks pending activity interrupted and restores the saved process (3.1s)
+  ✓  16 e2e/workspace.spec.ts:515:1 › new stream content follows the bottom without interrupting reading above (4.6s)
+[WebServer] INFO:     127.0.0.1:33256 - "WebSocket /api/sessions/b01e891953d5/ws" [accepted]
+[WebServer] INFO:     connection open
+[WebServer] INFO:     127.0.0.1:40818 - "WebSocket /api/sessions/b01e891953d5/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✓  17 e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation (5.6s)
+
+  17 passed (1.8m)

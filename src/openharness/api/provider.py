@@ -18,6 +18,7 @@ _AUTH_KIND: dict[str, str] = {
     "anthropic_claude": "external_oauth",
 }
 
+
 @dataclass(frozen=True)
 class ProviderInfo:
     """Resolved provider metadata for UI and diagnostics."""

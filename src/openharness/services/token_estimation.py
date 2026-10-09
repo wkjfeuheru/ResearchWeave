@@ -1,6 +1,11 @@
 """Model-aware text counting with an explicit conservative fallback."""
+
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tiktoken import Encoding
 from functools import lru_cache
 import logging
 
@@ -8,11 +13,12 @@ log = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=64)
-def _encoding(model: str):
+def _encoding(model: str) -> Encoding | None:
     if not model:
         return None
     try:
         import tiktoken
+
         return tiktoken.encoding_for_model(model)
     except (ImportError, KeyError, ValueError, OSError):
         return None

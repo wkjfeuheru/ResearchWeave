@@ -1,0 +1,461 @@
+Production strict coverage: 196 files.
+This is a target inventory, not a claim that every file was newly created.
+
+src/openharness/__main__.py
+src/openharness/api/__init__.py
+src/openharness/api/client.py
+src/openharness/api/codex_client.py
+src/openharness/api/copilot_auth.py
+src/openharness/api/copilot_client.py
+src/openharness/api/errors.py
+src/openharness/api/openai_client.py
+src/openharness/api/provider.py
+src/openharness/api/registry.py
+src/openharness/api/usage.py
+src/openharness/auth/__init__.py
+src/openharness/auth/external.py
+src/openharness/auth/flows.py
+src/openharness/auth/manager.py
+src/openharness/auth/storage.py
+src/openharness/cli.py
+src/openharness/config/__init__.py
+src/openharness/config/paths.py
+src/openharness/config/settings.py
+src/openharness/engine/__init__.py
+src/openharness/engine/cost_tracker.py
+src/openharness/engine/messages.py
+src/openharness/engine/metadata.py
+src/openharness/engine/observer.py
+src/openharness/engine/query.py
+src/openharness/engine/query_engine.py
+src/openharness/engine/stream_events.py
+src/openharness/engine/subagents.py
+src/openharness/evaluation/__init__.py
+src/openharness/evaluation/artifacts.py
+src/openharness/evaluation/calibration.py
+src/openharness/evaluation/cli.py
+src/openharness/evaluation/dataset.py
+src/openharness/evaluation/fixtures.py
+src/openharness/evaluation/judge.py
+src/openharness/evaluation/langfuse_backend.py
+src/openharness/evaluation/models.py
+src/openharness/evaluation/observer.py
+src/openharness/evaluation/python_guard.py
+src/openharness/evaluation/report.py
+src/openharness/evaluation/runner.py
+src/openharness/evaluation/scoring.py
+src/openharness/hooks/__init__.py
+src/openharness/hooks/events.py
+src/openharness/hooks/executor.py
+src/openharness/hooks/hot_reload.py
+src/openharness/hooks/loader.py
+src/openharness/hooks/schemas.py
+src/openharness/hooks/types.py
+src/openharness/mcp/__init__.py
+src/openharness/mcp/client.py
+src/openharness/mcp/config.py
+src/openharness/mcp/types.py
+src/openharness/permissions/__init__.py
+src/openharness/permissions/checker.py
+src/openharness/permissions/modes.py
+src/openharness/platforms.py
+src/openharness/plugins/__init__.py
+src/openharness/plugins/bundled/__init__.py
+src/openharness/plugins/bundled/analysis-modeling/skills/company-event-monitor/scripts/__init__.py
+src/openharness/plugins/bundled/analysis-modeling/skills/company-event-monitor/scripts/export_report.py
+src/openharness/plugins/bundled/analysis-modeling/skills/company-event-monitor/scripts/models.py
+src/openharness/plugins/bundled/analysis-modeling/skills/company-event-monitor/scripts/normalize_events.py
+src/openharness/plugins/bundled/analysis-modeling/skills/earnings-forecast/scripts/__init__.py
+src/openharness/plugins/bundled/analysis-modeling/skills/earnings-forecast/scripts/export_report.py
+src/openharness/plugins/bundled/analysis-modeling/skills/earnings-forecast/scripts/forecast.py
+src/openharness/plugins/bundled/analysis-modeling/skills/earnings-forecast/scripts/models.py
+src/openharness/plugins/bundled/analysis-modeling/skills/financial-statement-analysis/scripts/__init__.py
+src/openharness/plugins/bundled/analysis-modeling/skills/financial-statement-analysis/scripts/analyze_statements.py
+src/openharness/plugins/bundled/analysis-modeling/skills/financial-statement-analysis/scripts/export_report.py
+src/openharness/plugins/bundled/analysis-modeling/skills/financial-statement-analysis/scripts/models.py
+src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts/__init__.py
+src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts/digest_reports.py
+src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts/export_report.py
+src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts/models.py
+src/openharness/plugins/bundled/report-generation/reporting.py
+src/openharness/plugins/bundled/report-generation/skills/deep-investment-report/scripts/__init__.py
+src/openharness/plugins/bundled/report-generation/skills/deep-investment-report/scripts/assemble_report.py
+src/openharness/plugins/bundled/report-generation/skills/deep-investment-report/scripts/export_report.py
+src/openharness/plugins/bundled/report-generation/skills/deep-investment-report/scripts/forecast.py
+src/openharness/plugins/bundled/report-generation/skills/deep-investment-report/scripts/models.py
+src/openharness/plugins/bundled/report-generation/skills/financial-commentary/scripts/__init__.py
+src/openharness/plugins/bundled/report-generation/skills/financial-commentary/scripts/export_report.py
+src/openharness/plugins/bundled/report-generation/skills/financial-commentary/scripts/models.py
+src/openharness/plugins/bundled/report-generation/skills/financial-commentary/scripts/validate_report.py
+src/openharness/plugins/bundled/report-generation/skills/industry-commentary/scripts/__init__.py
+src/openharness/plugins/bundled/report-generation/skills/industry-commentary/scripts/export_report.py
+src/openharness/plugins/bundled/report-generation/skills/industry-commentary/scripts/models.py
+src/openharness/plugins/bundled/report-generation/skills/industry-commentary/scripts/validate_report.py
+src/openharness/plugins/bundled/report-generation/skills/industry-deep-dive/scripts/__init__.py
+src/openharness/plugins/bundled/report-generation/skills/industry-deep-dive/scripts/export_report.py
+src/openharness/plugins/bundled/report-generation/skills/industry-deep-dive/scripts/models.py
+src/openharness/plugins/bundled/report-generation/skills/industry-deep-dive/scripts/validate_report.py
+src/openharness/plugins/installer.py
+src/openharness/plugins/loader.py
+src/openharness/plugins/schemas.py
+src/openharness/plugins/types.py
+src/openharness/prompts/__init__.py
+src/openharness/prompts/context.py
+src/openharness/prompts/environment.py
+src/openharness/prompts/system_prompt.py
+src/openharness/research/__init__.py
+src/openharness/research/completion.py
+src/openharness/research/conflicts.py
+src/openharness/research/dispatch_audit.py
+src/openharness/research/errors.py
+src/openharness/research/models.py
+src/openharness/research/prompt.py
+src/openharness/research/repository.py
+src/openharness/research/runtime.py
+src/openharness/research/source_specs.py
+src/openharness/research/store.py
+src/openharness/research/tasks.py
+src/openharness/runtime.py
+src/openharness/sandbox/__init__.py
+src/openharness/sandbox/adapter.py
+src/openharness/sandbox/docker_backend.py
+src/openharness/sandbox/docker_image.py
+src/openharness/sandbox/path_validator.py
+src/openharness/sandbox/policy.py
+src/openharness/sandbox/session.py
+src/openharness/services/__init__.py
+src/openharness/services/compact/__init__.py
+src/openharness/services/context_budget.py
+src/openharness/services/context_snapshots.py
+src/openharness/services/oauth/__init__.py
+src/openharness/services/session_storage.py
+src/openharness/services/token_estimation.py
+src/openharness/services/tool_outputs.py
+src/openharness/skills/__init__.py
+src/openharness/skills/_frontmatter.py
+src/openharness/skills/loader.py
+src/openharness/skills/metadata.py
+src/openharness/skills/registry.py
+src/openharness/skills/resources.py
+src/openharness/skills/types.py
+src/openharness/tools/__init__.py
+src/openharness/tools/ask_user_question_tool.py
+src/openharness/tools/base.py
+src/openharness/tools/bash_tool.py
+src/openharness/tools/config_tool.py
+src/openharness/tools/dispatch_subagents_tool.py
+src/openharness/tools/file_edit_tool.py
+src/openharness/tools/file_read_tool.py
+src/openharness/tools/file_write_tool.py
+src/openharness/tools/glob_tool.py
+src/openharness/tools/grep_tool.py
+src/openharness/tools/image_generation_tool.py
+src/openharness/tools/image_to_text_tool.py
+src/openharness/tools/investigate_conflict_tool.py
+src/openharness/tools/list_mcp_resources_tool.py
+src/openharness/tools/mcp_auth_tool.py
+src/openharness/tools/mcp_tool.py
+src/openharness/tools/notebook_edit_tool.py
+src/openharness/tools/read_mcp_resource_tool.py
+src/openharness/tools/research/__init__.py
+src/openharness/tools/research/planner.py
+src/openharness/tools/research/planning.py
+src/openharness/tools/research/project.py
+src/openharness/tools/research/replanner.py
+src/openharness/tools/research_memory_tool.py
+src/openharness/tools/skill_tool.py
+src/openharness/tools/sleep_tool.py
+src/openharness/tools/tool_search_tool.py
+src/openharness/tools/web_fetch_tool.py
+src/openharness/tools/web_search_tool.py
+src/openharness/utils/__init__.py
+src/openharness/utils/async_timeout.py
+src/openharness/utils/file_lock.py
+src/openharness/utils/fs.py
+src/openharness/utils/helpers.py
+src/openharness/utils/network_guard.py
+src/openharness/utils/redaction.py
+src/openharness/utils/research_documents.py
+src/openharness/utils/research_exports.py
+src/openharness/utils/research_script_support.py
+src/openharness/utils/research_sites.py
+src/openharness/utils/research_types.py
+src/openharness/utils/research_values.py
+src/openharness/utils/session_files.py
+src/openharness/utils/shell.py
+src/openharness/utils/tavily_search.py
+src/openharness/web/__init__.py
+src/openharness/web/activity.py
+src/openharness/web/app.py
+src/openharness/web/catalog.py
+src/openharness/web/citations.py
+src/openharness/web/models.py
+src/openharness/web/runtime.py
+src/openharness/web/storage.py
+src/openharness/web/types.py
+evals/research_v1/build_dataset.py
+evals/research_v1/recipes.py
+hatch_build.py
+scripts/check_types.py
+
+Current working-tree change snapshot (includes earlier implementation and existing user changes).
+The fix table in agent-core-e2e-report.md identifies this remediation's roots; preserved Skills package moves and resource deletions are not new business features from this remediation.
+
+ D .agents/skills
+ M .github/workflows/ci.yml
+ M .gitignore
+ M README.md
+ M README.zh-CN.md
+ D assets/architecture-comic.png
+ D assets/harness-equation.png
+ D assets/landing.png
+ D assets/logo.png
+ D assets/scene-agentloop.png
+ D assets/scene-context.png
+ D assets/scene-governance.png
+ D assets/scene-toolkit.png
+ D docs/research-workbench-architecture-review-2026-10-08.md
+ M evals/research_v1/README.md
+ M evals/research_v1/build_dataset.py
+ M evals/research_v1/cases.jsonl
+ M evals/research_v1/recipes.py
+ M frontend/web/e2e/workspace.spec.ts
+ M frontend/web/src/App.tsx
+ M frontend/web/src/ChatPage.tsx
+ M frontend/web/src/SkillPage.tsx
+ M frontend/web/src/api.ts
+ M hatch_build.py
+ M pyproject.toml
+ M scripts/test_docker_sandbox_e2e.py
+ M src/openharness/api/client.py
+ M src/openharness/api/codex_client.py
+ M src/openharness/api/copilot_auth.py
+ M src/openharness/api/copilot_client.py
+ M src/openharness/api/openai_client.py
+ M src/openharness/api/provider.py
+ M src/openharness/api/registry.py
+ M src/openharness/api/usage.py
+ M src/openharness/auth/external.py
+ M src/openharness/auth/flows.py
+ M src/openharness/auth/manager.py
+ M src/openharness/auth/storage.py
+ M src/openharness/cli.py
+ M src/openharness/config/paths.py
+ M src/openharness/config/settings.py
+ M src/openharness/engine/__init__.py
+ M src/openharness/engine/cost_tracker.py
+ M src/openharness/engine/messages.py
+ M src/openharness/engine/observer.py
+ M src/openharness/engine/query.py
+ M src/openharness/engine/query_engine.py
+ M src/openharness/evaluation/artifacts.py
+ M src/openharness/evaluation/calibration.py
+ M src/openharness/evaluation/cli.py
+ M src/openharness/evaluation/dataset.py
+ M src/openharness/evaluation/fixtures.py
+ M src/openharness/evaluation/judge.py
+ M src/openharness/evaluation/langfuse_backend.py
+ M src/openharness/evaluation/models.py
+ M src/openharness/evaluation/observer.py
+ M src/openharness/evaluation/python_guard.py
+ M src/openharness/evaluation/report.py
+ M src/openharness/evaluation/runner.py
+ M src/openharness/evaluation/scoring.py
+ M src/openharness/hooks/__init__.py
+ M src/openharness/hooks/executor.py
+ M src/openharness/hooks/loader.py
+ M src/openharness/hooks/schemas.py
+ M src/openharness/mcp/__init__.py
+ M src/openharness/mcp/client.py
+ M src/openharness/mcp/config.py
+ M src/openharness/mcp/types.py
+ M src/openharness/permissions/__init__.py
+ M src/openharness/permissions/checker.py
+ M src/openharness/platforms.py
+ M src/openharness/plugins/__init__.py
+ D src/openharness/plugins/bundled/company-event-monitor/plugin.json
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/SKILL.md
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/references/collection.md
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/references/scoring.md
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/scripts/__init__.py
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/scripts/export_report.py
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/scripts/models.py
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/scripts/normalize_events.py
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/templates/input.json
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/templates/input.schema.json
+ D src/openharness/plugins/bundled/company-event-monitor/skills/company-event-monitor/templates/report.md
+ D src/openharness/plugins/bundled/deep-investment-report/plugin.json
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/SKILL.md
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/references/forecast.md
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/references/orchestration.md
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/scripts/__init__.py
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/scripts/export_report.py
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/scripts/forecast.py
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/scripts/models.py
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/templates/input.json
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/templates/input.schema.json
+ D src/openharness/plugins/bundled/deep-investment-report/skills/deep-investment-report/templates/report.md
+ D src/openharness/plugins/bundled/financial-statement-analysis/plugin.json
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/SKILL.md
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/references/accounting.md
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/references/notes.md
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/scripts/__init__.py
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/scripts/analyze_statements.py
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/scripts/export_report.py
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/scripts/models.py
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/templates/input.json
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/templates/input.schema.json
+ D src/openharness/plugins/bundled/financial-statement-analysis/skills/financial-statement-analysis/templates/report.md
+ D src/openharness/plugins/bundled/research-report-digest/plugin.json
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/SKILL.md
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/references/comparison.md
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/references/extraction.md
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/scripts/__init__.py
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/scripts/digest_reports.py
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/scripts/export_report.py
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/scripts/models.py
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/templates/input.json
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/templates/input.schema.json
+ D src/openharness/plugins/bundled/research-report-digest/skills/research-report-digest/templates/report.md
+ D src/openharness/plugins/bundled/skill-authoring/plugin.json
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/SKILL.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/references/background.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/references/examples.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/references/metadata.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/references/standards.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/scripts/.gitkeep
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/plugin.json
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/SKILL.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/references/background.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/references/examples.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/references/standards.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/scripts/.gitkeep
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/templates/code.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/templates/report.md
+ D src/openharness/plugins/bundled/skill-authoring/skills/skill-creator/templates/skill/templates/table.md
+ M src/openharness/plugins/installer.py
+ M src/openharness/plugins/loader.py
+ M src/openharness/plugins/schemas.py
+ M src/openharness/plugins/types.py
+ M src/openharness/prompts/context.py
+ M src/openharness/prompts/environment.py
+ M src/openharness/research/conflicts.py
+ M src/openharness/research/models.py
+ M src/openharness/research/prompt.py
+ M src/openharness/research/store.py
+ M src/openharness/runtime.py
+ M src/openharness/sandbox/Dockerfile
+ M src/openharness/sandbox/__init__.py
+ M src/openharness/sandbox/adapter.py
+ M src/openharness/sandbox/docker_backend.py
+ M src/openharness/sandbox/docker_image.py
+ M src/openharness/sandbox/session.py
+ M src/openharness/services/compact/__init__.py
+ M src/openharness/services/context_budget.py
+ M src/openharness/services/context_snapshots.py
+ M src/openharness/services/session_storage.py
+ M src/openharness/services/token_estimation.py
+ M src/openharness/skills/__init__.py
+ M src/openharness/skills/_frontmatter.py
+ M src/openharness/skills/loader.py
+ M src/openharness/skills/metadata.py
+ M src/openharness/skills/registry.py
+ M src/openharness/skills/types.py
+ M src/openharness/tools/__init__.py
+ M src/openharness/tools/ask_user_question_tool.py
+ M src/openharness/tools/base.py
+ M src/openharness/tools/bash_tool.py
+ M src/openharness/tools/config_tool.py
+ M src/openharness/tools/file_edit_tool.py
+ M src/openharness/tools/file_read_tool.py
+ M src/openharness/tools/file_write_tool.py
+ M src/openharness/tools/glob_tool.py
+ M src/openharness/tools/grep_tool.py
+ M src/openharness/tools/image_generation_tool.py
+ M src/openharness/tools/image_to_text_tool.py
+ M src/openharness/tools/investigate_conflict_tool.py
+ M src/openharness/tools/list_mcp_resources_tool.py
+ M src/openharness/tools/mcp_auth_tool.py
+ M src/openharness/tools/mcp_tool.py
+ M src/openharness/tools/notebook_edit_tool.py
+ M src/openharness/tools/read_mcp_resource_tool.py
+ M src/openharness/tools/research_memory_tool.py
+ M src/openharness/tools/skill_tool.py
+ M src/openharness/tools/sleep_tool.py
+ M src/openharness/tools/tool_search_tool.py
+ M src/openharness/tools/web_fetch_tool.py
+ M src/openharness/tools/web_search_tool.py
+ M src/openharness/utils/file_lock.py
+ M src/openharness/utils/fs.py
+ M src/openharness/utils/network_guard.py
+ M src/openharness/utils/redaction.py
+ M src/openharness/utils/research_documents.py
+ M src/openharness/utils/research_exports.py
+ M src/openharness/utils/research_script_support.py
+ M src/openharness/utils/research_sites.py
+ M src/openharness/utils/research_types.py
+ M src/openharness/utils/research_values.py
+ M src/openharness/utils/session_files.py
+ M src/openharness/utils/shell.py
+ M src/openharness/utils/tavily_search.py
+ M src/openharness/web/activity.py
+ M src/openharness/web/app.py
+ M src/openharness/web/catalog.py
+ M src/openharness/web/citations.py
+ M src/openharness/web/runtime.py
+ M src/openharness/web/storage.py
+ M tests/research_skill_support.py
+ M tests/test_entrypoints/test_research_product.py
+ M tests/test_hooks/test_executor.py
+ M tests/test_install/wheel_smoke.py
+ M tests/test_research/real_smoke.py
+ M tests/test_sandbox/test_adapter.py
+ M tests/test_skills/test_loader.py
+ M tests/test_skills/test_plugin_resources.py
+ M tests/test_tools/test_integration_flows.py
+ M tests/test_untested_features.py
+ M tests/test_web/browser_server.py
+ M tests/test_web/real_research_eval.py
+ M tests/test_web/real_skill_eval.py
+ M tests/test_web/test_app.py
+ M tests/test_web/test_prompt_queue.py
+ M tests/test_web/test_session_approvals.py
+?? docs/AGENT_CORE_TOOLS.md
+?? docs/SANDBOX_EXECUTION.md
+?? docs/WORKSPACE_MEMORY.md
+?? docs/skill-modules.md
+?? docs/testing/
+?? frontend/web/e2e/skills.spec.ts
+?? scripts/check_types.py
+?? src/openharness/engine/metadata.py
+?? src/openharness/engine/subagents.py
+?? src/openharness/plugins/bundled/analysis-modeling/
+?? src/openharness/plugins/bundled/report-generation/
+?? src/openharness/research/completion.py
+?? src/openharness/research/dispatch_audit.py
+?? src/openharness/research/repository.py
+?? src/openharness/research/runtime.py
+?? src/openharness/research/source_specs.py
+?? src/openharness/research/tasks.py
+?? src/openharness/sandbox/policy.py
+?? src/openharness/skills/resources.py
+?? src/openharness/tools/dispatch_subagents_tool.py
+?? src/openharness/tools/research/
+?? src/openharness/utils/async_timeout.py
+?? src/openharness/web/types.py
+?? tests/fixtures/earnings_commentary.json
+?? tests/test_evaluation/test_authoring_contract.py
+?? tests/test_research/agent_core_support.py
+?? tests/test_research/test_agent_core_e2e.py
+?? tests/test_research/test_agent_core_integration.py
+?? tests/test_research/test_dispatch_recovery.py
+?? tests/test_research/test_dispatch_subagents.py
+?? tests/test_research/test_earnings_workflow.py
+?? tests/test_research/test_memory_compatibility.py
+?? tests/test_research/test_planning_tools.py
+?? tests/test_research/test_report_runtime.py
+?? tests/test_research/test_report_sandbox.py
+?? tests/test_research/test_workspace_memory.py
+?? tests/test_skills/test_package_workflows.py
+?? tests/test_skills/test_progressive_loading.py
+?? tools/

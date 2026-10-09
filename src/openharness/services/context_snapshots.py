@@ -1,5 +1,8 @@
 """Durable, private recovery artifacts written before context is reduced."""
+
 from __future__ import annotations
+from openharness.engine.metadata import ExecutionMetadata
+from openharness.engine.messages import ConversationMessage
 
 import hashlib
 import json
@@ -10,12 +13,20 @@ from openharness.config.paths import get_data_dir
 from openharness.utils.fs import atomic_write_text
 
 
-def save_context_snapshot(messages, *, model: str = "", metadata=None) -> Path:
+def save_context_snapshot(
+    messages: list[ConversationMessage],
+    *,
+    model: str = "",
+    metadata: ExecutionMetadata | None = None,
+) -> Path:
     from openharness.services.session_storage import _persistable_tool_metadata
 
-    payload = {"version": 1, "model": model,
-               "messages": [message.model_dump(mode="json") for message in messages],
-               "metadata": _persistable_tool_metadata(metadata)}
+    payload = {
+        "version": 1,
+        "model": model,
+        "messages": [message.model_dump(mode="json") for message in messages],
+        "metadata": _persistable_tool_metadata(metadata),
+    }
     # Session identity is safe to persist; live store/client objects are not.
     if metadata and isinstance(metadata.get("session_id"), str):
         payload["session_id"] = metadata["session_id"]
