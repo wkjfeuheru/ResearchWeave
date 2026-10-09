@@ -121,17 +121,17 @@ class DockerSandboxSession:
         if docker_cfg.memory_limit:
             argv.extend(["--memory", docker_cfg.memory_limit])
 
+        # Private bind mounts must retain the caller's identity, rather than the
+        # image's fixed uid (1000). CI runners commonly use uid 1001.
+        argv.extend(["--cap-drop", "ALL", "--security-opt", "no-new-privileges"])
+        if os.name == "posix":
+            argv.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+
         # Bind-mount project directory at the same path
         if self.report:
             argv.extend(
                 [
                     "--read-only",
-                    "--cap-drop",
-                    "ALL",
-                    "--security-opt",
-                    "no-new-privileges",
-                    "--user",
-                    f"{os.getuid()}:{os.getgid()}",
                     "--pids-limit",
                     "128",
                     "--tmpfs",

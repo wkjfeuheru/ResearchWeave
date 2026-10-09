@@ -120,6 +120,24 @@ def test_container_start_builds_correct_docker_args(monkeypatch):
     assert "/dev/null" in argv
 
 
+@pytest.mark.parametrize("uid,gid", [(1000, 1000), (1001, 121), (0, 0)])
+@pytest.mark.parametrize("report", [False, True])
+def test_private_mounts_use_caller_identity_without_container_capabilities(
+    monkeypatch, uid, gid, report
+):
+    monkeypatch.setattr("openharness.sandbox.docker_backend.os.getuid", lambda: uid)
+    monkeypatch.setattr("openharness.sandbox.docker_backend.os.getgid", lambda: gid)
+    session = DockerSandboxSession(
+        settings=Settings(), session_id="private-identity", cwd=Path("/repo"), report=report
+    )
+    argv = session._build_run_argv()
+    assert argv[argv.index("--user") + 1] == f"{uid}:{gid}"
+    assert argv.count("--user") == 1
+    assert argv[argv.index("--cap-drop") + 1] == "ALL"
+    assert "no-new-privileges" in argv and "--privileged" not in argv
+    assert ("--read-only" in argv) is report
+
+
 def test_network_none_by_default(monkeypatch):
     monkeypatch.setattr(
         "openharness.sandbox.docker_backend.shutil.which",

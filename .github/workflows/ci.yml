@@ -46,6 +46,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
+          # Ephemeral runner prerequisite documented by SRT for Ubuntu 24.04.
+          # The application's filesystem/network sandbox stays enforced.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm ci --prefix tools/sandbox
           echo "$GITHUB_WORKSPACE/tools/sandbox/node_modules/.bin" >> "$GITHUB_PATH"
           docker build --pull --no-cache -t openharness-sandbox:latest src/openharness/sandbox
@@ -112,6 +115,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm ci --prefix tools/sandbox
           echo "$GITHUB_WORKSPACE/tools/sandbox/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Browser integration tests
@@ -145,6 +149,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat ripgrep
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           npm ci --prefix tools/sandbox
           echo "$GITHUB_WORKSPACE/tools/sandbox/node_modules/.bin" >> "$GITHUB_PATH"
           uv sync --frozen --extra dev --extra web --extra eval

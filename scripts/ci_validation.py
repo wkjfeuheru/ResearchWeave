@@ -15,8 +15,12 @@ from collections import deque
 
 def annotate(kind: str, message: str) -> None:
     message = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", message)[-16000:]
-    message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-    print(f"::{kind} title=Validation result::{message}", flush=True)
+    # GitHub truncates one annotation around 4 KiB. Preserve the complete
+    # bounded tail through smaller chunks, including the final failure summary.
+    for offset in range(0, len(message), 600):
+        chunk = message[offset : offset + 600]
+        chunk = chunk.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::{kind} title=Validation result::{chunk}", flush=True)
 
 
 def main() -> int:
