@@ -1,0 +1,55 @@
+
+> openharness-research-web@0.1.0 test:e2e
+> playwright test --grep attachments, real script
+
+[WebServer] INFO:     Started server process [156110]
+[WebServer] INFO:     Waiting for application startup.
+[WebServer] INFO:     Application startup complete.
+[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+
+Running 1 test using 1 worker
+
+(node:156111) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] INFO:     127.0.0.1:50892 - "WebSocket /api/sessions/ac18578e418e/ws" [accepted]
+[WebServer] INFO:     connection open
+  ✘  1 e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation (8.9s)
+
+
+  1) e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByLabel('研究产物').getByRole('link')
+    Expected: 4
+    Received: 0
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" getByLabel('研究产物').getByRole('link') with timeout 5000ms
+      - waiting for getByLabel('研究产物').getByRole('link')
+        14 × locator resolved to 0 elements
+           - unexpected value "0"
+
+
+      582 |   await page.getByRole('dialog', {name:'操作确认'}).getByRole('button', {name:'允许此次操作'}).click();
+      583 |   await expect(page.getByRole('button', {name:'停止生成'})).toHaveCount(0);
+    > 584 |   await expect(page.getByLabel('研究产物').getByRole('link')).toHaveCount(4);
+          |                                                           ^
+      585 |   const response = await page.request.get(await page.getByLabel('研究产物').getByRole('link').filter({hasText:'digest.json'}).getAttribute('href') || '');
+      586 |   expect(response.ok()).toBe(true);
+      587 |   expect((await response.json()).reports[0].predictions[0].year).toBe(2026);
+        at /home/jason/pythonproject/OpenHarness/frontend/web/e2e/workspace.spec.ts:584:59
+
+    Error Context: test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation 

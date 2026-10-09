@@ -1,0 +1,49 @@
+
+==================================== ERRORS ====================================
+_____________ ERROR collecting tests/test_tools/test_core_tools.py _____________
+ImportError while importing test module '/home/jason/pythonproject/OpenHarness/tests/test_tools/test_core_tools.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tools/test_core_tools.py:11: in <module>
+    from openharness.tools.config_tool import ConfigTool, ConfigToolInput
+E   ModuleNotFoundError: No module named 'openharness.tools.config_tool'
+_______ ERROR collecting tests/test_tools/test_image_generation_tool.py ________
+ImportError while importing test module '/home/jason/pythonproject/OpenHarness/tests/test_tools/test_image_generation_tool.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tools/test_image_generation_tool.py:14: in <module>
+    from openharness.tools.image_generation_tool import ImageGenerationTool, ImageGenerationToolInput
+E   ModuleNotFoundError: No module named 'openharness.tools.image_generation_tool'
+___________ ERROR collecting tests/test_tools/test_mcp_auth_tool.py ____________
+ImportError while importing test module '/home/jason/pythonproject/OpenHarness/tests/test_tools/test_mcp_auth_tool.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tools/test_mcp_auth_tool.py:12: in <module>
+    from openharness.tools.mcp_auth_tool import McpAuthTool, McpAuthToolInput
+E   ModuleNotFoundError: No module named 'openharness.tools.mcp_auth_tool'
+__________ ERROR collecting tests/test_research/test_investigation.py __________
+ImportError while importing test module '/home/jason/pythonproject/OpenHarness/tests/test_research/test_investigation.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_research/test_investigation.py:23: in <module>
+    from openharness.tools.investigate_conflict_tool import (
+E   ModuleNotFoundError: No module named 'openharness.tools.investigate_conflict_tool'
+=========================== short test summary info ============================
+ERROR tests/test_tools/test_core_tools.py
+ERROR tests/test_tools/test_image_generation_tool.py
+ERROR tests/test_tools/test_mcp_auth_tool.py
+ERROR tests/test_research/test_investigation.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!!
+4 errors in 5.05s

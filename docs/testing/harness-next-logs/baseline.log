@@ -1,0 +1,66 @@
+.F.........F..............F..F..........................F.FF             [100%]
+=================================== FAILURES ===================================
+__________________ test_registry_contains_only_research_tools __________________
+tests/test_entrypoints/test_research_product.py:70: in test_registry_contains_only_research_tools
+    assert names == {
+E   AssertionError: assert {'ask_user_qu..., 'grep', ...} == {'ask_user_qu..., 'grep', ...}
+E     
+E     Extra items in the right set:
+E     'investigate_conflict'
+E     Use -v to get more diff
+_ test_report_conflict_investigation_uses_common_loop_and_preserves_authority __
+tests/test_research/test_memory_compatibility.py:82: in test_report_conflict_investigation_uses_common_loop_and_preserves_authority
+    from openharness.tools.investigate_conflict_tool import (
+E   ModuleNotFoundError: No module named 'openharness.tools.investigate_conflict_tool'
+________ test_existing_tools_reject_escape_paths[notebook_edit-values8] ________
+tests/test_research/test_workspace_memory.py:233: in test_existing_tools_reject_escape_paths
+    result = await invoke(workspace, name, **values)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_research/test_workspace_memory.py:54: in invoke
+    return await tool.execute(tool.input_model.model_validate(values), tool_context(runtime))
+                 ^^^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'execute'
+______ test_existing_tools_reject_escape_paths[image_generation-values11] ______
+tests/test_research/test_workspace_memory.py:233: in test_existing_tools_reject_escape_paths
+    result = await invoke(workspace, name, **values)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_research/test_workspace_memory.py:54: in invoke
+    return await tool.execute(tool.input_model.model_validate(values), tool_context(runtime))
+                 ^^^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'execute'
+__________________ test_skill_and_config_flow_across_registry __________________
+tests/test_tools/test_integration_flows.py:66: in test_skill_and_config_flow_across_registry
+    set_result = await config.execute(
+                       ^^^^^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'execute'
+______________________ test_notebook_flow_across_registry ______________________
+tests/test_tools/test_integration_flows.py:118: in test_notebook_flow_across_registry
+    notebook_result = await notebook.execute(
+                            ^^^^^^^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'execute'
+____ test_removed_tools_are_uncallable_and_undiscoverable_in_research_mode _____
+tests/test_research/test_dispatch_subagents.py:455: in test_removed_tools_are_uncallable_and_undiscoverable_in_research_mode
+    assert RESEARCH_EXCLUDED_TOOLS <= {tool.name for tool in general.list_tools()}
+E   AssertionError: assert frozenset({'c...it', 'sleep'}) <= {'ask_user_qu..., 'grep', ...}
+E     
+E     Extra items in the left set:
+E     'sleep'
+E     'notebook_edit'
+E     'image_generation'
+E     'config'
+E     'mcp_auth'
+------------------------------ Captured log call -------------------------------
+WARNING  openharness.services.tool_execution:tool_execution.py:65 unknown tool: sleep
+WARNING  openharness.services.tool_execution:tool_execution.py:65 unknown tool: config
+WARNING  openharness.services.tool_execution:tool_execution.py:65 unknown tool: mcp_auth
+WARNING  openharness.services.tool_execution:tool_execution.py:65 unknown tool: image_generation
+WARNING  openharness.services.tool_execution:tool_execution.py:65 unknown tool: notebook_edit
+=========================== short test summary info ============================
+FAILED tests/test_entrypoints/test_research_product.py::test_registry_contains_only_research_tools
+FAILED tests/test_research/test_memory_compatibility.py::test_report_conflict_investigation_uses_common_loop_and_preserves_authority
+FAILED tests/test_research/test_workspace_memory.py::test_existing_tools_reject_escape_paths[notebook_edit-values8]
+FAILED tests/test_research/test_workspace_memory.py::test_existing_tools_reject_escape_paths[image_generation-values11]
+FAILED tests/test_tools/test_integration_flows.py::test_skill_and_config_flow_across_registry
+FAILED tests/test_tools/test_integration_flows.py::test_notebook_flow_across_registry
+FAILED tests/test_research/test_dispatch_subagents.py::test_removed_tools_are_uncallable_and_undiscoverable_in_research_mode
+7 failed, 53 passed in 14.02s

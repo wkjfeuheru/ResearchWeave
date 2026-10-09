@@ -30,7 +30,7 @@ from openharness.research.models import (
 )
 from openharness.research.tasks import PlanPatchValidator, TaskManager, validate_dag
 from openharness.utils.file_lock import exclusive_file_lock
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory
 
 
 class ResearchRepository:
@@ -660,6 +660,7 @@ class ResearchRepository:
             if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ResearchError("Snapshot hash mismatch")
         else:
+            private_directory(path.parent)
             atomic_write_text(path, content, mode=0o600)
         return digest, snapshot
 

@@ -1,0 +1,56 @@
+
+> openharness-research-web@0.1.0 test:e2e
+> playwright test --grep attachments, real script
+
+[WebServer] INFO:     Started server process [156555]
+[WebServer] INFO:     Waiting for application startup.
+[WebServer] INFO:     Application startup complete.
+[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+
+Running 1 test using 1 worker
+
+(node:156564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] INFO:     127.0.0.1:39244 - "WebSocket /api/sessions/743546c809fb/ws" [accepted]
+[WebServer] INFO:     connection open
+EXPORT_DIAGNOSTIC {"session_id":"743546c809fb","profile_id":"web-7ce9fa605114","model":"file-test-model","summary":"导出固定验收产物","created_at":1791538104.4224062,"updated_at":1791538106.3115687,"messages":[{"id":"456772c8-66c2-41d0-91c6-bdd066bd84c0","role":"user","text":"导出固定验收产物","turn_id":"456772c8-66c2-41d0-91c6-bdd066bd84c0","turn_status":"completed"},{"id":"456772c8-66c2-41d0-91c6-bdd066bd84c0:toolu_272c8685a4354ed589ee69f716729312","role":"activity","text":"","turn_id":"456772c8-66c2-41d0-91c6-bdd066bd84c0","turn_status":"completed","status":"failed","category":"command","label":"执行命令","target":"/home/jason/pythonproject/OpenHarness/frontend/web/../../.venv/bin/python /home/jason/pythonproject/OpenHarness/frontend/web/../../src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts/digest_reports.py --i","outcome":"error"},{"id":"2e690ca236ff425fb146004113aa41cf","role":"assistant","text":"这是浏览器测试回复。\n\n| 项目 | 状态 |\n| --- | --- |\n| 对话链路 | 已接通 |","turn_id":"456772c8-66c2-41d0-91c6-bdd066bd84c0","turn_status":"completed","phase":"final","answer_id":"answer_134557d31d114e42"}],"usage":{"input_tokens":20,"output_tokens":10,"usage_reported":null,"cache_read_input_tokens":0,"cache_creation_input_tokens":null,"cache_observed_input_tokens":20},"research_progress":{"revision":3,"plan_id":null,"title":"","tasks":[],"current_task_id":null,"completed":0,"total":0,"replan_required":false,"conflicts":[]}}
+  ✘  1 e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation (8.3s)
+
+
+  1) e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByLabel('研究产物').getByRole('link')
+    Expected: 4
+    Received: 0
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" getByLabel('研究产物').getByRole('link') with timeout 5000ms
+      - waiting for getByLabel('研究产物').getByRole('link')
+        14 × locator resolved to 0 elements
+           - unexpected value "0"
+
+
+      584 |   const debugSession = await page.evaluate(() => sessionStorage.getItem('openharness.web.session'));
+      585 |   console.log('EXPORT_DIAGNOSTIC', JSON.stringify(await (await page.request.get(`/api/sessions/${debugSession}`)).json()));
+    > 586 |   await expect(page.getByLabel('研究产物').getByRole('link')).toHaveCount(4);
+          |                                                           ^
+      587 |   const response = await page.request.get(await page.getByLabel('研究产物').getByRole('link').filter({hasText:'digest.json'}).getAttribute('href') || '');
+      588 |   expect(response.ok()).toBe(true);
+      589 |   expect((await response.json()).reports[0].predictions[0].year).toBe(2026);
+        at /home/jason/pythonproject/OpenHarness/frontend/web/e2e/workspace.spec.ts:586:59
+
+    Error Context: test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e/workspace.spec.ts:570:1 › attachments, real script artifacts, download, reload and isolation 

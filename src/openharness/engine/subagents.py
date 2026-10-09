@@ -24,7 +24,8 @@ from openharness.engine.messages import ConversationMessage
 from openharness.engine.stream_events import ErrorEvent
 from openharness.research.errors import ResearchError
 from openharness.tools.base import ToolRegistry
-from openharness.utils.fs import atomic_write_text
+from openharness.permissions.capabilities import CapabilityContext
+from openharness.utils.fs import atomic_write_text, private_directory
 
 
 class BoundedSubagentClient:
@@ -103,7 +104,10 @@ async def execute_subagent(
         else None
     )
     child = QueryContext(
-        capabilities=parent.capabilities,
+        trusted_settings=parent.trusted_settings.model_copy(deep=True)
+        if parent.trusted_settings
+        else None,
+        capabilities=CapabilityContext(parent.capabilities.allowed),
         execution_session_id=parent.execution_session_id,
         api_client=client,
         tool_registry=registry,
@@ -152,6 +156,7 @@ async def execute_subagent(
     finally:
         # Store only public tool/text history; model replay reasoning is never persisted here.
         try:
+            private_directory(transcript_path.parent)
             atomic_write_text(
                 transcript_path,
                 json.dumps(

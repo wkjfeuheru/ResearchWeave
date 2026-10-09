@@ -1,32 +1,26 @@
-"""The real tool loop runs a bounded child and imports only validated artifacts."""
+"""Conflict review in the retained main loop, plus the shared bounded child transport.
+
+The dedicated investigator was retired. Reports reference registered material and are
+submitted/reviewed through research_memory; dispatch isolation is covered separately.
+"""
 
 import asyncio
 import json
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
+from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest
 from openharness.api.usage import UsageSnapshot
 from openharness.config.settings import PermissionSettings
-from openharness.engine.messages import (
-    ConversationMessage,
-    TextBlock,
-    ToolResultBlock,
-    ToolUseBlock,
-)
-from openharness.engine.query import QueryContext
+from openharness.engine.cost_tracker import CostTracker
+from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
 from openharness.engine.query_engine import QueryEngine
 from openharness.engine.stream_events import StatusEvent
+from openharness.engine.subagents import BoundedSubagentClient
 from openharness.permissions.checker import PermissionChecker
-from openharness.research.models import Record
-from openharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
-from openharness.tools.investigate_conflict_tool import (
-    InvestigateConflictInput,
-    InvestigateConflictTool,
-    InvestigationMemoryTool,
-    InvestigationClient,
-)
-from openharness.tools.research_memory_tool import ResearchMemoryInput
+from openharness.research.errors import ResearchError
+from openharness.tools.base import ToolExecutionContext, ToolRegistry
+from openharness.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
 from tests.test_research.test_conflicts import apply, conflict, decision, make_research
 
 
@@ -35,257 +29,146 @@ def research(tmp_path):
     return make_research(tmp_path)
 
 
-class FetchInput(Record):
-    url: str
+def report_operation(research, cid, **fields):
+    store, evs, steps, _ = research
+    return {
+        "action": "submit_conflict_report",
+        "operation_id": "main-report",
+        "expected_revision": store.load().revision,
+        "conflict_id": cid,
+        "report": decision(evs, steps).model_dump(mode="json"),
+        **fields,
+    }
 
 
-class OriginalFetch(BaseTool):
-    name = "web_fetch"
-    description = "Read original material"
-    input_model = FetchInput
-
-    def is_read_only(self, arguments):
-        return True
-
-    async def execute(self, arguments, context):
-        return ToolResult(
-            output="更正公告：营收10亿元",
-            metadata={
-                "research_source_specs": [
-                    {
-                        "kind": "web",
-                        "locator": arguments.url,
-                        "title": "更正公告",
-                        "content": "更正公告：营收10亿元",
-                    }
-                ]
-            },
-        )
-
-
-def last_result(request):
-    return next(
-        block
-        for message in reversed(request.messages)
-        for block in reversed(message.content)
-        if isinstance(block, ToolResultBlock)
-    )
-
-
-class InvestigatorModel:
-    def __init__(self, research, mode="complete", on_wait=None):
-        self.research, self.mode, self.on_wait = research, mode, on_wait
-        self.calls, self.requests = 0, []
-        self.waiting = asyncio.Event()
-
-    async def stream_message(self, request):
-        self.calls += 1
-        self.requests.append(request)
-        store, evs, steps, _ = self.research
-        if self.mode in {"timeout", "cancel", "budget"}:
-            if self.calls == 1:
-                name, data = "web_fetch", {"url": "https://original.example/correction"}
-            else:
-                self.waiting.set()
-                if self.on_wait:
-                    self.on_wait()
-                await asyncio.sleep(30)
-                name, data = "web_fetch", {"url": "https://original.example/correction"}
-        elif self.calls == 1:
-            name, data = (
-                "research_memory",
-                {
-                    "operation": {
-                        "action": "read",
-                        "ids": [store.load().evidence_pool[key].source_id for key in evs]
-                        + evs
-                        + steps,
-                        "include_content": True,
-                    }
-                },
-            )
-        elif self.calls == 2:
-            read = json.loads(last_result(request).content)
-            name, data = (
-                "research_memory",
-                {
-                    "operation": {
-                        "action": "add_reasoning",
-                        "operation_id": "child-synthesis",
-                        "expected_revision": read["revision"],
-                        "evidence_ids": evs,
-                        "method": "比较原始公告及更正关系",
-                        "result": "两种数字来自不同版本",
-                        "output": "应采用更正后的10亿元",
-                    }
-                },
-            )
-        else:
-            result = json.loads(last_result(request).content)
-            report = decision(evs, [result["step_id"]])
-            name, data = "submit_arbitration_report", report.model_dump(mode="json")
-        yield ApiMessageCompleteEvent(
-            message=ConversationMessage(
-                role="assistant",
-                reasoning_content="private-model-replay",
-                content=[ToolUseBlock(id=f"child-{self.calls}", name=name, input=data)],
-            ),
-            usage=UsageSnapshot(
-                input_tokens=7,
-                output_tokens=3,
-                cache_read_input_tokens=2,
-                cache_observed_input_tokens=7,
-            ),
-        )
-
-
-def context_for(research, tmp_path, model, **metadata):
-    store, _, _, _ = research
-    registry = ToolRegistry()
-    registry.register(OriginalFetch())
-    registry.register(InvestigateConflictTool())
-    usage = []
-    query = QueryContext(
-        api_client=model,
-        tool_registry=registry,
-        permission_checker=PermissionChecker(PermissionSettings()),
-        cwd=tmp_path,
-        model="current-model",
-        context_window_tokens=200_000,
-        system_prompt="parent",
-        max_tokens=1000,
-        tool_metadata={"research_store": store},
-        effort="high",
-    )
-    return ToolExecutionContext(
-        cwd=tmp_path,
-        metadata={
-            "research_store": store,
-            "query_context": query,
-            "account_subagent_usage": usage.append,
-            **metadata,
-        },
-    ), usage
-
-
-async def run_tool(research, tmp_path, model, **metadata):
-    cid = conflict(research)
-    context, usage = context_for(research, tmp_path, model, **metadata)
-    result = await InvestigateConflictTool().execute(
-        InvestigateConflictInput(conflict_id=cid), context
-    )
-    return cid, json.loads(result.output), usage
-
-
-async def test_child_reports_and_parent_commits_after_review(research, tmp_path):
+async def test_main_reports_and_separately_commits_after_review(research, tmp_path):
     store, _, _, claims = research
-    model = InvestigatorModel(research)
-    cid, result, usage = await run_tool(research, tmp_path, model)
-    assert result["status"] == "completed"
-    assert result["report"] and not result["decision"]
+    cid = conflict(research)
+    operation = report_operation(research, cid)
+    tool = ResearchMemoryTool()
+    context = ToolExecutionContext(cwd=tmp_path, metadata={"research_store": store})
+    result = await tool.execute(ResearchMemoryInput(operation=operation), context)
+    saved = json.loads(result.output)
+    assert not result.is_error
+    arbitration = store.load().arbitrations[saved["arbitration_id"]]
+    assert arbitration.status == "completed" and arbitration.report and not arbitration.decision
+    assert store.load().conflicts[cid].status == "awaiting_review"
     assert set(store.load().conclusions) == set(claims)
-    assert len(result["imported_ids"]) == 1  # The child synthesis, not a formal conclusion.
-    assert len(usage) == 3 and result["usage"]["input_tokens"] == 21
-    assert all(
-        request.model == "current-model" and request.effort == "high" for request in model.requests
-    )
-    tools = {tool["name"] for tool in model.requests[0].tools}
-    assert "investigate_conflict" not in tools and "write_file" not in tools
-    assert "submit_arbitration_report" in tools and "web_fetch" in tools
-    saved = next((store.directory / "investigations").glob("*/*/messages.json")).read_text()
-    assert "private-model-replay" not in saved and "reasoning_content" not in saved
+    assert not arbitration.imported_ids
     apply(
         store,
         "resolve_conflict",
         conflict_id=cid,
-        arbitration_id=result["id"],
-        decision=result["report"],
+        arbitration_id=arbitration.id,
+        decision=arbitration.report.model_dump(mode="json"),
     )
     assert store.load().conflicts[cid].status == "resolved"
+    assert len(store.load().conclusions) == len(claims) + 1
 
 
 @pytest.mark.parametrize(
-    "mode,settings,status",
-    [
-        ("timeout", {"conflict_timeout_seconds": 0.5}, "timeout"),
-        ("budget", {"conflict_max_turns": 1}, "budget_exhausted"),
-    ],
+    "invalid", ["missing_side", "unknown_evidence", "unused_evidence", "bad_preferred_side"]
 )
-async def test_limits_preserve_collected_sources_and_usage(
-    research, tmp_path, mode, settings, status
-):
-    store, _, _, claims = research
-    cid, result, usage = await run_tool(
-        research, tmp_path, InvestigatorModel(research, mode), **settings
+async def test_invalid_reports_are_atomic_and_do_not_clear_review(research, tmp_path, invalid):
+    store, evs, steps, _ = research
+    cid = conflict(research)
+    operation = report_operation(research, cid)
+    report = operation["report"]
+    if invalid == "missing_side":
+        report["assessments"] = report["assessments"][:1]
+    elif invalid == "unknown_evidence":
+        report["evidence_ids"] = ["ev_not_registered"]
+    elif invalid == "unused_evidence":
+        report["step_ids"] = steps[:1]
+    else:
+        report["preferred_side"] = 4
+    before = store.load().model_dump()
+    result = await ResearchMemoryTool().execute(
+        ResearchMemoryInput(operation=operation),
+        ToolExecutionContext(cwd=tmp_path, metadata={"research_store": store}),
     )
-    assert result["status"] == status and not result["report"]
-    assert len(result["imported_ids"]) == 1
-    assert result["usage"]["input_tokens"] == 7 and len(usage) == 1
-    assert store.load().conflicts[cid].status == "interrupted"
-    assert set(store.load().conclusions) == set(claims)
+    assert result.is_error
+    assert store.load().model_dump() == before
+    assert all(item.needs_review for item in store.load().conclusions.values())
 
 
-async def test_cancellation_settles_child_and_preserves_material(research, tmp_path):
+def test_report_idempotency_and_no_automatic_repeat(research):
     store, _, _, _ = research
     cid = conflict(research)
-    model = InvestigatorModel(research, "cancel")
-    context, usage = context_for(research, tmp_path, model)
-    task = asyncio.create_task(
-        InvestigateConflictTool().execute(InvestigateConflictInput(conflict_id=cid), context)
-    )
-    await asyncio.wait_for(model.waiting.wait(), timeout=3)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    arbitration = next(iter(store.load().arbitrations.values()))
-    assert arbitration.status == "interrupted" and len(arbitration.imported_ids) == 1
-    assert len(usage) == 1
-    assert all(source.title != "investigate_conflict" for source in store.load().sources.values())
-
-
-async def test_changed_plan_does_not_receive_old_child_material(research, tmp_path):
-    store, evs, _, _ = research
-    model = InvestigatorModel(
-        research,
-        "timeout",
-        on_wait=lambda: apply(
-            store, "create_plan", title="新的范围", tasks=["新研究"], reused_evidence_ids=evs
-        ),
-    )
-    _, result, _ = await run_tool(research, tmp_path, model, conflict_timeout_seconds=0.5)
-    assert model.waiting.is_set()
-    assert result["status"] == "stale" and not result["imported_ids"]
-    assert not any(
-        source.locator == "https://original.example/correction"
-        for source in store.load().sources.values()
-    )
-    assert list((store.directory / "investigations").glob("*/*/content/*.txt"))
-
-
-async def test_investigation_cannot_write_parent_conclusions_or_plan(research, tmp_path):
-    store, evs, steps, _ = research
+    op = report_operation(research, cid)
+    first = store.apply(op)
     revision = store.load().revision
-    input_data = ResearchMemoryInput(
-        operation={
-            "action": "add_conclusion",
-            "operation_id": "forbidden",
-            "expected_revision": revision,
-            "statement": "child conclusion",
-            "evidence_ids": evs,
-            "step_ids": steps,
-        }
+    replay = store.apply(op)
+    assert first["arbitration_id"] == replay["arbitration_id"]
+    assert store.load().revision == revision and len(store.load().arbitrations) == 1
+    with pytest.raises(ResearchError, match="Review the existing report"):
+        store.apply(report_operation(research, cid, operation_id="duplicate-report"))
+    apply(store, "reopen_conflict", conflict_id=cid, reason="用户要求按新口径复核")
+    second = store.apply(report_operation(research, cid, operation_id="review-again"))
+    assert second["arbitration_id"] != first["arbitration_id"]
+    assert len(store.load().arbitrations) == 2
+
+
+def test_revision_or_scope_change_rejects_old_report(research):
+    store, evs, _, _ = research
+    cid = conflict(research)
+    op = report_operation(research, cid)
+    apply(store, "reopen_conflict", conflict_id=cid, reason="补充核查")
+    with pytest.raises(ResearchError, match="Revision conflict"):
+        store.apply(op)
+    apply(store, "create_plan", title="新的范围", tasks=["新研究"], reused_evidence_ids=evs)
+    with pytest.raises(ResearchError, match="current research scope"):
+        store.apply(report_operation(research, cid))
+    assert not store.load().arbitrations
+
+
+def test_running_legacy_investigation_blocks_new_report_until_host_recovery(research):
+    store, _, _, _ = research
+    cid = conflict(research)
+    arb, _ = store.begin_investigation(cid)
+    with pytest.raises(ResearchError, match="still running"):
+        store.apply(report_operation(research, cid))
+    store.recover_investigations()
+    assert store.load().arbitrations[arb.id].status == "interrupted"
+    store.apply(report_operation(research, cid))
+    assert store.load().conflicts[cid].status == "awaiting_review"
+
+
+def test_reopened_report_cannot_resolve_stale_decision(research):
+    store, _, _, _ = research
+    cid = conflict(research)
+    receipt = store.apply(report_operation(research, cid))
+    apply(store, "reopen_conflict", conflict_id=cid, reason="新的反证需要复核")
+    before = store.load().model_dump()
+    with pytest.raises(ResearchError, match="latest completed"):
+        apply(
+            store,
+            "resolve_conflict",
+            conflict_id=cid,
+            arbitration_id=receipt["arbitration_id"],
+            decision=report_operation(research, cid)["report"],
+        )
+    assert store.load().model_dump() == before
+
+
+async def test_readonly_child_cannot_submit_report_or_parent_mutations(research, tmp_path):
+    from openharness.tools.dispatch_subagents_tool import ReadOnlyResearchMemoryTool
+    from pydantic import ValidationError
+
+    store, _, _, _ = research
+    cid = conflict(research)
+    tool = ReadOnlyResearchMemoryTool(store)
+    before = store.load().model_dump()
+    with pytest.raises(ValidationError):
+        tool.input_model.model_validate({"operation": report_operation(research, cid)})
+    assert store.load().model_dump() == before
+    result = await tool.execute(
+        tool.input_model(operation={"action": "read"}), ToolExecutionContext(cwd=tmp_path)
     )
-    result = await InvestigationMemoryTool().execute(
-        input_data, ToolExecutionContext(cwd=tmp_path, metadata={"research_store": store})
-    )
-    assert result.is_error and store.load().revision == revision
+    assert not result.is_error
 
 
 async def test_model_budget_and_accounting_include_compaction_calls():
-    from openharness.api.client import ApiMessageRequest
-    from openharness.engine.cost_tracker import CostTracker
-    from openharness.research.store import ResearchError
-
     class Client:
         calls = 0
 
@@ -297,8 +180,7 @@ async def test_model_budget_and_accounting_include_compaction_calls():
             )
 
     client, tracker, account = Client(), CostTracker(), []
-    bounded = InvestigationClient(client, 2, tracker, account.append)
-    # Compaction and tool-aware requests use the same bounded transport.
+    bounded = BoundedSubagentClient(client, 2, tracker, account.append)
     for tools in ([], [{"name": "research_memory"}]):
         _ = [
             event
@@ -317,78 +199,69 @@ async def test_model_budget_and_accounting_include_compaction_calls():
     assert tracker.total.input_tokens == 20 and len(account) == 2
 
 
-async def test_child_hooks_share_budget_and_preserve_parent_context(research, tmp_path):
-    from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor
-    from openharness.hooks.loader import HookRegistry
-    from openharness.hooks.schemas import PromptHookDefinition
+async def test_bounded_child_cancellation_preserves_completed_usage():
+    waiting = asyncio.Event()
 
-    class Model(InvestigatorModel):
+    class Client:
+        calls = 0
+
         async def stream_message(self, request):
-            if "hook condition" in request.system_prompt:
-                yield ApiMessageCompleteEvent(
-                    message=ConversationMessage.from_user_text('{"ok": true}'),
-                    usage=UsageSnapshot(input_tokens=2, output_tokens=1),
-                )
-            else:
-                async for event in super().stream_message(request):
-                    yield event
+            self.calls += 1
+            if self.calls == 2:
+                waiting.set()
+                await asyncio.sleep(30)
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage.from_user_text("material"),
+                usage=UsageSnapshot(input_tokens=7, output_tokens=3),
+            )
 
-    cid = conflict(research)
-    model = Model(research)
-    context, usage = context_for(research, tmp_path, model, conflict_max_turns=3)
-    registry = HookRegistry()
-    registry.register(
-        HookEvent.PRE_TOOL_USE, PromptHookDefinition(prompt="check", matcher="research_memory")
-    )
-    parent_hooks = HookExecutor(
-        registry, HookExecutionContext(cwd=tmp_path, api_client=model, default_model="parent")
-    )
-    context.metadata["query_context"].hook_executor = parent_hooks
-    result = await InvestigateConflictTool().execute(
-        InvestigateConflictInput(conflict_id=cid), context
-    )
-    saved = json.loads(result.output)
-    assert saved["status"] == "budget_exhausted"
-    assert len(usage) == 3 and saved["usage"]["input_tokens"] == 16
-    assert (
-        parent_hooks._context.api_client is model
-        and parent_hooks._context.default_model == "parent"
-    )
+    tracker, account = CostTracker(), []
+    bounded = BoundedSubagentClient(Client(), 3, tracker, account.append)
+    request = ApiMessageRequest(model="current", messages=[])
+    _ = [event async for event in bounded.stream_message(request)]
+
+    async def consume():
+        return [event async for event in bounded.stream_message(request)]
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(waiting.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert bounded.calls == 2 and len(account) == 1
+    assert tracker.total.input_tokens == 7
 
 
-class ParentAndChildModel:
+class MainReviewModel:
     def __init__(self, research):
         self.research = research
-        self.child = InvestigatorModel(research)
-        self.parent_calls = 0
+        self.calls, self.requests = 0, []
 
     async def stream_message(self, request):
-        if "独立的结论冲突调查代理" in request.system_prompt:
-            async for event in self.child.stream_message(request):
-                yield event
-            return
-        self.parent_calls += 1
+        self.calls += 1
+        self.requests.append(request)
         store, evs, _, _ = self.research
         cid = next(iter(store.load().conflicts))
-        if self.parent_calls == 1:
-            # Premature draft must be repaired by the final-answer conflict guard.
+        if self.calls == 1:
             blocks = [TextBlock(text="营收确定为12亿元")]
-        elif self.parent_calls == 2:
+        elif self.calls == 2:
             blocks = [
                 ToolUseBlock(
-                    id="parent-investigate", name="investigate_conflict", input={"conflict_id": cid}
+                    id="main-report",
+                    name="research_memory",
+                    input={"operation": report_operation(self.research, cid)},
                 )
             ]
-        elif self.parent_calls == 3:
+        elif self.calls == 3:
             arb = next(iter(store.load().arbitrations.values()))
             blocks = [
                 ToolUseBlock(
-                    id="parent-resolve",
+                    id="main-resolve",
                     name="research_memory",
                     input={
                         "operation": {
                             "action": "resolve_conflict",
-                            "operation_id": "parent-resolve-op",
+                            "operation_id": "main-resolve",
                             "expected_revision": store.load().revision,
                             "conflict_id": cid,
                             "arbitration_id": arb.id,
@@ -405,16 +278,14 @@ class ParentAndChildModel:
         )
 
 
-async def test_parent_engine_repairs_draft_and_counts_child_usage(research, tmp_path):
+async def run_main_review(research, tmp_path, runtime=None):
     store, _, _, _ = research
-    cid = conflict(research)
     registry = ToolRegistry()
-    registry.register(InvestigateConflictTool())
-    # This is the parent's unrestricted memory tool.
-    from openharness.tools.research_memory_tool import ResearchMemoryTool
-
     registry.register(ResearchMemoryTool())
-    model = ParentAndChildModel(research)
+    metadata = {"research_store": store}
+    if runtime:
+        metadata["research_runtime"] = runtime
+    model = MainReviewModel(research)
     engine = QueryEngine(
         api_client=model,
         tool_registry=registry,
@@ -424,11 +295,41 @@ async def test_parent_engine_repairs_draft_and_counts_child_usage(research, tmp_
         context_window_tokens=200_000,
         system_prompt="parent",
         max_turns=8,
-        tool_metadata={"research_store": store},
+        tool_metadata=metadata,
     )
     events = [event async for event in engine.submit_message("核查争议")]
+    return engine, model, events
+
+
+async def test_parent_engine_repairs_draft_and_counts_usage(research, tmp_path):
+    store, _, _, _ = research
+    cid = conflict(research)
+    engine, model, events = await run_main_review(research, tmp_path)
     assert store.load().conflicts[cid].status == "resolved"
-    assert engine.total_usage.input_tokens == 40 + 21
-    assert engine.total_usage.output_tokens == 20 + 9
+    assert engine.total_usage.input_tokens == 40 and engine.total_usage.output_tokens == 20
+    assert model.calls == 4
     assert any(isinstance(event, StatusEvent) and "核心结论" in event.message for event in events)
     assert "营收确定为12亿元" not in engine.messages[-1].text
+    assert all(
+        "investigate_conflict" not in {tool["name"] for tool in request.tools}
+        for request in model.requests
+    )
+
+
+def test_unresolved_decision_requires_explicit_reopen_before_another_report(research):
+    store, evs, steps, _ = research
+    cid = conflict(research)
+    report = decision(evs, steps, "unresolved").model_dump(mode="json")
+    saved = store.apply(report_operation(research, cid, report=report))
+    apply(
+        store,
+        "resolve_conflict",
+        conflict_id=cid,
+        arbitration_id=saved["arbitration_id"],
+        decision=report,
+    )
+    before = store.load().model_dump()
+    assert store.load().conflicts[cid].status == "unresolved"
+    with pytest.raises(ResearchError, match="reopen"):
+        store.apply(report_operation(research, cid, operation_id="no-new-material"))
+    assert store.load().model_dump() == before

@@ -1,0 +1,20 @@
+ImportError while loading conftest '/home/jason/pythonproject/OpenHarness/tests/test_web/conftest.py'.
+tests/test_web/conftest.py:3: in <module>
+    from tests.test_web.test_app import workspace as workspace
+tests/test_web/test_app.py:19: in <module>
+    from openharness.web.app import create_app
+src/openharness/web/app.py:26: in <module>
+    from openharness.runtime import _resolve_api_client_from_settings
+src/openharness/runtime.py:20: in <module>
+    from openharness.engine import QueryEngine
+src/openharness/engine/__init__.py:62: in __getattr__
+    from openharness.engine.query_engine import QueryEngine
+src/openharness/engine/query_engine.py:28: in <module>
+    from openharness.engine.query import AskUserPrompt, PermissionPrompt, QueryContext, run_query
+src/openharness/engine/query.py:56: in <module>
+    from openharness.tools.base import ToolExecutionContext
+src/openharness/tools/__init__.py:18: in <module>
+    from openharness.tools.web_search_tool import WebSearchTool
+src/openharness/tools/web_search_tool.py:17: in <module>
+    from openharness.utils.tavily_search import SearchBatch, search_tavily
+E   ModuleNotFoundError: No module named 'openharness.utils.tavily_search'

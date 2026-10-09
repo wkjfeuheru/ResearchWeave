@@ -23,7 +23,7 @@ from typing import Any
 
 from openharness.config.paths import get_config_dir
 from openharness.utils.file_lock import exclusive_file_lock
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_file
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ def _load_creds_file() -> dict[str, Any]:
     path = _creds_path()
     if not path.exists():
         return {}
+    private_file(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):

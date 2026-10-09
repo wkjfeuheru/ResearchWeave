@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+from openharness.config.settings import Settings, load_settings, save_settings
 
 import pytest
 
@@ -60,17 +62,11 @@ async def test_skill_and_config_flow_across_registry(tmp_path: Path, monkeypatch
 
     registry = create_research_tool_registry(mode="general")
     context.metadata["tool_registry"] = registry
-    config = registry.get("config")
+    assert registry.get("config") is None
     skill = registry.get("skill")
-
-    set_result = await config.execute(
-        config.input_model(action="set", key="effort", value="high"),
-        context,
-    )
-    assert set_result.output == "Updated effort"
-
-    show_result = await config.execute(config.input_model(action="show"), context)
-    assert '"effort": "high"' in show_result.output
+    save_settings(Settings(effort="high"))
+    assert load_settings().effort == "high"
+    assert '"effort":"high"' in load_settings().model_dump_json()
 
     skill_result = await skill.execute(skill.input_model(name="Pytest"), context)
     assert "fixtures" in skill_result.output
@@ -114,10 +110,38 @@ async def test_notebook_flow_across_registry(tmp_path: Path, monkeypatch):
 
     registry = create_research_tool_registry(mode="general")
     context.metadata["tool_registry"] = registry
-    notebook = registry.get("notebook_edit")
-    notebook_result = await notebook.execute(
-        notebook.input_model(path="nb/demo.ipynb", cell_index=0, new_source="print('flow ok')\n"),
+    assert registry.get("notebook_edit") is None
+    write, edit, read = (
+        registry.get("write_file"),
+        registry.get("edit_file"),
+        registry.get("read_file"),
+    )
+    notebook = {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": ["print('old')\n"],
+            }
+        ],
+    }
+    created = await write.execute(
+        write.input_model(path="nb/demo.ipynb", content=json.dumps(notebook)), context
+    )
+    assert not created.is_error
+    notebook_result = await edit.execute(
+        edit.input_model(path="nb/demo.ipynb", old_str="print('old')", new_str="print('flow ok')"),
         context,
     )
+    loaded = await read.execute(read.input_model(path="nb/demo.ipynb"), context)
+    assert not loaded.is_error and "flow ok" in loaded.output
+    assert json.loads((tmp_path / "nb/demo.ipynb").read_text())["cells"][0]["source"] == [
+        "print('flow ok')\n"
+    ]
     assert notebook_result.is_error is False
     assert "flow ok" in (tmp_path / "nb" / "demo.ipynb").read_text(encoding="utf-8")

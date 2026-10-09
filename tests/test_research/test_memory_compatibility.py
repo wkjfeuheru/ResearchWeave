@@ -78,13 +78,8 @@ async def test_nonproject_memory_keeps_legacy_plan_and_task_compatibility(tmp_pa
 
 
 async def test_report_conflict_investigation_uses_common_loop_and_preserves_authority(project):
-    from openharness.tools.bash_tool import BashTool
-    from openharness.tools.investigate_conflict_tool import (
-        InvestigateConflictInput,
-        InvestigateConflictTool,
-    )
     from tests.test_research.test_conflicts import apply, conflict
-    from tests.test_research.test_investigation import context_for, InvestigatorModel
+    from tests.test_research.test_investigation import run_main_review
 
     evidence_ids, step_ids, conclusions = [], [], []
     for index, amount in enumerate((12, 10)):
@@ -122,28 +117,21 @@ async def test_report_conflict_investigation_uses_common_loop_and_preserves_auth
         conclusions.append(conclusion)
     research = (project.store, evidence_ids, step_ids, conclusions)
     cid = conflict(research)
-    model = InvestigatorModel(research)
-    context, _ = context_for(
-        research, project.resolve_workspace("P"), model, research_runtime=project
-    )
-    context.metadata["query_context"].tool_registry.register(BashTool())
     tasks_before = project.repository._plan(project.store.load()).model_dump()
     memory_before = project.load_workspace_memory("P")
-    result = await InvestigateConflictTool().execute(
-        InvestigateConflictInput(conflict_id=cid), context
-    )
-    saved = json.loads(result.output)
-    assert not result.is_error and saved["status"] == "completed" and saved["imported_ids"]
-    assert "bash" not in {tool["name"] for tool in model.requests[0].tools}
-    assert project.repository._plan(project.store.load()).model_dump() == tasks_before
+    engine, model, _ = await run_main_review(research, project.resolve_workspace("P"), project)
+    saved = next(iter(project.store.load().arbitrations.values()))
+    assert saved.status == "completed" and saved.report and saved.decision
+    assert not saved.imported_ids
+    assert "investigate_conflict" not in {tool["name"] for tool in model.requests[0].tools}
+    # Main-loop completion policy blocks an unfinished task; conflict submission
+    # does not alter the plan structure, task artifacts or workspace background.
+    plan_after = project.repository._plan(project.store.load()).model_dump()
+    tasks_before["tasks"][0]["status"] = "blocked"
+    tasks_before["tasks"][0]["lease_id"] = None
+    tasks_before["tasks"][0]["blocker"] = "Main agent stopped before completion checks passed"
+    assert plan_after == tasks_before
     assert project.load_workspace_memory("P") == memory_before
-    assert (project.resolve_workspace("P") / "subagents" / saved["id"] / "investigator").is_dir()
-    assert project.store.load().conflicts[cid].status == "awaiting_review"
-    apply(
-        project.store,
-        "resolve_conflict",
-        conflict_id=cid,
-        arbitration_id=saved["id"],
-        decision=saved["report"],
-    )
+    assert not list((project.resolve_workspace("P") / "subagents").iterdir())
     assert project.store.load().conflicts[cid].status == "resolved"
+    assert engine.messages[-1].role == "assistant"

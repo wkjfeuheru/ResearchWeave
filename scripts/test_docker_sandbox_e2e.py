@@ -51,7 +51,7 @@ if _DOCKER:
         pass
 
 _SKIP_REASON = "Docker daemon is not available"
-_E2E_IMAGE = "openharness-sandbox-e2e:latest"
+_E2E_IMAGE = os.environ.get("OPENHARNESS_TEST_DOCKER_IMAGE", "openharness-sandbox-e2e:latest")
 
 _REQUIRED = os.environ.get("OPENHARNESS_REQUIRE_SANDBOX") == "1"
 pytestmark = pytest.mark.skipif(not _DOCKER_OK and not _REQUIRED, reason=_SKIP_REASON)

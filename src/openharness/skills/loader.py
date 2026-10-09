@@ -49,10 +49,14 @@ def get_user_skills_dir() -> Path:
 
 def get_user_skill_dirs() -> list[Path]:
     """Return user-level skill directories loaded by default."""
-    return [
-        get_user_skills_dir(),
-        *(Path.home().joinpath(*parts) for parts in _USER_COMPAT_SKILL_DIRS),
-    ]
+    roots = [get_user_skills_dir()]
+    for parts in _USER_COMPAT_SKILL_DIRS:
+        candidate = Path.home().joinpath(*parts)
+        if candidate.is_symlink() or candidate.parent.is_symlink():
+            logger.warning("Ignoring automatic symlink Skill directory: %s", candidate)
+            continue
+        roots.append(candidate)
+    return roots
 
 
 def load_skill_registry(
@@ -147,7 +151,10 @@ def discover_project_skill_dirs(
     seen: set[Path] = set()
     for base in reversed(levels):
         for rel in relative_dirs:
-            candidate = (base / rel).resolve()
+            candidate = base / rel
+            if not candidate.resolve().is_relative_to(base) or candidate.is_symlink():
+                continue
+            candidate = candidate.resolve()
             if candidate in seen or not candidate.is_dir():
                 continue
             seen.add(candidate)
@@ -198,6 +205,8 @@ def load_skills_from_dirs(
         return skills
     seen: set[Path] = set()
     for directory in directories:
+        # Explicit host-approved root aliases are normalized once. Child entries
+        # stay bounded to that fixed root, never to a subsequently resolved parent.
         root = Path(directory).expanduser().resolve()
         if create_missing:
             root.mkdir(parents=True, exist_ok=True)
@@ -225,7 +234,7 @@ def load_skills_from_dirs(
             if path in seen:
                 continue
             seen.add(path)
-            if not path.resolve().is_relative_to(path.parent.resolve()):
+            if not path.resolve().is_relative_to(root):
                 logger.warning("Ignoring entrypoint outside its Skill root: %s", path)
                 continue
             content = read_discovery_header(path)
@@ -251,6 +260,7 @@ def load_skills_from_dirs(
                 content=None,
                 source=source,
                 path=str(path),
+                approved_root=str(root),
                 base_dir=str(path.parent),
                 command_name=default_name,
                 display_name=display_name,

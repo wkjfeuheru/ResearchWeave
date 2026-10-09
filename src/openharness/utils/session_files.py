@@ -14,7 +14,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from openharness.utils.file_lock import exclusive_file_lock
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import (
+    atomic_write_text,
+    atomic_write_bytes,
+    private_directory,
+    private_file,
+)
 from openharness.utils.research_documents import MAX_DOCUMENT_BYTES, document_text, parse_document
 
 
@@ -41,6 +46,7 @@ class FileManifest(TypedDict, total=False):
 class SessionFiles:
     def __init__(self, session_directory: Path) -> None:
         self.root = session_directory.resolve() / "files"
+        private_directory(self.root)
         self.lock = self.root / ".files.lock"
 
     def _id(self, value: str) -> str:
@@ -55,6 +61,7 @@ class SessionFiles:
         path = (directory / filename).resolve()
         if not path.is_relative_to(directory.resolve()) or not path.is_relative_to(self.root):
             raise ValueError("文件路径不属于当前会话")
+        private_file(path)
         return path
 
     def upload(self, name: str, content: bytes) -> FileManifest:
@@ -67,13 +74,17 @@ class SessionFiles:
             raise ValueError("仅支持PDF、TXT、MD")
         identifier = uuid4().hex
         directory = self._path("attachments", identifier)
-        directory.mkdir(parents=True, exist_ok=False)
+        if directory.exists():
+            raise FileExistsError(directory)
+        private_directory(directory)
         path = directory / ("original" + suffix)
-        path.write_bytes(content)
+        atomic_write_bytes(path, content, mode=0o600)
         try:
             parsed = parse_document(path)
-            atomic_write_text(directory / "parsed.json", json.dumps(parsed, ensure_ascii=False))
-            atomic_write_text(directory / "text.md", document_text(parsed))
+            atomic_write_text(
+                directory / "parsed.json", json.dumps(parsed, ensure_ascii=False), mode=0o600
+            )
+            atomic_write_text(directory / "text.md", document_text(parsed), mode=0o600)
             meta: FileManifest = {
                 "id": identifier,
                 "name": display,
@@ -93,7 +104,9 @@ class SessionFiles:
                 "original": path.name,
             }
         meta["created_at"] = datetime.now(timezone.utc).isoformat()
-        atomic_write_text(directory / "manifest.json", json.dumps(meta, ensure_ascii=False))
+        atomic_write_text(
+            directory / "manifest.json", json.dumps(meta, ensure_ascii=False), mode=0o600
+        )
         return meta
 
     def list(self, group: str) -> builtins.list[FileManifest]:
@@ -190,9 +203,9 @@ class SessionFiles:
         with exclusive_file_lock(self.lock):
             identifier = uuid4().hex
             directory = self._path("artifacts", identifier)
-            directory.mkdir(parents=True)
+            private_directory(directory)
             target = directory / ("report" + path.suffix)
-            shutil.copyfile(path, target)
+            atomic_write_bytes(target, path.read_bytes(), mode=0o600)
             data: FileManifest = {
                 "id": identifier,
                 "name": path.name,
@@ -214,5 +227,7 @@ class SessionFiles:
                     else {}
                 ),
             }
-            atomic_write_text(directory / "manifest.json", json.dumps(data, ensure_ascii=False))
+            atomic_write_text(
+                directory / "manifest.json", json.dumps(data, ensure_ascii=False), mode=0o600
+            )
             return data

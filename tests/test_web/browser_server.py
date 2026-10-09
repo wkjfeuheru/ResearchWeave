@@ -90,10 +90,12 @@ class BrowserModel:
             return
         if last.text.startswith("导出固定验收产物"):
             scripts = (
-                Path(__file__).parents[2]
+                Path(__file__).resolve().parents[2]
                 / "src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts"
             )
-            python = shlex.quote(sys.executable)
+            python = shlex.quote(
+                str(Path(sys.executable).parent.resolve() / Path(sys.executable).name)
+            )
             process = f"{python} {shlex.quote(str(scripts / 'digest_reports.py'))} --input fixtures/digest.json --output browser-artifacts/computed.json"
             export = f"{python} {shlex.quote(str(scripts / 'export_report.py'))} --input browser-artifacts/computed.json --output-dir browser-artifacts"
             command = process + " && " + export

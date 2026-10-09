@@ -183,10 +183,25 @@ async def test_invalid_model_hook_json_obeys_failure_policy(tmp_path, blocking):
 
 @pytest.mark.asyncio
 async def test_hook_cancel_kills_child_process_group(tmp_path):
+    import os
+    import shlex
+    import sys
+    from pathlib import Path
+
+    # The child cannot produce its side effect before the test releases it.
+    # A fixed sleep raced the event loop under concurrent Python/browser suites.
+    child = (
+        "import os,time; from pathlib import Path; "
+        "Path('child.pid').write_text(str(os.getpid())); Path('ready').touch(); "
+        "exec(\"while not Path('release').exists():\\n time.sleep(0.005)\"); "
+        "Path('leaked').touch()"
+    )
     registry = HookRegistry()
     registry.register(
         HookEvent.PRE_TOOL_USE,
-        CommandHookDefinition(command="touch ready; (sleep 0.3; touch leaked) & wait"),
+        CommandHookDefinition(
+            command=f"{shlex.quote(sys.executable)} -c {shlex.quote(child)} & wait"
+        ),
     )
     executor = HookExecutor(registry, HookExecutionContext(tmp_path, AsyncMock(), "test"))
     pending = asyncio.create_task(executor.execute(HookEvent.PRE_TOOL_USE, {}))
@@ -195,12 +210,34 @@ async def test_hook_cancel_kills_child_process_group(tmp_path):
         while not (tmp_path / "ready").exists():
             await asyncio.sleep(0.005)
 
-    await asyncio.wait_for(ready(), 2)
-    pending.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await pending
-    await asyncio.sleep(0.35)
-    assert not (tmp_path / "leaked").exists()
+    try:
+        await asyncio.wait_for(ready(), 2)
+        pid = int((tmp_path / "child.pid").read_text())
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        (tmp_path / "release").touch()
+
+        async def stopped():
+            while True:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return
+                proc = Path(f"/proc/{pid}/stat")
+                try:
+                    if proc.is_file() and proc.read_text().split()[2] == "Z":
+                        return  # Exited process awaiting reaping cannot perform effects.
+                except FileNotFoundError:
+                    return
+                await asyncio.sleep(0.005)
+
+        await asyncio.wait_for(stopped(), 2)
+        assert not (tmp_path / "leaked").exists()
+    finally:
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
 
 
 @pytest.mark.asyncio

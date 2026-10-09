@@ -12,7 +12,6 @@ import asyncio
 import os
 import json
 from uuid import uuid4
-from pathlib import Path
 from typing import Iterable
 
 from pydantic import BaseModel, Field
@@ -20,7 +19,12 @@ from pydantic import BaseModel, Field
 from openharness.sandbox import SandboxUnavailableError
 from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
 from openharness.utils.shell import create_shell_subprocess, terminate_shell_process
-from openharness.sandbox.policy import ExecutionOwner, report_settings, report_environment
+from openharness.sandbox.policy import (
+    ExecutionOwner,
+    report_settings,
+    report_environment,
+    agent_shell_settings,
+)
 
 
 _READ_REMAINING_OUTPUT_TIMEOUT_SECONDS = 2.0
@@ -49,14 +53,14 @@ class BashTool(BaseTool[BashToolInput]):
     input_model = BashToolInput
 
     async def execute(self, arguments: BashToolInput, context: ToolExecutionContext) -> ToolResult:
-        cwd = Path(arguments.cwd).expanduser() if arguments.cwd else context.cwd
-        if context.workspace_runtime():
-            from openharness.research.errors import ResearchError
+        from openharness.research.errors import ResearchError
 
-            try:
-                cwd = context.resolve_path(arguments.cwd)
-            except (ResearchError, OSError) as exc:
-                return ToolResult(output=str(exc), is_error=True)
+        try:
+            cwd = context.resolve_path(arguments.cwd)
+        except (ResearchError, OSError, ValueError) as exc:
+            return ToolResult(
+                output=str(exc), is_error=True, no_effect=True, error_code="workspace_boundary"
+            )
         preflight_error = _preflight_interactive_command(arguments.command)
         if preflight_error is not None:
             return ToolResult(
@@ -88,7 +92,34 @@ class BashTool(BaseTool[BashToolInput]):
             )
             env = report_environment(workspace)
         else:
-            env = dict(os.environ)
+            from openharness.config import Settings
+
+            settings = settings or Settings()
+            trusted_host = (
+                context.capabilities.allow_trusted_host
+                and settings.sandbox.allow_trusted_host
+                and not settings.sandbox.enabled
+            )
+            if not trusted_host:
+                if not cwd.is_relative_to(context.cwd.resolve()):
+                    return ToolResult(
+                        output="Sandbox cwd must remain within the approved workspace",
+                        is_error=True,
+                        no_effect=True,
+                        error_code="workspace_boundary",
+                    )
+                try:
+                    settings = agent_shell_settings(settings, cwd)
+                except (SandboxUnavailableError, OSError) as exc:
+                    return ToolResult(
+                        output=str(exc),
+                        is_error=True,
+                        metadata={"no_effect": True, "safety_level": "sandbox_required"},
+                    )
+                owner = ExecutionOwner(context.runtime_id or "direct", "general", uuid4().hex, cwd)
+                env = report_environment(cwd)
+            else:
+                env = dict(os.environ)
             for key in (
                 "OPENHARNESS_RESEARCH_SESSION_DIR",
                 "OPENHARNESS_RESEARCH_TASK_ID",
@@ -101,6 +132,18 @@ class BashTool(BaseTool[BashToolInput]):
                 task_id = store.load().research_state.current_task_id
                 if task_id:
                     env["OPENHARNESS_RESEARCH_TASK_ID"] = task_id
+        legacy_store = context.metadata.get("research_store") if runtime is None else None
+        legacy_baseline = None
+        if legacy_store is not None:
+            memory = legacy_store.load()
+            if owner is not None and settings is not None:
+                settings.sandbox.filesystem.deny_read.append(str(legacy_store.directory.resolve()))
+                settings.sandbox.filesystem.deny_write.append(str(legacy_store.directory.resolve()))
+            legacy_baseline = (
+                memory.current_context_id,
+                memory.research_state.current_plan_id,
+                memory.research_state.current_task_id,
+            )
         process: asyncio.subprocess.Process | None = None
         output_buffer = bytearray()
         try:
@@ -128,17 +171,24 @@ class BashTool(BaseTool[BashToolInput]):
             try:
                 await asyncio.wait_for(process.wait(), timeout=arguments.timeout_seconds)
                 try:
-                    await asyncio.wait_for(reader, _READ_REMAINING_OUTPUT_TIMEOUT_SECONDS)
+                    await asyncio.wait_for(
+                        asyncio.shield(reader), _READ_REMAINING_OUTPUT_TIMEOUT_SECONDS
+                    )
                 except asyncio.TimeoutError:
-                    pass
+                    await terminate_shell_process(process, force=True)
             finally:
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
+            if getattr(process, "pid", None) is not None:
+                await terminate_shell_process(process, force=True)
             if owner and settings and settings.sandbox.backend == "docker":
                 from openharness.sandbox.session import stop_docker_sandbox
 
                 await asyncio.shield(stop_docker_sandbox(owner.key))
-            metadata: dict[str, object] = {"returncode": process.returncode}
+            metadata: dict[str, object] = {
+                "returncode": process.returncode,
+                "safety_level": "sandbox" if owner else "trusted_host",
+            }
             if runtime and execution and process.returncode == 0:
                 try:
                     metadata["exported_files"] = _register_exports(
@@ -146,13 +196,28 @@ class BashTool(BaseTool[BashToolInput]):
                     )
                 except (ResearchError, ValueError, OSError) as exc:
                     return ToolResult(output=f"Export registration rejected: {exc}", is_error=True)
+            if legacy_store is not None and process.returncode == 0:
+                try:
+                    metadata["exported_files"] = _register_legacy_exports(
+                        output_buffer, context, legacy_store, legacy_baseline
+                    )
+                except (ValueError, OSError) as exc:
+                    return ToolResult(output=f"Export registration rejected: {exc}", is_error=True)
             return ToolResult(
                 output=_format_output(output_buffer),
                 is_error=process.returncode != 0,
                 metadata=metadata,
             )
         except SandboxUnavailableError as exc:
-            return ToolResult(output=str(exc), is_error=True)
+            return ToolResult(
+                output=str(exc),
+                is_error=True,
+                metadata={
+                    "no_effect": True,
+                    "error_code": "sandbox_unavailable",
+                    "safety_level": "sandbox_required",
+                },
+            )
         except asyncio.TimeoutError:
             if process:
                 await terminate_shell_process(process, force=True)
@@ -170,6 +235,13 @@ class BashTool(BaseTool[BashToolInput]):
                 await terminate_shell_process(process)
             raise
         finally:
+            if process is not None:
+                if process.returncode is None:
+                    await terminate_shell_process(process, force=True)
+                transport = getattr(process, "_transport", None)
+                if transport is not None:
+                    transport.close()
+                    await asyncio.sleep(0)
             if owner and settings and settings.sandbox.backend == "docker":
                 from openharness.sandbox.session import stop_docker_sandbox
 
@@ -341,3 +413,69 @@ def _looks_like_prompt(output: str) -> bool:
     )
     lowered_output = output.lower()
     return any(marker in lowered_output for marker in prompt_markers)
+
+
+def _register_legacy_exports(
+    output: bytearray, context: ToolExecutionContext, store: object, baseline: object
+) -> list[FileManifest]:
+    """Legacy scripts declare files; only the host imports them, never sandbox state writes."""
+    from openharness.research.store import ResearchStore
+    from openharness.utils.file_lock import exclusive_file_lock
+    from openharness.utils.session_files import SessionFiles
+    from openharness.config.paths import get_config_dir, get_data_dir, get_logs_dir
+
+    assert isinstance(store, ResearchStore)
+    exports = []
+    private = [
+        path.resolve()
+        for path in (get_config_dir(), get_data_dir(), get_logs_dir(), store.directory)
+    ]
+    for line in output.decode("utf-8", errors="replace").splitlines():
+        try:
+            packet = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(packet, dict) or not isinstance(packet.get("files"), list):
+            continue
+        for value in packet["files"]:
+            if not isinstance(value, str):
+                raise ValueError("Export paths must be strings")
+            path = context.resolve_path(value)
+            if not path.is_relative_to(context.cwd.resolve()) or any(
+                path.is_relative_to(root) for root in private
+            ):
+                raise ValueError("Export must be a non-private file within the current workspace")
+            if (
+                not path.is_file()
+                or path.stat().st_size > 30 * 1024 * 1024
+                or path.stat().st_nlink != 1
+            ):
+                raise ValueError("Export file is missing, too large or hardlinked")
+            query = context.metadata.get("query_context")
+            if (
+                query
+                and not query.permission_checker.evaluate(
+                    "read_file", is_read_only=True, file_path=str(path)
+                ).allowed
+            ):
+                raise ValueError("Export path is denied by the read policy")
+            exports.append((path, str(packet.get("status", "candidate"))))
+            if len(exports) > 50:
+                raise ValueError("Too many exported files")
+    if not exports:
+        return []
+    with exclusive_file_lock(store.lock):
+        memory = store._load()
+        state = memory.research_state
+        if (
+            memory.current_context_id,
+            state.current_plan_id,
+            state.current_task_id,
+        ) != baseline or state.replan_required:
+            raise ValueError("Legacy research scope changed; exports were not imported")
+        return [
+            SessionFiles(store.directory).register(
+                path, task_id=state.current_task_id, status=status, kind=path.suffix[1:]
+            )
+            for path, status in exports
+        ]

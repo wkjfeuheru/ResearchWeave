@@ -177,6 +177,8 @@ class ToolResult:
     metadata: dict[str, Any] = field(default_factory=dict)
     status: str | None = None
     error_code: str | None = None
+    retryable: bool = False
+    no_effect: bool | None = None
 
 
 InputT = TypeVar("InputT", bound=BaseModel)
@@ -197,6 +199,12 @@ class BaseTool(ABC, Generic[InputT]):
         """Return whether the invocation is read-only."""
         del arguments
         return False
+
+    async def execute_with_idempotency_key(
+        self, arguments: InputT, context: ToolExecutionContext, *, idempotency_key: str
+    ) -> ToolResult:
+        """Override only when the remote API honors this key; host invokes this path explicitly."""
+        raise NotImplementedError("No remote idempotency-key adapter")
 
     async def reconcile_no_effect(self, arguments: InputT, context: ToolExecutionContext) -> bool:
         """Explicit external verification adapter; False means unknown, never assume no effect."""
@@ -225,6 +233,10 @@ class ToolRegistry:
         """Validate contracts and reject implicit or protected tool replacement."""
         from openharness.tools.contracts import resolve_contract
 
+        from openharness.tools.retired import RETIRED_TOOL_NAMES
+
+        if tool.name in RETIRED_TOOL_NAMES:
+            raise ValueError(f"Retired tool cannot be registered: {tool.name}")
         resolve_contract(tool)
         if tool.name in self._tools:
             existing = self._tools[tool.name]

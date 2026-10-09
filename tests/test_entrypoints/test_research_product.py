@@ -77,7 +77,6 @@ def test_registry_contains_only_research_tools():
         "grep",
         "image_to_text",
         "research_memory",
-        "investigate_conflict",
         "planner",
         "replanner",
         "research_project",

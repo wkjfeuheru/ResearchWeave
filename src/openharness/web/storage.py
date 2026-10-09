@@ -18,7 +18,7 @@ from openharness.config.paths import get_data_dir
 from openharness.engine.messages import ConversationMessage, sanitize_conversation_messages
 from openharness.research.store import ResearchStore
 from openharness.services.session_storage import _persistable_tool_metadata
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory, private_file
 from openharness.web.citations import project_answer_rows
 
 
@@ -27,7 +27,9 @@ class WebSessionBackend:
         self.cwd = str(Path(cwd).resolve())
         digest = sha256(self.cwd.encode()).hexdigest()[:16]
         self.directory = get_data_dir() / "web" / "sessions" / digest
-        self.directory.mkdir(parents=True, exist_ok=True)
+        private_directory(self.directory)
+        for snapshot in self.directory.glob("*.json"):
+            private_file(snapshot)
 
     def get_session_dir(self, cwd: str | Path) -> Path:
         return self.directory

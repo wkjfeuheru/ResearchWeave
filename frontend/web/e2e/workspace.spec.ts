@@ -594,3 +594,41 @@ test('attachments, real script artifacts, download, reload and isolation', async
   await expect(page.getByLabel('研究产物')).toHaveCount(0);
   await expect(page.getByLabel('会话附件')).toHaveCount(0);
 });
+
+test('first message is delivered when socket becomes ready before session refresh finishes', async ({ page }) => {
+  const created = await page.request.post('/api/models', { data: {
+    label: '首次连接竞态模型', api_format: 'openai', model: 'browser-test-model', api_key: 'first-connection-secret', context_window_tokens: 200000,
+  } });
+  expect(created.ok()).toBe(true);
+  const { id } = await created.json();
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        this.addEventListener('message', event => {
+          if (JSON.parse(String(event.data)).type === 'ready') {
+            queueMicrotask(() => { (window as any).__sessionReadyDelivered = true; });
+          }
+        });
+      }
+    };
+  });
+  let holdRefresh = false;
+  await page.route('**/api/sessions', async route => {
+    if (holdRefresh && route.request().method() === 'GET') {
+      holdRefresh = false;
+      await page.waitForFunction(() => (window as any).__sessionReadyDelivered === true);
+    }
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('当前对话模型').selectOption(id);
+  await page.getByLabel('对话输入').fill('首次连接时发送消息');
+  holdRefresh = true;
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await expect(page.locator('.message.assistant')).toContainText('这是浏览器测试回复');
+  await expect(page.getByLabel('对话输入')).toHaveValue('');
+  await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+  await expect(page.locator('.message.user')).toHaveCount(1);
+});

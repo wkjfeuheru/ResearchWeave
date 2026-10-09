@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import os
+from openharness.utils.fs import private_file
 from typing import Iterator
 
 from openharness.platforms import PlatformName, get_platform
@@ -52,7 +54,9 @@ def _exclusive_posix_lock(lock_path: Path) -> Iterator[None]:
         raise SwarmLockUnavailableError(f"fcntl not available: {exc}") from exc
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.touch(exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    os.close(fd)
+    private_file(lock_path)
     with lock_path.open("a+b") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:

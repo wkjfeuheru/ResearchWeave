@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -45,6 +46,7 @@ class SkillDefinition:
     metadata: SkillMetadata = field(default_factory=SkillMetadata)
     enabled: bool = True
     plugin_name: str | None = None
+    approved_root: str | None = None
 
     def load_content(self) -> str:
         """Read only this entrypoint, never its supporting resources."""
@@ -52,6 +54,10 @@ class SkillDefinition:
             return self.content
         if not self.path or not self.base_dir:
             return ""
+        if self.approved_root and not Path(self.path).resolve().is_relative_to(
+            Path(self.approved_root)
+        ):
+            raise ValueError("Skill entrypoint escaped its originally approved root")
         from openharness.skills.resources import resolve_resource
 
         return resolve_resource(self.base_dir, self.path).read_text(encoding="utf-8")

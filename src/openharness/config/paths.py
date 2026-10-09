@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from openharness.utils.fs import private_directory
 
 _DEFAULT_BASE_DIR = ".openharness"
 _CONFIG_FILE_NAME = "settings.json"
@@ -25,7 +26,7 @@ def get_config_dir() -> Path:
     else:
         config_dir = Path.home() / _DEFAULT_BASE_DIR
 
-    config_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(config_dir)
     return config_dir
 
 
@@ -47,7 +48,7 @@ def get_data_dir() -> Path:
     else:
         data_dir = get_config_dir() / "data"
 
-    data_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(data_dir)
     return data_dir
 
 
@@ -64,19 +65,19 @@ def get_logs_dir() -> Path:
     else:
         logs_dir = get_config_dir() / "logs"
 
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(logs_dir)
     return logs_dir
 
 
 def get_sessions_dir() -> Path:
     """Return the session storage directory."""
     sessions_dir = get_data_dir() / "sessions"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(sessions_dir)
     return sessions_dir
 
 
 def get_project_config_dir(cwd: str | Path) -> Path:
     """Return the per-project .openharness directory."""
     project_dir = Path(cwd).resolve() / ".openharness"
-    project_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(project_dir)
     return project_dir

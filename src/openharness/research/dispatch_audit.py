@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterator
 from typing_extensions import TypedDict
 from pydantic import TypeAdapter, ValidationError
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory
 from openharness.research.errors import ResearchError
 
 
@@ -47,7 +47,7 @@ def dispatch_directory(store_directory: Path, dispatch_id: str) -> Path:
 @contextmanager
 def lifecycle_lock(directory: Path) -> Iterator[bool]:
     """False means an owner is alive. The kernel releases this lock on SIGKILL."""
-    directory.mkdir(parents=True, exist_ok=True)
+    private_directory(directory)
     with (directory / ".lifecycle.lock").open("a+b") as stream:
         acquired = False
         if __import__("os").name == "nt":

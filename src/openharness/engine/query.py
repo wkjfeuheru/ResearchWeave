@@ -24,6 +24,7 @@ from openharness.api.client import (
 from openharness.api.provider import is_model_multimodal
 from openharness.api.usage import UsageSnapshot
 from openharness.config.paths import get_data_dir
+from openharness.config import Settings
 from openharness.engine.messages import (
     ConversationMessage,
     ImageBlock,
@@ -154,6 +155,7 @@ class QueryContext:
     max_turns: int | None = 200
     hook_executor: HookExecutor | None = None
     tool_metadata: ExecutionMetadata | None = None
+    trusted_settings: Settings | None = None
     runtime_context_provider: Callable[[], str | None] | None = None
     runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None
     context_components: ContextComponentsSettings | None = None
@@ -165,7 +167,9 @@ class QueryContext:
 
 def _tool_artifact_dir() -> Path:
     artifact_dir = get_data_dir() / "tool_artifacts"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    from openharness.utils.fs import private_directory
+
+    private_directory(artifact_dir)
     return artifact_dir
 
 
@@ -637,11 +641,7 @@ async def run_query(
             return
 
         store = (context.tool_metadata or {}).get("research_store")
-        if (
-            store is not None
-            and not final_message.tool_uses
-            and not (context.tool_metadata or {}).get("conflict_investigator")
-        ):
+        if store is not None and not final_message.tool_uses:
             state = store.load()
             actionable = [
                 item
@@ -669,8 +669,9 @@ async def run_query(
                             {
                                 "conflict_ids": [item.id for item in actionable],
                                 "draft": final_message.text,
-                                "required_action": "Investigate open core conflicts using investigate_conflict. "
-                                "Read completed reports, review original evidence, and submit resolve_conflict. "
+                                "required_action": "Read both sides of open core conflicts and register reasoning. "
+                                "Use research_memory.submit_conflict_report, then review and submit resolve_conflict. "
+                                "Optional dispatch_subagents returns candidates, never authoritative decisions. "
                                 "Allow conditional or unresolved decisions. Do not present disputed claims as certain. "
                                 "On timeout or failure retain uncertainty and continue independent work.",
                             },
@@ -808,6 +809,18 @@ async def run_query(
             return
 
         tool_calls = final_message.tool_uses
+        if any(call.name == "bash" for call in tool_calls):
+            host_shell = context.capabilities.allow_trusted_host and not (
+                runtime is not None and runtime.store.load().project is not None
+            )
+            yield (
+                StatusEvent(
+                    message="Shell 将在已明确授权的宿主模式执行，没有沙箱隔离。"
+                    if host_shell
+                    else "Shell 将要求沙箱隔离；后端不可用时停止执行。"
+                ),
+                None,
+            )
 
         if len(tool_calls) == 1:
             # Single tool: sequential (stream events immediately)

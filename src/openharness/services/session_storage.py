@@ -17,7 +17,7 @@ from openharness.engine.messages import (
     ConversationMessage,
     sanitize_conversation_messages,
 )
-from openharness.utils.fs import atomic_write_text
+from openharness.utils.fs import atomic_write_text, private_directory, private_file
 
 
 _PERSISTED_TOOL_METADATA_KEYS = (
@@ -68,7 +68,9 @@ def get_project_session_dir(cwd: str | Path) -> Path:
     path = Path(cwd).resolve()
     digest = sha1(str(path).encode("utf-8")).hexdigest()[:12]
     session_dir = get_sessions_dir() / f"{path.name}-{digest}"
-    session_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(session_dir)
+    for snapshot in session_dir.glob("*.json"):
+        private_file(snapshot)
     return session_dir
 
 
@@ -110,11 +112,11 @@ def save_session_snapshot(
 
     # Save as latest
     latest_path = session_dir / "latest.json"
-    atomic_write_text(latest_path, data)
+    atomic_write_text(latest_path, data, mode=0o600)
 
     # Save by session ID
     session_path = session_dir / f"session-{sid}.json"
-    atomic_write_text(session_path, data)
+    atomic_write_text(session_path, data, mode=0o600)
 
     return latest_path
 

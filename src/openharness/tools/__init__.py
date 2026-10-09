@@ -26,9 +26,10 @@ from openharness.tools.read_mcp_resource_tool import ReadMcpResourceTool
 from openharness.tools.mcp_tool import McpToolAdapter
 from openharness.tools.dispatch_subagents_tool import DispatchSubagentsTool
 
-RESEARCH_EXCLUDED_TOOLS = frozenset(
-    {"notebook_edit", "config", "mcp_auth", "image_generation", "sleep"}
-)
+from openharness.tools.retired import RETIRED_TOOL_NAMES
+
+# Compatibility import for plugins and existing callers. Both modes retain the same product surface.
+RESEARCH_EXCLUDED_TOOLS = RETIRED_TOOL_NAMES
 
 
 def create_research_tool_registry(

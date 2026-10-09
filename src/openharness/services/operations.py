@@ -7,10 +7,13 @@ import json
 import os
 import sqlite3
 import time
+import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 from typing import Any, Iterator
+from openharness.utils.fs import private_directory, private_file
 
 STATES = {
     "prepared",
@@ -34,13 +37,57 @@ EDGES = {
 }
 
 
+_SCHEMA_LOCK = threading.RLock()
+_INITIALIZED: OrderedDict[tuple[int, str], tuple[int, int]] = OrderedDict()
+_SCHEMA_VERSION = 2
+
+
+def _after_fork() -> None:
+    global _SCHEMA_LOCK
+    _SCHEMA_LOCK = threading.RLock()
+    _INITIALIZED.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
+
+
+@contextmanager
+def _schema_initialization_lock() -> Iterator[None]:
+    if not _SCHEMA_LOCK.acquire(timeout=5.0):
+        raise TimeoutError("Operation schema initialization is busy")
+    try:
+        yield
+    finally:
+        _SCHEMA_LOCK.release()
+
+
 class OperationStore:
     def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as db:
-            db.executescript("""
-                PRAGMA journal_mode=WAL;
+        self.path = Path(path).absolute()
+        private_directory(self.path.parent)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        os.close(fd)
+        self._private_files()
+        self._initialize()
+
+    def _initialize(self) -> None:
+        key = (os.getpid(), str(self.path))
+        with _schema_initialization_lock():
+            st = self.path.stat()
+            identity = (st.st_dev, st.st_ino)
+            if _INITIALIZED.get(key) == identity and st.st_size > 0:
+                _INITIALIZED.move_to_end(key)
+                return
+            with self.connect(timeout=5.0) as db:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    version = db.execute("PRAGMA user_version").fetchone()[0]
+                    if version > _SCHEMA_VERSION:
+                        raise ValueError("Operation database has a newer unsupported schema")
+                    if version < _SCHEMA_VERSION:
+                        schema = """
                 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
                 INSERT OR IGNORE INTO schema_version VALUES(1);
                 CREATE TABLE IF NOT EXISTS api_attempts(
@@ -64,12 +111,43 @@ class OperationStore:
                     attempt_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, number INTEGER NOT NULL,
                     status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
                     UNIQUE(operation_id,number));
-            """)
-        os.chmod(self.path, 0o600)
+            """
+                        for statement in schema.split(";"):
+                            if statement.strip():
+                                db.execute(statement)
+                        columns = {row[1] for row in db.execute("PRAGMA table_info(api_attempts)")}
+                        for column, kind in (("status", "TEXT"), ("updated", "REAL")):
+                            if column not in columns:
+                                db.execute(f"ALTER TABLE api_attempts ADD COLUMN {column} {kind}")
+                        for statement in (
+                            "CREATE INDEX IF NOT EXISTS operation_scope_status ON operations(scope,status)",
+                            "CREATE INDEX IF NOT EXISTS operation_session_status ON operations(session_id,status,scope)",
+                            "CREATE INDEX IF NOT EXISTS operation_run_status ON operations(run_id,status)",
+                            "CREATE INDEX IF NOT EXISTS attempt_operation_status ON attempts(operation_id,status)",
+                            "CREATE INDEX IF NOT EXISTS api_status_updated ON api_attempts(status,updated)",
+                        ):
+                            db.execute(statement)
+                        db.execute(
+                            "INSERT OR IGNORE INTO schema_version VALUES(?)", (_SCHEMA_VERSION,)
+                        )
+                        db.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+                    db.commit()
+                except BaseException:
+                    db.rollback()
+                    raise
+            _INITIALIZED[key] = identity
+            while len(_INITIALIZED) > 256:
+                _INITIALIZED.popitem(last=False)
+
+    def _private_files(self) -> None:
+        for path in (self.path, Path(str(self.path) + "-wal"), Path(str(self.path) + "-shm")):
+            private_file(path)
 
     @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
-        db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+    def connect(self, *, timeout: float = 0.25) -> Iterator[sqlite3.Connection]:
+        self._private_files()
+        db = sqlite3.connect(self.path, timeout=timeout, isolation_level=None)
+        self._private_files()
         db.row_factory = sqlite3.Row
         try:
             yield db
@@ -158,16 +236,58 @@ class OperationStore:
     def record_api_attempt(self, record: dict[str, Any]) -> None:
         with self.transaction() as db:
             existing = db.execute(
-                "SELECT record FROM api_attempts WHERE attempt_id=?", (record["attempt_id"],)
+                "SELECT record,request_id FROM api_attempts WHERE attempt_id=?",
+                (record["attempt_id"],),
             ).fetchone()
+            if existing and existing["request_id"] != record["request_id"]:
+                raise ValueError("API attempt ID is bound to another request")
             if existing and json.loads(existing["record"])["status"] != "running":
                 if json.loads(existing["record"]) == record:
                     return
                 raise ValueError("API attempt already settled")
             db.execute(
-                "INSERT INTO api_attempts VALUES(?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET record=excluded.record",
-                (record["attempt_id"], record["request_id"], json.dumps(record)),
+                "INSERT INTO api_attempts(attempt_id,request_id,record,status,updated) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(attempt_id) DO UPDATE SET record=excluded.record,status=excluded.status,updated=excluded.updated",
+                (
+                    record["attempt_id"],
+                    record["request_id"],
+                    json.dumps(record),
+                    record["status"],
+                    record.get("finished", record.get("started")),
+                ),
             )
+
+    def prune_audit(self, *, before: float, limit: int = 1000) -> dict[str, int]:
+        """Bounded host maintenance; preserve receipts, artifacts and unresolved/unknown usage."""
+        if not 1 <= limit <= 10000:
+            raise ValueError("Audit prune limit must be 1..10000")
+        with self.transaction() as db:
+            api = [
+                row[0]
+                for row in db.execute(
+                    "SELECT attempt_id FROM api_attempts WHERE status IN ('succeeded','failed','cancelled') "
+                    "AND updated<? AND CASE WHEN json_valid(record) THEN json_extract(record,'$.usage_status') END='reported' "
+                    "ORDER BY updated LIMIT ?",
+                    (before, limit),
+                )
+            ]
+            db.executemany(
+                "DELETE FROM api_attempts WHERE attempt_id=?", [(value,) for value in api]
+            )
+            remaining = limit - len(api)
+            attempts = [
+                row[0]
+                for row in db.execute(
+                    "SELECT a.attempt_id FROM attempts a JOIN operations o ON o.operation_id=a.operation_id "
+                    "WHERE o.status IN ('succeeded','failed','cancelled') AND o.updated<? AND a.updated<? "
+                    "AND a.status!='running' ORDER BY a.updated LIMIT ?",
+                    (before, before, remaining),
+                )
+            ]
+            db.executemany(
+                "DELETE FROM attempts WHERE attempt_id=?", [(value,) for value in attempts]
+            )
+        return {"api_attempts": len(api), "tool_attempts": len(attempts)}
 
     def get(self, operation: str, *, session: str, scope: str) -> dict[str, Any]:
         with self.connect() as db:

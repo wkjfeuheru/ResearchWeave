@@ -74,8 +74,9 @@ class ResearchMemoryTool(BaseTool[ResearchMemoryInput]):
         "source_id_note is not a supported field. Use only schema-defined fields. "
         "add_reasoning records methods/results, never private chain of thought; "
         "add_conclusion links evidence and reasoning. Revise evidence/conclusions using supersedes. "
-        "add_conflict records both sides and marks core conclusions for review; investigate_conflict runs an "
-        "isolated investigator; resolve_conflict atomically commits the main agent's reviewed decision and "
+        "add_conflict records both sides and marks core conclusions for review. The main agent inspects original "
+        "sources, registers reasoning and submits submit_conflict_report; optional dispatch_subagents returns "
+        "candidates only. resolve_conflict atomically commits the main agent's separately reviewed decision and "
         "successor conclusion; reopen_conflict records changed evidence or a requested review. "
         "Cite evidence in answers as [E:ev_ID]. Writes are internal session bookkeeping."
     )
@@ -134,6 +135,7 @@ class ResearchMemoryTool(BaseTool[ResearchMemoryInput]):
         progress = receipt["progress"] if "progress" in receipt else store.progress()
         detail = {
             "add_conflict": "已登记双方证据与争议",
+            "submit_conflict_report": "核查报告已保存，等待主代理审查裁决",
             "reopen_conflict": "相关判断需要重新核查",
         }.get(arguments.operation.action)
         if arguments.operation.action == "resolve_conflict":
