@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor
-from openharness.hooks.executor import _inject_arguments
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import CommandHookDefinition, PromptHookDefinition
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, TextBlock
+from researchx.hooks import HookEvent, HookExecutionContext, HookExecutor
+from researchx.hooks.executor import _inject_arguments
+from researchx.hooks.loader import HookRegistry
+from researchx.hooks.schemas import CommandHookDefinition, PromptHookDefinition
 
 
 class FakeApiClient:
@@ -33,7 +33,7 @@ class FakeApiClient:
 @pytest.mark.asyncio
 async def test_command_hook_executes(tmp_path: Path, monkeypatch):
     # This tests command execution, not the developer's interactive login profile.
-    from openharness.utils import shell
+    from researchx.services.execution import shell
 
     original = shell.resolve_shell_command
     monkeypatch.setattr(
@@ -137,7 +137,7 @@ async def test_command_hook_escapes_shell_metacharacters(tmp_path: Path):
 
 
 async def test_prompt_hook_ignores_retry_notifications(tmp_path):
-    from openharness.api.client import ApiRetryEvent, ApiTextDeltaEvent
+    from researchx.api.client import ApiRetryEvent, ApiTextDeltaEvent
 
     class RetryingClient(FakeApiClient):
         async def stream_message(self, request):

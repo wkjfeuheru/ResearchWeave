@@ -7,7 +7,7 @@ config; evaluation files contain only fixtures, generated results and audits.
 from __future__ import annotations
 
 import argparse
-from openharness.utils.async_timeout import timeout as async_timeout
+from researchx.services.execution.async_timeout import timeout as async_timeout
 import asyncio
 import json
 import os
@@ -19,13 +19,13 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-import websockets
+from tests.test_web.http_sse import sse_connection
 
-from openharness.auth.storage import store_credential
-from openharness.config import Settings, save_settings
-from openharness.research.store import ResearchStore
-from openharness.web.app import create_app
-from openharness.web.catalog import profile_settings
+from researchx.auth.storage import store_credential
+from researchx.config import Settings, save_settings
+from researchx.state.store import ResearchStore
+from researchx.web.app import create_app
+from researchx.web.catalog import profile_settings
 from importlib import import_module
 
 SKILL_FUNCTIONS = {
@@ -43,9 +43,7 @@ RESULT_TYPES = {}
 FUNCTIONS = {}
 for kind, (plugin, script, function, result_type) in SKILL_FUNCTIONS.items():
     package = "report-generation" if kind == "deep" else "analysis-modeling"
-    module = import_module(
-        f"openharness.plugins.bundled.{package}.skills.{plugin}.scripts.{script}"
-    )
+    module = import_module(f"researchx.plugins.bundled.{package}.skills.{plugin}.scripts.{script}")
     RESULT_TYPES[kind] = getattr(module, result_type)
     FUNCTIONS[kind] = getattr(module, function)
 
@@ -62,8 +60,8 @@ async def run(args):
     base = f"http://127.0.0.1:{args.port}"
     audit = []
     with TemporaryDirectory(prefix="skill-eval-config-") as config:
-        os.environ["OPENHARNESS_CONFIG_DIR"] = config
-        os.environ["OPENHARNESS_DATA_DIR"] = str(output / "data")
+        os.environ["RESEARCHX_CONFIG_DIR"] = config
+        os.environ["RESEARCHX_DATA_DIR"] = str(output / "data")
         profile = selected.resolve_profile()[1].model_copy(update={"credential_slot": "eval"})
         save_settings(
             Settings(
@@ -140,10 +138,10 @@ async def run(args):
                     )
                     events = []
                     async with async_timeout(args.turn_timeout):
-                        async with websockets.connect(
-                            f"ws://127.0.0.1:{args.port}/api/sessions/{sid}/ws",
-                            origin=base,
-                            max_size=8000000,
+                        async with sse_connection(
+                            client,
+                            sid,
+                            max_event_bytes=8000000,
                         ) as ws:
                             assert json.loads(await ws.recv())["type"] == "ready"
                             await ws.send(

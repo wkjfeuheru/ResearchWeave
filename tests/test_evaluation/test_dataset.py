@@ -6,9 +6,9 @@ from decimal import Decimal
 
 from typer.testing import CliRunner
 
-from openharness.cli import app
-from openharness.evaluation.cli import select_cases
-from openharness.evaluation.dataset import DEFAULT_DATASET, load_cases, validate_dataset
+from researchx.cli import app
+from researchx.evaluation.cli import select_cases
+from researchx.evaluation.dataset import DEFAULT_DATASET, load_cases, validate_dataset
 
 
 def test_corpus_is_complete_and_balanced():

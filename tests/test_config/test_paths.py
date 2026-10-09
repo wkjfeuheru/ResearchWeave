@@ -1,10 +1,10 @@
-"""Tests for openharness.config.paths."""
+"""Tests for researchx.config.paths."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.config.paths import (
+from researchx.config.paths import (
     get_config_dir,
     get_config_file_path,
     get_data_dir,
@@ -13,57 +13,63 @@ from openharness.config.paths import (
 
 
 def test_get_config_dir_default(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("OPENHARNESS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("RESEARCHX_CONFIG_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     config_dir = get_config_dir()
-    assert config_dir == tmp_path / ".openharness"
+    assert config_dir == tmp_path / ".researchx"
     assert config_dir.is_dir()
 
 
 def test_get_config_dir_env_override(tmp_path: Path, monkeypatch):
     custom = tmp_path / "custom_config"
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(custom))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(custom))
     config_dir = get_config_dir()
     assert config_dir == custom
     assert config_dir.is_dir()
 
 
 def test_get_config_file_path(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("OPENHARNESS_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("RESEARCHX_CONFIG_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     path = get_config_file_path()
-    assert path == tmp_path / ".openharness" / "settings.json"
+    assert path == tmp_path / ".researchx" / "settings.json"
 
 
 def test_get_data_dir_default(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("OPENHARNESS_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("OPENHARNESS_DATA_DIR", raising=False)
+    monkeypatch.delenv("RESEARCHX_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("RESEARCHX_DATA_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     data_dir = get_data_dir()
-    assert data_dir == tmp_path / ".openharness" / "data"
+    assert data_dir == tmp_path / ".researchx" / "data"
     assert data_dir.is_dir()
 
 
 def test_get_data_dir_env_override(tmp_path: Path, monkeypatch):
     custom = tmp_path / "custom_data"
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(custom))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(custom))
     data_dir = get_data_dir()
     assert data_dir == custom
     assert data_dir.is_dir()
 
 
 def test_get_logs_dir_default(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("OPENHARNESS_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("OPENHARNESS_LOGS_DIR", raising=False)
+    monkeypatch.delenv("RESEARCHX_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("RESEARCHX_LOGS_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     logs_dir = get_logs_dir()
-    assert logs_dir == tmp_path / ".openharness" / "logs"
+    assert logs_dir == tmp_path / ".researchx" / "logs"
     assert logs_dir.is_dir()
 
 
 def test_get_logs_dir_env_override(tmp_path: Path, monkeypatch):
     custom = tmp_path / "custom_logs"
-    monkeypatch.setenv("OPENHARNESS_LOGS_DIR", str(custom))
+    monkeypatch.setenv("RESEARCHX_LOGS_DIR", str(custom))
     logs_dir = get_logs_dir()
     assert logs_dir == custom
     assert logs_dir.is_dir()
+
+
+def test_get_data_path_is_backwards_compatible_alias() -> None:
+    from researchx.config.paths import get_data_path
+
+    assert get_data_path().name == "data"

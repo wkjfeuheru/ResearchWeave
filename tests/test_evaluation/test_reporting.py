@@ -2,9 +2,9 @@
 
 import json
 
-from openharness.evaluation.calibration import review_report
-from openharness.evaluation.models import MetricResult
-from openharness.evaluation.report import compare_runs, write_report
+from researchx.evaluation.calibration import review_report
+from researchx.evaluation.models import MetricResult
+from researchx.evaluation.report import compare_runs, write_report
 from tests.test_evaluation.test_scoring import run
 
 

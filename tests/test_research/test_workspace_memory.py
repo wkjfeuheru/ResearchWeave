@@ -8,20 +8,20 @@ from threading import Barrier
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings, ResearchMemorySettings
-from openharness.engine.messages import ConversationMessage, ToolUseBlock
-from openharness.engine.query import QueryContext, _execute_tool_call, run_query
-from openharness.engine.query_engine import QueryEngine
-from openharness.permissions.checker import PermissionChecker
-from openharness.research.errors import ResearchError
-from openharness.research.models import PlanProposal, ResearchObjective
-from openharness.research.repository import ResearchRepository
-from openharness.research.runtime import ResearchAgentRuntime
-from openharness.research.store import ResearchStore
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import ToolExecutionContext
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings, ResearchMemorySettings
+from researchx.engine.messages import ConversationMessage, ToolUseBlock
+from researchx.engine.query import QueryContext, _execute_tool_call, run_query
+from researchx.engine.query_engine import QueryEngine
+from researchx.permissions.checker import PermissionChecker
+from researchx.state.errors import ResearchError
+from researchx.state.models import PlanProposal, ResearchObjective
+from researchx.state.repository import ResearchRepository
+from researchx.state.runtime import ResearchAgentRuntime
+from researchx.state.store import ResearchStore
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import ToolExecutionContext
 from tests.test_research.test_report_runtime import claim, commit, task
 
 
@@ -60,9 +60,9 @@ def packet(text):
 
 
 def test_workspace_recall_shares_memory_quota_and_defers_whole_document(workspace):
-    from openharness.config.context_components import ContextComponentsSettings
-    from openharness.services.context_sources import ContextSnapshot, compose_research_context
-    from openharness.services.token_estimation import estimate_tokens
+    from researchx.config.context_components import ContextComponentsSettings
+    from researchx.services.context.sources import ContextSnapshot, compose_research_context
+    from researchx.services.context.token_estimation import estimate_tokens
 
     path = workspace.resolve_workspace("A") / "MEMORY.md"
     original = "complete background evidence " * 1000
@@ -255,7 +255,7 @@ async def test_symlink_files_and_directories_cannot_leak_through_search(
         result = await invoke(workspace, name, **values)
         assert result.is_error and "Symlinks" in result.output
     if not use_rg:
-        monkeypatch.setattr("openharness.tools.glob_tool.shutil.which", lambda _: None)
+        monkeypatch.setattr("researchx.tools.glob_tool.shutil.which", lambda _: None)
     glob = await invoke(workspace, "glob", pattern="**/*")
     grep = await invoke(workspace, "grep", pattern="SECRET", file_glob="**/*")
     assert not glob.is_error and "link.txt" not in glob.output and "linked_dir" not in glob.output
@@ -299,7 +299,7 @@ def test_bounded_low_trust_memory_does_not_escape_wrapper(workspace):
     assert data["truncated"] and len(data["content"]) == 256
     assert "read_file" in data["notice"] and data["memory_path"] == "MEMORY.md"
     assert block.count("<workspace_memory>") == block.count("</workspace_memory>") == 1
-    assert "Low-trust" in block and "authoritative" in block
+    assert "低信任" in block and "权威" in block
 
 
 async def test_interrupt_resume_reuses_saved_binding_and_latest_memory(workspace, tmp_path):

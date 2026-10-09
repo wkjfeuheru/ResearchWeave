@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Message, Prompt, Session } from './api';
+import { errorText, type Message, type Prompt, type Session } from './api';
 
 export function useConversation(sessionId: string | null, onDone: () => void, onStarted: () => void,
   onFailed: (text: string) => void, onDeleted: () => void) {
@@ -11,7 +11,8 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const prompt = prompts[0] || null;
   const [epoch, setEpoch] = useState(0);
-  const socket = useRef<WebSocket | null>(null);
+  const stream = useRef<EventSource | null>(null);
+  const connectionId = useRef('');
   const readySessionId = useRef<string | null>(null);
   const activeId = useRef('');
   const draftId = useRef<string | null>(null);
@@ -25,36 +26,58 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
     setSession(current => current ? { ...current, messages: [...current.messages, row] } : current);
   }
 
-  function dispatch(ws: WebSocket, text: string, profileId: string, attachmentIds: string[] = []) {
+  async function sendCommand(source: EventSource, id: string, command: Record<string, unknown>): Promise<boolean> {
+    try {
+      const response = await fetch(`/api/sessions/${id}/commands`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-ResearchX-Connection': connectionId.current },
+        body: JSON.stringify(command),
+      });
+      const ack = await response.json();
+      if (!response.ok) throw new Error(typeof ack.detail === 'string' ? ack.detail : '命令提交失败');
+      if (ack.accepted !== true || ack.request_id !== command.request_id) throw new Error('命令确认无效');
+      return stream.current === source;
+    } catch (error) {
+      if (stream.current === source) setError(errorText(error));
+      return false;
+    }
+  }
+
+  function dispatch(source: EventSource, id: string, text: string, profileId: string, attachmentIds: string[] = []) {
     activeId.current = crypto.randomUUID();
     lastText.current = text;
     draftId.current = null;
     setBusy(true); setError(''); setStatus('正在准备…');
-    ws.send(JSON.stringify({ type: 'submit', request_id: activeId.current, text, profile_id: profileId, attachment_ids: attachmentIds }));
+    const requestId = activeId.current;
+    void sendCommand(source, id, { type: 'submit', request_id: requestId, text, profile_id: profileId, attachment_ids: attachmentIds }).then(ok => {
+      if (!ok && stream.current === source && activeId.current === requestId) {
+        setBusy(false); setStatus(''); callbacks.current.onFailed(text);
+      }
+    });
   }
 
   useEffect(() => {
     readySessionId.current = null;
     setSession(null); setConnected(false); setPrompts([]); setStatus(''); setError('');
-    activeId.current = ''; draftId.current = null;
+    activeId.current = ''; draftId.current = null; steering.current = null; connectionId.current = '';
     if (!sessionId) { setBusy(false); return; }
     let disposed = false;
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/sessions/${sessionId}/ws`);
-    socket.current = ws;
-    ws.onmessage = event => {
+    const source = new EventSource(`/api/sessions/${sessionId}/events`);
+    stream.current = source;
+    source.onmessage = event => {
       if (disposed) return;
       const data = JSON.parse(event.data);
       if (data.session_id !== sessionId) return;
       if (data.type === 'ready') {
+        connectionId.current = data.connection_id;
         readySessionId.current = sessionId;
         setSession(data.session); setConnected(true); setBusy(false);
         if (pending.current?.sessionId === sessionId) {
           const queued = pending.current; pending.current = null;
-          dispatch(ws, queued.text, queued.profileId, queued.attachmentIds);
+          dispatch(source, sessionId, queued.text, queued.profileId, queued.attachmentIds);
         }
         return;
       }
-      if (data.type === 'session_deleted') { disposed = true; setSession(null); setBusy(false); setConnected(false); setPrompts([]); callbacks.current.onDeleted(); return; }
+      if (data.type === 'session_deleted') { disposed = true; source.close(); stream.current = null; readySessionId.current = null; setSession(null); setBusy(false); setConnected(false); setPrompts([]); callbacks.current.onDeleted(); return; }
       if (data.request_id && data.request_id !== activeId.current && data.request_id !== steering.current?.id) return;
       const pendingSteer = steering.current;
       if (data.type === 'steer_accepted' && pendingSteer && pendingSteer.id === data.next_request_id) {
@@ -114,10 +137,10 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
           callbacks.current.onDone(); break;
       }
     };
-    ws.onerror = () => { if (!disposed) setError('无法连接对话服务，请检查后端是否已启动'); };
-    ws.onclose = () => {
+    source.onerror = () => {
+      source.close();
       if (!disposed) {
-        readySessionId.current = null;
+        readySessionId.current = null; connectionId.current = ''; stream.current = null;
         setConnected(false); setBusy(false); setPrompts([]); pending.current = null; steering.current = null;
         setSession(current => current ? { ...current, messages: current.messages.map(row => row.turn_status === 'running'
           ? { ...row, turn_status: 'stopped', phase: row.phase === 'pending' ? 'progress' : row.phase,
@@ -125,7 +148,7 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
         setError('连接已断开。重新打开会话可恢复历史；消息不会自动重发。');
       }
     };
-    return () => { disposed = true; ws.close(); socket.current = null; readySessionId.current = null; };
+    return () => { disposed = true; source.close(); if (stream.current === source) stream.current = null; readySessionId.current = null; connectionId.current = ''; };
   }, [sessionId, epoch]);
 
   return {
@@ -133,23 +156,28 @@ export function useConversation(sessionId: string | null, onDone: () => void, on
     reconnect() { setEpoch(value => value + 1); },
     send(id: string, text: string, profileId: string, attachmentIds: string[] = []) {
       setBusy(true);
-      // ensureSession can await a catalog refresh while this socket already receives
+      // ensureSession can await a catalog refresh while this stream already receives
       // ready. Its caller then resumes with an older render's sessionId/connected.
-      if (readySessionId.current === id && socket.current?.readyState === WebSocket.OPEN) dispatch(socket.current, text, profileId, attachmentIds);
+      if (readySessionId.current === id && stream.current?.readyState === EventSource.OPEN) dispatch(stream.current, id, text, profileId, attachmentIds);
       else pending.current = { sessionId: id, text, profileId, attachmentIds };
     },
-    cancel() { socket.current?.send(JSON.stringify({ type: 'cancel', request_id: activeId.current })); },
+    cancel() { if (stream.current && readySessionId.current) void sendCommand(stream.current, readySessionId.current, { type: 'cancel', request_id: activeId.current }); },
     steer(text: string) {
-      if (!text.trim() || !busy || !connected || steering.current || socket.current?.readyState !== WebSocket.OPEN) return;
+      if (!text.trim() || !busy || !connected || steering.current || stream.current?.readyState !== EventSource.OPEN || !readySessionId.current) return;
       const id = crypto.randomUUID();
       steering.current = { id, text: text.trim() };
-      socket.current.send(JSON.stringify({ type: 'steer', request_id: id, target_request_id: activeId.current, text: text.trim() }));
+      const source = stream.current;
+      void sendCommand(source, readySessionId.current, { type: 'steer', request_id: id, target_request_id: activeId.current, text: text.trim() }).then(ok => {
+        if (!ok && stream.current === source && steering.current?.id === id) { steering.current = null; setStatus(''); }
+      });
       setStatus('正在提交修改要求…');
     },
     respond(answer: string) {
-      if (!prompt) return;
-      socket.current?.send(JSON.stringify({ type: 'response', request_id: activeId.current, prompt_id: prompt.prompt_id, answer }));
-      setPrompts(current => current.filter(item => item.prompt_id !== prompt.prompt_id)); setStatus('正在继续…');
+      if (!prompt || !stream.current || !readySessionId.current) return;
+      const source = stream.current;
+      void sendCommand(source, readySessionId.current, { type: 'response', request_id: activeId.current, prompt_id: prompt.prompt_id, answer }).then(ok => {
+        if (ok && stream.current === source) { setPrompts(current => current.filter(item => item.prompt_id !== prompt.prompt_id)); setStatus('正在继续…'); }
+      });
     },
   };
 }

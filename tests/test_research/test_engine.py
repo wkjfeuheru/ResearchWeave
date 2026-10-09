@@ -6,23 +6,23 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings
+from researchx.engine.messages import (
     ConversationMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
     sanitize_conversation_messages,
 )
-from openharness.engine.query_engine import QueryEngine
-from openharness.permissions.checker import PermissionChecker
-from openharness.research.store import ResearchStore
-from openharness.services.compact import compact_conversation, microcompact_messages
-from openharness.tools.base import BaseTool, ToolRegistry, ToolResult
-from openharness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
-from openharness.tools.web_fetch_tool import _HTMLTextExtractor
+from researchx.engine.query_engine import QueryEngine
+from researchx.permissions.checker import PermissionChecker
+from researchx.state.store import ResearchStore
+from researchx.services.compact import compact_conversation, microcompact_messages
+from researchx.tools.base import BaseTool, ToolRegistry, ToolResult
+from researchx.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
+from researchx.tools.web_fetch_tool import _HTMLTextExtractor
 
 
 class OneToolModel:
@@ -114,9 +114,9 @@ def engine(tmp_path, store, tool, model=None):
 
 @pytest.mark.asyncio
 async def test_capture_precedes_output_offload_and_microcompact(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("OPENHARNESS_TOOL_OUTPUT_INLINE_CHARS", "256")
-    monkeypatch.setenv("OPENHARNESS_TOOL_OUTPUT_PREVIEW_CHARS", "128")
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_TOOL_OUTPUT_INLINE_CHARS", "256")
+    monkeypatch.setenv("RESEARCHX_TOOL_OUTPUT_PREVIEW_CHARS", "128")
     store = ResearchStore(tmp_path, "a" * 12)
     agent = engine(tmp_path, store, LargeSourceTool())
     _ = [event async for event in agent.submit_message("读取资料")]
@@ -271,8 +271,8 @@ async def test_web_metadata_uses_redirect_url_and_full_pretruncation_content(mon
             request=httpx.Request("GET", "https://example.org/final"),
         )
 
-    monkeypatch.setattr("openharness.tools.web_fetch_tool.fetch_public_http_response", fetch)
-    from openharness.tools.base import ToolExecutionContext
+    monkeypatch.setattr("researchx.tools.web_fetch_tool.fetch_public_http_response", fetch)
+    from researchx.tools.base import ToolExecutionContext
 
     result = await WebFetchTool().execute(
         WebFetchToolInput(url="https://example.org/start", max_chars=500),
@@ -289,7 +289,7 @@ async def test_web_metadata_uses_redirect_url_and_full_pretruncation_content(mon
 @pytest.mark.parametrize("repairs", [True, False])
 async def test_unknown_citations_get_bounded_correction_without_publishing_draft(tmp_path, repairs):
     from tests.test_research.test_store import evidence
-    from openharness.engine.stream_events import StatusEvent
+    from researchx.engine.stream_events import StatusEvent
 
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
     ev = evidence(store, "公开报告中的营收增长")
@@ -433,7 +433,7 @@ async def test_final_verification_is_bounded_to_three_rounds(tmp_path):
     events = [event async for event in agent.submit_message("给出结论")]
     assert len(model.requests) == 4
     assert "待核验（尚未完成原文核对）" in agent.messages[-1].text
-    from openharness.engine.stream_events import StatusEvent
+    from researchx.engine.stream_events import StatusEvent
 
     assert (
         sum(isinstance(event, StatusEvent) and "核对引用原文" in event.message for event in events)

@@ -7,8 +7,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import openharness.cli as cli
-from openharness.config import load_settings
+import researchx.cli as cli
+from researchx.config import load_settings
 
 
 app = cli.app
@@ -32,7 +32,7 @@ def test_cli_help():
 
 def test_setup_flow_selects_profile_and_model(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path))
 
     selected = []
 
@@ -45,9 +45,9 @@ def test_setup_flow_selects_profile_and_model(tmp_path: Path, monkeypatch):
     def fake_login(provider):
         logged_in.append(provider)
 
-    monkeypatch.setattr("openharness.cli._select_setup_workflow", fake_select)
-    monkeypatch.setattr("openharness.cli._prompt_model_for_profile", lambda profile: "gpt-5.4")
-    monkeypatch.setattr("openharness.cli._login_provider", fake_login)
+    monkeypatch.setattr("researchx.cli._select_setup_workflow", fake_select)
+    monkeypatch.setattr("researchx.cli._prompt_model_for_profile", lambda profile: "gpt-5.4")
+    monkeypatch.setattr("researchx.cli._login_provider", fake_login)
 
     result = runner.invoke(app, ["setup"])
     assert result.exit_code == 0
@@ -95,25 +95,23 @@ def test_select_from_menu_uses_questionary_when_tty(monkeypatch):
 
 def test_setup_flow_existing_api_key_profile_can_update_secret(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    from openharness.auth.manager import AuthManager
-    from openharness.auth.storage import load_credential
+    from researchx.auth.manager import AuthManager
+    from researchx.auth.storage import load_credential
 
     manager = AuthManager()
     manager.store_profile_credential("openai-compatible", "api_key", "old-key")
 
     selections = iter(["openai-compatible", "openai-compatible"])
     monkeypatch.setattr(
-        "openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections)
+        "researchx.cli._select_setup_workflow", lambda *args, **kwargs: next(selections)
     )
-    monkeypatch.setattr(
-        "openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections)
-    )
-    monkeypatch.setattr("openharness.cli._confirm_prompt", lambda *args, **kwargs: True)
-    monkeypatch.setattr("openharness.auth.flows.ApiKeyFlow.run", lambda self: "new-key")
-    monkeypatch.setattr("openharness.cli._prompt_model_for_profile", lambda profile: "gpt-4.1")
+    monkeypatch.setattr("researchx.cli._select_from_menu", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr("researchx.cli._confirm_prompt", lambda *args, **kwargs: True)
+    monkeypatch.setattr("researchx.auth.flows.ApiKeyFlow.run", lambda self: "new-key")
+    monkeypatch.setattr("researchx.cli._prompt_model_for_profile", lambda profile: "gpt-4.1")
 
     result = runner.invoke(app, ["setup"])
 
@@ -124,7 +122,7 @@ def test_setup_flow_existing_api_key_profile_can_update_secret(tmp_path: Path, m
 
 def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path))
     # Prevent env var leakage from overriding the configured api_key
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -138,13 +136,11 @@ def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path,
     )
 
     monkeypatch.setattr(
-        "openharness.cli._select_setup_workflow", lambda *args, **kwargs: next(selections)
+        "researchx.cli._select_setup_workflow", lambda *args, **kwargs: next(selections)
     )
-    monkeypatch.setattr(
-        "openharness.cli._select_from_menu", lambda *args, **kwargs: next(selections)
-    )
-    monkeypatch.setattr("openharness.cli._text_prompt", lambda *args, **kwargs: next(prompts))
-    monkeypatch.setattr("openharness.auth.flows.ApiKeyFlow.run", lambda self: "sk-kimi-test")
+    monkeypatch.setattr("researchx.cli._select_from_menu", lambda *args, **kwargs: next(selections))
+    monkeypatch.setattr("researchx.cli._text_prompt", lambda *args, **kwargs: next(prompts))
+    monkeypatch.setattr("researchx.auth.flows.ApiKeyFlow.run", lambda self: "sk-kimi-test")
 
     result = runner.invoke(app, ["setup"])
     assert result.exit_code == 0
@@ -158,16 +154,16 @@ def test_setup_flow_creates_kimi_profile_with_profile_scoped_key(tmp_path: Path,
     assert profile.credential_slot == "kimi-anthropic"
     assert profile.allowed_models == ["kimi-k2.5"]
 
-    from openharness.auth.storage import load_credential
+    from researchx.auth.storage import load_credential
 
     assert load_credential("profile:kimi-anthropic", "api_key") == "sk-kimi-test"
 
 
 def test_provider_add_can_store_profile_api_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path))
 
-    from openharness.auth.storage import load_credential
+    from researchx.auth.storage import load_credential
 
     result = runner.invoke(
         app,
@@ -199,11 +195,11 @@ def test_provider_add_can_store_profile_api_key(tmp_path: Path, monkeypatch):
 
 def test_provider_edit_can_replace_profile_api_key(tmp_path: Path, monkeypatch):
     runner = CliRunner()
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    from openharness.auth.manager import AuthManager
-    from openharness.auth.storage import load_credential
+    from researchx.auth.manager import AuthManager
+    from researchx.auth.storage import load_credential
 
     manager = AuthManager()
     manager.store_profile_credential("openai-compatible", "api_key", "old-key")
@@ -234,15 +230,15 @@ def test_terminal_coding_entrypoints_are_removed():
 
 
 def test_tavily_credentials_without_model_profile(tmp_path, monkeypatch):
-    from openharness.auth import storage
-    from openharness.utils.tavily_search import resolve_tavily_key
+    from researchx.auth import storage
+    from researchx.api.tavily_search import resolve_tavily_key
 
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path))
-    monkeypatch.delenv("OPENHARNESS_TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("RESEARCHX_TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(storage, "_keyring_available", lambda: False)
     monkeypatch.setattr(
-        "openharness.auth.flows.ApiKeyFlow.run", lambda self: "test-tavily-credential"
+        "researchx.auth.flows.ApiKeyFlow.run", lambda self: "test-tavily-credential"
     )
     before = load_settings().model_dump()
     runner = CliRunner()

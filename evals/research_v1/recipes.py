@@ -2,7 +2,7 @@
 
 from typing import Literal
 from typing_extensions import TypedDict
-from openharness.evaluation.models import Category
+from researchx.evaluation.models import Category
 
 
 class SourceRecipe(TypedDict):

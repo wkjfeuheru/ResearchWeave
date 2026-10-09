@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config.settings import Settings
-from openharness.hooks.loader import load_hook_registry
-from openharness.plugins import load_plugins
-from openharness.plugins.loader import get_user_plugins_dir
-from openharness.skills import load_skill_registry
+from researchx.config.settings import Settings
+from researchx.hooks.loader import load_hook_registry
+from researchx.plugins import load_plugins
+from researchx.plugins.loader import get_user_plugins_dir
+from researchx.skills import load_skill_registry
 
 
 @pytest.fixture(autouse=True)
 def isolate_user_and_project_plugins(tmp_path, monkeypatch):
     """These tests exercise user/project plugins; packaged plugins have separate coverage."""
     monkeypatch.setattr(
-        "openharness.plugins.loader.BUNDLED_PLUGINS_DIR", tmp_path / "packaged-plugins"
+        "researchx.plugins.loader.BUNDLED_PLUGINS_DIR", tmp_path / "packaged-plugins"
     )
 
 
@@ -88,7 +88,7 @@ def _write_tool_plugin(root: Path, *, enabled_by_default: bool = True) -> Path:
     )
     (tools_dir / "echo_tool.py").write_text(
         "from pydantic import BaseModel\n"
-        "from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult\n\n"
+        "from researchx.tools.base import BaseTool, ToolExecutionContext, ToolResult\n\n"
         "class EchoArgs(BaseModel):\n"
         "    text: str = 'hello'\n\n"
         "class EchoTool(BaseTool):\n"
@@ -104,9 +104,9 @@ def _write_tool_plugin(root: Path, *, enabled_by_default: bool = True) -> Path:
 
 
 def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".researchx" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_plugin(plugins_root)
 
@@ -125,9 +125,9 @@ def test_load_plugins_from_project_dir(tmp_path: Path, monkeypatch):
 
 
 def test_plugin_skills_and_hooks_are_merged(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".researchx" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_plugin(plugins_root)
 
@@ -141,9 +141,9 @@ def test_plugin_skills_and_hooks_are_merged(tmp_path: Path, monkeypatch):
 
 
 def test_project_plugins_are_disabled_by_default(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".researchx" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_plugin(plugins_root)
 
@@ -153,9 +153,9 @@ def test_project_plugins_are_disabled_by_default(tmp_path: Path, monkeypatch):
 
 
 def test_project_plugins_disabled_by_default_warns_operator(tmp_path: Path, monkeypatch, caplog):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".researchx" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_plugin(plugins_root)
 
@@ -168,9 +168,9 @@ def test_project_plugins_disabled_by_default_warns_operator(tmp_path: Path, monk
 
 
 def test_user_plugins_still_load_when_project_plugins_are_disabled(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    project_plugins_root = project / ".openharness" / "plugins"
+    project_plugins_root = project / ".researchx" / "plugins"
     project_plugins_root.mkdir(parents=True)
     _write_plugin(project_plugins_root)
 
@@ -184,9 +184,9 @@ def test_user_plugins_still_load_when_project_plugins_are_disabled(tmp_path: Pat
 
 
 def test_enabled_plugin_tools_are_loaded(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".researchx" / "plugins"
     plugins_root.mkdir(parents=True)
     _write_tool_plugin(plugins_root, enabled_by_default=True)
 
@@ -199,9 +199,9 @@ def test_enabled_plugin_tools_are_loaded(tmp_path: Path, monkeypatch):
 
 
 def test_disabled_plugin_tools_are_not_imported(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     project = tmp_path / "repo"
-    plugins_root = project / ".openharness" / "plugins"
+    plugins_root = project / ".researchx" / "plugins"
     plugins_root.mkdir(parents=True)
     plugin_dir = _write_tool_plugin(plugins_root, enabled_by_default=False)
     marker = tmp_path / "tool-imported.txt"

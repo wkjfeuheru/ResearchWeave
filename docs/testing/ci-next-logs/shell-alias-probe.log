@@ -1,2 +1,0 @@
-Interpreter: /work/.venv/bin/python Canonical command: /tmp/openharness-stability-py311/bin/python
-/usr/bin/bash: line 21: /dev/shm/openharness-ci-next-9p1npvvz-node/sandbox-deps/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory {'returncode': 127, 'safety_level': 'sandbox'}

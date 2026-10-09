@@ -4,17 +4,17 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.permissions.checker import PermissionChecker
-from openharness.research.models import PlanProposal, Record, ResearchObjective, new_id
-from openharness.research.store import ResearchStore
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import BaseTool, ToolResult
-from openharness.utils.session_files import SessionFiles
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.engine.query_engine import QueryEngine
+from researchx.permissions.checker import PermissionChecker
+from researchx.state.models import PlanProposal, Record, ResearchObjective, new_id
+from researchx.state.store import ResearchStore
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import BaseTool, ToolResult
+from researchx.workspace.session_files import SessionFiles
 from tests.test_research.test_report_runtime import task
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "earnings_commentary.json"

@@ -29,7 +29,7 @@ function ResearchTasks({ progress, sessionId }: { progress: ResearchProgress; se
     completed: '已完成', blocked: '受阻', failed: '失败', cancelled: '已取消' };
   const projectLabels = { created: '已创建', planning: '规划中', running: '研究中', replanning: '重新规划中',
     suspended: '已暂停', validating: '交付验证中', completed: '研报已完成', failed: '失败', cancelled: '已取消' };
-  const storageKey = `openharness:research-progress:${sessionId}:${progress.plan_id || 'replan'}`;
+  const storageKey = `researchx:research-progress:${sessionId}:${progress.plan_id || 'replan'}`;
   const hasBlocked = progress.tasks.some(task => task.status === 'blocked');
   const conflicts = progress.conflicts || [];
   const conflictLabels = { open: '发现冲突', investigating: '核查原文中', awaiting_review: '等待审查',
@@ -152,7 +152,7 @@ export default function ChatPage({ session, models, skills, selectedProfile, onP
         if (message.role === 'system') return <div className="system-row" key={message.id}>{message.text}</div>;
         return <article className={`message ${message.role}`} key={message.id}>
           <div className="message-avatar">{message.role === 'user' ? '你' : <BookOpen size={18} />}</div>
-          <div className="message-body"><div className="message-label">{message.role === 'user' ? '你' : 'OpenHarness'}{message.role === 'assistant' && <span>投研助手</span>}</div>
+          <div className="message-body"><div className="message-label">{message.role === 'user' ? '你' : 'ResearchX'}{message.role === 'assistant' && <span>投研助手</span>}</div>
             <Markdown text={message.text} />
             {message.role === 'assistant' && <button className="copy-button" aria-label="复制回复" onClick={async () => {
               try { await navigator.clipboard.writeText(message.text); setCopied(message.id); }

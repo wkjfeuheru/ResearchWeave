@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from openharness.research.errors import ResearchError
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
+from researchx.state.errors import ResearchError
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
 from tests.test_research.test_dispatch_subagents import project as project
 from tests.test_research.test_conflicts import make_research
 

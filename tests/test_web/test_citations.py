@@ -1,16 +1,18 @@
 """Web-only citation projection must not change frozen research evidence."""
 
+from tests.test_web.sse_client import RecordingChannel
+
 import copy
-from types import SimpleNamespace
 
 import pytest
 
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.engine.stream_events import AssistantTurnComplete
-from openharness.research.store import ResearchStore
-from openharness.web.citations import project_answer_rows, render_web_answer
-from openharness.web.runtime import BrowserConnection, session_view
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, TextBlock
+from researchx.engine.stream_events import AssistantTurnComplete
+from researchx.state.store import ResearchStore
+from researchx.web.citations import project_answer_rows, render_web_answer
+from researchx.web.runtime import SessionController
+from researchx.web.session_view import session_view
 from tests.test_research.test_store import apply, evidence, store as store
 from tests.test_web.test_app import add_model, add_session
 
@@ -96,7 +98,8 @@ async def test_live_history_and_compacted_history_share_frozen_projection(worksp
     async def send_json(event):
         events.append(event)
 
-    connection = BrowserConnection(SimpleNamespace(send_json=send_json), sid, app.state.workspace)
+    connection = SessionController(sid, app.state.workspace)
+    connection.channel = RecordingChannel(events)
     connection.rows = []
     connection.request_id = "request"
     message = ConversationMessage(

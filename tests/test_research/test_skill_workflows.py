@@ -15,9 +15,9 @@ from openpyxl import load_workbook
 from pypdf import PdfWriter
 from pydantic import ValidationError
 
-from openharness.utils.research_documents import parse_document
+from researchx.research.documents import parse_document
 from tests.research_skill_support import FUNCTIONS, RESULT_TYPES, SKILLS, export_result, module
-from openharness.utils.session_files import SessionFiles
+from researchx.workspace.session_files import SessionFiles
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "research_skills"
 
@@ -53,7 +53,7 @@ def test_scan_corrupt_encrypted_and_page_limit(tmp_path, monkeypatch):
     path.write_bytes(b"%PDF-1.7\nbroken")
     with pytest.raises(ValueError):
         parse_document(path)
-    monkeypatch.setattr("openharness.utils.research_documents.MAX_DOCUMENT_PAGES", 1)
+    monkeypatch.setattr("researchx.research.documents.MAX_DOCUMENT_PAGES", 1)
     with pytest.raises(ValueError, match="1000"):
         parse_document(FIXTURES / "annual-report.pdf")
 
@@ -332,8 +332,8 @@ def test_business_and_export_scripts_from_another_cwd(kind, tmp_path):
     output = tmp_path / "work" / "computed.json"
     env = {
         **os.environ,
-        "OPENHARNESS_RESEARCH_SESSION_DIR": str(tmp_path / "session"),
-        "OPENHARNESS_RESEARCH_TASK_ID": "script-task",
+        "RESEARCHX_RESEARCH_SESSION_DIR": str(tmp_path / "session"),
+        "RESEARCHX_RESEARCH_TASK_ID": "script-task",
     }
 
     def run(path, *args):
@@ -400,7 +400,7 @@ def test_business_script_rejects_other_skill_input_without_output(tmp_path):
 
 def test_copied_plugin_packages_keep_sibling_models_isolated(tmp_path):
     from importlib import import_module
-    from openharness.utils.research_script_support import script_package
+    from researchx.plugins.research_script_support import script_package
 
     loaded = []
     for kind in ("financial", "monitor"):

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from openharness.evaluation.langfuse_backend import (
+from researchx.evaluation.langfuse_backend import (
     LangfuseObserver,
     LangfuseConfigurationError,
     connection_config,
@@ -15,8 +15,8 @@ from openharness.evaluation.langfuse_backend import (
     import_sdk_experiments,
     langfuse_usage,
 )
-from openharness.evaluation.models import MetricResult, RunArtifact
-from openharness.evaluation.observer import timestamp
+from researchx.evaluation.models import MetricResult, RunArtifact
+from researchx.evaluation.observer import timestamp
 
 
 def test_langfuse_usage_exclusive_buckets_do_not_double_count_cache():
@@ -84,8 +84,8 @@ def test_private_config_environment_priority_and_missing_credentials_no_sdk(tmp_
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(LangfuseConfigurationError):
         connect()
-    (tmp_path / ".openharness").mkdir()
-    (tmp_path / ".openharness/evaluation.local.json").write_text(
+    (tmp_path / ".researchx").mkdir()
+    (tmp_path / ".researchx/evaluation.local.json").write_text(
         '{"langfuse":{"base_url":"https://private.example","public_key":"public","secret_key":"private"}}'
     )
     monkeypatch.setenv("LANGFUSE_BASE_URL", "https://override.example")
@@ -153,7 +153,7 @@ def test_installed_v4_sdk_contract_accepts_hosted_items():
 
 def test_sdk_import_replays_saved_results_and_does_not_duplicate_confirmed_upload():
     pytest.importorskip("langfuse")
-    from openharness.evaluation.dataset import load_cases
+    from researchx.evaluation.dataset import load_cases
 
     case = load_cases()[0]
     artifact = RunArtifact(

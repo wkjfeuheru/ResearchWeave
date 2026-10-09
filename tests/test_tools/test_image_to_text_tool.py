@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.provider import is_model_multimodal
-from openharness.config.settings import VisionModelConfig
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.image_to_text_tool import ImageToTextTool, ImageToTextToolInput
+from researchx.api.provider import is_model_multimodal
+from researchx.config.settings import VisionModelConfig
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.image_to_text_tool import ImageToTextTool, ImageToTextToolInput
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ class TestImageToTextToolInput:
 
     def test_default_prompt(self) -> None:
         inp = ImageToTextToolInput(image_data="data")
-        assert "image" in inp.prompt.lower()
+        assert "图像" in inp.prompt
 
     def test_custom_prompt(self) -> None:
         inp = ImageToTextToolInput(
@@ -308,9 +308,9 @@ class TestVisionModelConfig:
         assert not cfg.is_configured
 
     def test_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_VISION_MODEL", "gpt-4o")
-        monkeypatch.setenv("OPENHARNESS_VISION_API_KEY", "sk-env-key")
-        monkeypatch.setenv("OPENHARNESS_VISION_BASE_URL", "https://api.example.com/v1")
+        monkeypatch.setenv("RESEARCHX_VISION_MODEL", "gpt-4o")
+        monkeypatch.setenv("RESEARCHX_VISION_API_KEY", "sk-env-key")
+        monkeypatch.setenv("RESEARCHX_VISION_BASE_URL", "https://api.example.com/v1")
 
         cfg = VisionModelConfig.from_env()
         assert cfg.model == "gpt-4o"
@@ -319,8 +319,8 @@ class TestVisionModelConfig:
         assert cfg.is_configured
 
     def test_from_env_partial(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENHARNESS_VISION_MODEL", "gpt-4o")
-        monkeypatch.delenv("OPENHARNESS_VISION_API_KEY", raising=False)
+        monkeypatch.setenv("RESEARCHX_VISION_MODEL", "gpt-4o")
+        monkeypatch.delenv("RESEARCHX_VISION_API_KEY", raising=False)
 
         cfg = VisionModelConfig.from_env()
         assert not cfg.is_configured
@@ -333,12 +333,12 @@ class TestVisionModelConfig:
 
 def test_tool_registered() -> None:
     """image_to_text tool is registered in the default registry."""
-    from openharness.tools import create_research_tool_registry
+    from researchx.tools import create_research_tool_registry
 
     registry = create_research_tool_registry()
     tool = registry.get("image_to_text")
     assert tool is not None
     assert tool.name == "image_to_text"
-    assert "vision" in tool.description.lower()
+    assert "视觉" in tool.description
     assert tool.input_model.__name__ == "ImageToTextToolInput"
-    assert tool.input_model.__module__ == "openharness.tools.image_to_text_tool"
+    assert tool.input_model.__module__ == "researchx.tools.image_to_text_tool"

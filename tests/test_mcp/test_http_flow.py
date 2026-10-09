@@ -9,11 +9,11 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-import openharness.mcp.client as client_module
-from openharness.mcp.client import McpClientManager
-from openharness.mcp.types import McpHttpServerConfig
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import ToolExecutionContext
+import researchx.mcp.client as client_module
+from researchx.mcp.client import McpClientManager
+from researchx.mcp.types import McpHttpServerConfig
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import ToolExecutionContext
 
 
 @pytest.mark.asyncio

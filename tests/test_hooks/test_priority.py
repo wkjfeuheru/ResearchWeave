@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import CommandHookDefinition, HttpHookDefinition
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, TextBlock
+from researchx.hooks import HookEvent, HookExecutionContext, HookExecutor
+from researchx.hooks.loader import HookRegistry
+from researchx.hooks.schemas import CommandHookDefinition, HttpHookDefinition
 
 
 class FakeApiClient:
@@ -84,7 +84,7 @@ def test_summary_includes_non_default_priority():
 @pytest.mark.asyncio
 async def test_executor_runs_hooks_in_priority_order(tmp_path: Path, monkeypatch):
     """End-to-end: execute() honours the priority-sorted registry order."""
-    from openharness.utils import shell
+    from researchx.services.execution import shell
 
     original = shell.resolve_shell_command
     monkeypatch.setattr(

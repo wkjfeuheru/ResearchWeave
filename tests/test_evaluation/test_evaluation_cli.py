@@ -2,15 +2,15 @@
 
 from typer.testing import CliRunner
 
-from openharness.cli import app
-from openharness.evaluation.dataset import dataset_version, load_cases
-from openharness.evaluation.models import RunArtifact
-from openharness.evaluation.observer import timestamp
-from openharness.evaluation.runner import write_artifact
+from researchx.cli import app
+from researchx.evaluation.dataset import dataset_version, load_cases
+from researchx.evaluation.models import RunArtifact
+from researchx.evaluation.observer import timestamp
+from researchx.evaluation.runner import write_artifact
 
 
 def test_resume_skips_saved_cases_and_refuses_changed_profile(tmp_path, monkeypatch):
-    from openharness.evaluation import runner
+    from researchx.evaluation import runner
 
     calls = []
 

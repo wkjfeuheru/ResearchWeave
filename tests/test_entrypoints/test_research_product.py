@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config.settings import Settings, save_settings
-from openharness.tools import create_research_tool_registry
-from openharness.utils.redaction import _redact_config_value, _settings_json_for_display
+from researchx.config.settings import Settings, save_settings
+from researchx.tools import create_research_tool_registry
+from researchx.security.redaction import _redact_config_value, _settings_json_for_display
 
 
 RETIRED = {
@@ -33,17 +33,17 @@ RETIRED = {
 
 
 def test_package_has_no_retired_imports_or_dynamic_loads():
-    package = Path(__file__).resolve().parents[2] / "src" / "openharness"
-    forbidden = {"openharness." + name for name in RETIRED} | {
-        "openharness.services.cron",
-        "openharness.services.cron_scheduler",
-        "openharness.services.autodream",
-        "openharness.services.memory_extract",
-        "openharness.services.session_memory",
-        "openharness.services.lsp",
-        "openharness.services.session_backend",
-        "openharness.prompts.claudemd",
-        "openharness.config.schema",
+    package = Path(__file__).resolve().parents[2] / "src" / "researchx"
+    forbidden = {"researchx." + name for name in RETIRED} | {
+        "researchx.services.cron",
+        "researchx.services.cron_scheduler",
+        "researchx.services.autodream",
+        "researchx.services.memory_extract",
+        "researchx.services.session_memory",
+        "researchx.services.lsp",
+        "researchx.services.session_backend",
+        "researchx.prompts.claudemd",
+        "researchx.config.schema",
         "ohmo",
     }
     for name in RETIRED:
@@ -121,12 +121,12 @@ def test_config_redaction_covers_nested_and_retired_credentials():
 
 @pytest.mark.asyncio
 async def test_memory_disabled_ignores_retired_state_and_plugins_keep_hooks(tmp_path, monkeypatch):
-    from openharness.runtime import build_runtime, close_runtime
-    from openharness.hooks import HookEvent
+    from researchx.runtime import build_runtime, close_runtime
+    from researchx.hooks import HookEvent
     from tests.test_engine.test_query_engine import StaticApiClient
 
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     save_settings(Settings(research_memory={"enabled": False}))
     plugin = tmp_path / "plugins" / "research"
     plugin.mkdir(parents=True)
@@ -165,12 +165,12 @@ async def test_memory_disabled_ignores_retired_state_and_plugins_keep_hooks(tmp_
 async def test_runtime_filters_retired_plugin_tools_but_keeps_services_and_config(
     tmp_path, monkeypatch
 ):
-    from openharness.runtime import build_runtime, close_runtime
-    from openharness.tools import RESEARCH_EXCLUDED_TOOLS
+    from researchx.runtime import build_runtime, close_runtime
+    from researchx.tools import RESEARCH_EXCLUDED_TOOLS
     from tests.test_engine.test_query_engine import StaticApiClient
 
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     plugin = tmp_path / "plugins/research"
     (plugin / "tools").mkdir(parents=True)
     (plugin / "plugin.json").write_text(
@@ -186,7 +186,7 @@ async def test_runtime_filters_retired_plugin_tools_but_keeps_services_and_confi
         return ToolResult(output="ok")
 """)
     (plugin / "tools/fixtures.py").write_text(
-        "from openharness.tools.base import BaseTool, ToolResult\nfrom pydantic import BaseModel\nclass PluginInput(BaseModel):\n    pass\n"
+        "from researchx.tools.base import BaseTool, ToolResult\nfrom pydantic import BaseModel\nclass PluginInput(BaseModel):\n    pass\n"
         + "\n".join(classes),
         encoding="utf-8",
     )

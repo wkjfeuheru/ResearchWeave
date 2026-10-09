@@ -5,16 +5,16 @@ import asyncio
 import httpx
 import pytest
 
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
-from openharness.utils import tavily_search as tavily
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.web_search_tool import WebSearchTool, WebSearchToolInput
+from researchx.api import tavily_search as tavily
 
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.delenv("OPENHARNESS_WEB_SEARCH_URL", raising=False)
-    monkeypatch.delenv("OPENHARNESS_TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.delenv("RESEARCHX_WEB_SEARCH_URL", raising=False)
+    monkeypatch.delenv("RESEARCHX_TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-secret")
     monkeypatch.setattr(tavily, "load_credential", lambda *args: None)
 
@@ -130,7 +130,7 @@ async def test_missing_key_and_precedence(monkeypatch, tmp_path):
     assert tavily.resolve_tavily_key() == "stored"
     monkeypatch.setenv("TAVILY_API_KEY", "env")
     assert tavily.resolve_tavily_key() == "env"
-    monkeypatch.setenv("OPENHARNESS_TAVILY_API_KEY", "prefixed")
+    monkeypatch.setenv("RESEARCHX_TAVILY_API_KEY", "prefixed")
     assert tavily.resolve_tavily_key() == "prefixed"
     assert tavily.tavily_credentials() == {"stored", "env", "prefixed"}
 
@@ -177,7 +177,7 @@ async def test_custom_html_endpoint_never_receives_tavily_credentials(monkeypatc
             request=httpx.Request("GET", url),
         )
 
-    monkeypatch.setattr("openharness.tools.web_search_tool.fetch_public_http_response", fetch)
+    monkeypatch.setattr("researchx.tools.web_search_tool.fetch_public_http_response", fetch)
     result = await execute(tmp_path, search_url="https://custom.example/search", scope="web")
     assert not result.is_error and result.metadata["outcome"] == "empty"
     assert "Authorization" not in calls[0]["headers"]
@@ -188,6 +188,6 @@ async def test_html_challenge_is_not_reported_as_empty(monkeypatch, tmp_path):
     async def fetch(url, **kwargs):
         return httpx.Response(200, text="captcha challenge", request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("openharness.tools.web_search_tool.fetch_public_http_response", fetch)
+    monkeypatch.setattr("researchx.tools.web_search_tool.fetch_public_http_response", fetch)
     result = await execute(tmp_path, search_url="https://custom.example/search", scope="web")
     assert result.is_error and result.metadata["error_codes"] == ["invalid_response"]

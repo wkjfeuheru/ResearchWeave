@@ -4,12 +4,12 @@ import asyncio
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest
-from openharness.api.usage import UsageSnapshot, usage_from_provider
-from openharness.engine.messages import ConversationMessage
-from openharness.engine.observer import NULL_OBSERVER
-from openharness.evaluation.models import Budget
-from openharness.evaluation.observer import (
+from researchx.api.client import ApiMessageCompleteEvent, ApiMessageRequest
+from researchx.api.usage import UsageSnapshot, usage_from_provider
+from researchx.engine.messages import ConversationMessage
+from researchx.engine.observer import NULL_OBSERVER
+from researchx.evaluation.models import Budget
+from researchx.evaluation.observer import (
     EvaluationBudgetExceeded,
     ObservedClient,
     RecordingObserver,

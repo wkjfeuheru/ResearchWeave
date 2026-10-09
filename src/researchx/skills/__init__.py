@@ -1,0 +1,55 @@
+"""Skill exports."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from researchx.skills.loader import (
+        discover_project_skill_dirs as discover_project_skill_dirs,
+        get_user_skill_dirs as get_user_skill_dirs,
+        get_user_skills_dir as get_user_skills_dir,
+        load_skill_registry as load_skill_registry,
+    )
+    from researchx.skills.registry import SkillRegistry
+    from researchx.skills.types import SkillDefinition
+
+__all__ = [
+    "SkillDefinition",
+    "SkillRegistry",
+    "discover_project_skill_dirs",
+    "get_user_skill_dirs",
+    "get_user_skills_dir",
+    "load_skill_registry",
+]
+
+
+def __getattr__(name: str) -> object:
+    if name in {
+        "discover_project_skill_dirs",
+        "get_user_skill_dirs",
+        "get_user_skills_dir",
+        "load_skill_registry",
+    }:
+        from researchx.skills.loader import (
+            discover_project_skill_dirs,
+            get_user_skill_dirs,
+            get_user_skills_dir,
+            load_skill_registry,
+        )
+
+        return {
+            "discover_project_skill_dirs": discover_project_skill_dirs,
+            "get_user_skill_dirs": get_user_skill_dirs,
+            "get_user_skills_dir": get_user_skills_dir,
+            "load_skill_registry": load_skill_registry,
+        }[name]
+    if name == "SkillRegistry":
+        from researchx.skills.registry import SkillRegistry
+
+        return SkillRegistry
+    if name == "SkillDefinition":
+        from researchx.skills.types import SkillDefinition
+
+        return SkillDefinition
+    raise AttributeError(name)

@@ -6,17 +6,17 @@ import asyncio
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import (
     ConversationMessage,
     ImageBlock,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
 )
-from openharness.hooks import HookEvent
-from openharness.services import (
+from researchx.hooks import HookEvent
+from researchx.services import (
     build_post_compact_messages,
     compact_conversation,
     compact_messages,
@@ -25,7 +25,7 @@ from openharness.services import (
     estimate_tokens,
     summarize_messages,
 )
-from openharness.services.compact import (
+from researchx.services.compact import (
     AutoCompactState,
     _is_prompt_too_long_error,
     auto_compact_if_needed,
@@ -134,7 +134,7 @@ class _HookExecutorStub:
 
     async def execute(self, event: HookEvent, payload: dict[str, object]):
         self.events.append((event, payload))
-        from openharness.hooks.types import AggregatedHookResult
+        from researchx.hooks.types import AggregatedHookResult
 
         return AggregatedHookResult()
 
@@ -236,7 +236,7 @@ def test_microcompact_compacts_mcp_results_while_preserving_recent():
 
 
 def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_MICROCOMPACT_TOOL_RESULT_CHARS", "256")
+    monkeypatch.setenv("RESEARCHX_MICROCOMPACT_TOOL_RESULT_CHARS", "256")
     messages = [
         ConversationMessage(
             role="assistant",
@@ -280,7 +280,7 @@ def test_compact_prompt_too_long_detection_handles_llama_cpp_errors():
 
 
 def test_compact_token_estimate_counts_images(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_IMAGE_TOKEN_ESTIMATE", "6000")
+    monkeypatch.setenv("RESEARCHX_IMAGE_TOKEN_ESTIMATE", "6000")
     messages = [
         ConversationMessage(
             role="user",
@@ -294,7 +294,7 @@ def test_compact_token_estimate_counts_images(monkeypatch):
 
 
 def test_should_autocompact_counts_image_tokens(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_IMAGE_TOKEN_ESTIMATE", "6000")
+    monkeypatch.setenv("RESEARCHX_IMAGE_TOKEN_ESTIMATE", "6000")
     messages = [
         ConversationMessage(
             role="user",
@@ -336,7 +336,7 @@ async def test_compact_conversation_retries_after_incomplete_response():
 
     rebuilt = build_post_compact_messages(compacted)
     assert rebuilt[0].text.startswith("[Compact boundary marker]")
-    assert any(message.text.startswith("This session is being continued") for message in rebuilt)
+    assert any(message.text.startswith("本会话将从先前") for message in rebuilt)
 
 
 @pytest.mark.asyncio
@@ -426,7 +426,7 @@ async def test_compact_conversation_runs_hooks_and_preserves_carryover_state(tmp
     rebuilt = build_post_compact_messages(compacted)
     joined = "\n\n".join(message.text for message in rebuilt)
     assert rebuilt[0].text.startswith("[Compact boundary marker]")
-    assert any(message.text.startswith("This session is being continued") for message in rebuilt)
+    assert any(message.text.startswith("本会话将从先前") for message in rebuilt)
     assert str(image_path) in joined
     assert "[Compact attachment: invoked_skills]" in joined
     assert "research-skill" in joined
@@ -472,7 +472,7 @@ async def test_compact_conversation_keeps_tool_pair_when_boundary_would_split_it
 
 @pytest.mark.asyncio
 async def test_compact_conversation_rejects_orphan_without_discarding_it():
-    from openharness.services.context_budget import ContextBudgetError
+    from researchx.services.context.budget import ContextBudgetError
 
     messages = [
         ConversationMessage.from_user_text("alpha " * 2000),
@@ -519,7 +519,7 @@ async def test_compact_post_messages_keep_boundary_summary_recent_then_attachmen
     rebuilt = build_post_compact_messages(compacted)
 
     assert rebuilt[0].text.startswith("[Compact boundary marker]")
-    assert rebuilt[1].text.startswith("This session is being continued")
+    assert rebuilt[1].text.startswith("本会话将从先前")
     assert rebuilt[2].text == "sixth"
     assert rebuilt[3].text == "seventh"
     assert rebuilt[4].text.startswith("[Compact attachment:")
@@ -567,7 +567,7 @@ async def test_auto_compact_if_needed_returns_original_messages_after_timeout(mo
     async def _stall():
         await asyncio.sleep(0.05)
 
-    monkeypatch.setattr("openharness.services.compact.COMPACT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("researchx.services.compact.COMPACT_TIMEOUT_SECONDS", 0.01)
     long_text = "alpha " * 50000
     messages = [
         ConversationMessage(role="user", content=[TextBlock(text=long_text)]),

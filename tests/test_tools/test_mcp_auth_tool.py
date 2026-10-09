@@ -2,14 +2,14 @@
 
 from pathlib import Path
 from unittest.mock import AsyncMock
-from openharness.config.settings import Settings, load_settings, save_settings
-from openharness.mcp.client import McpClientManager
-from openharness.mcp.types import McpHttpServerConfig, McpStdioServerConfig
-from openharness.tools import create_research_tool_registry
+from researchx.config.settings import Settings, load_settings, save_settings
+from researchx.mcp.client import McpClientManager
+from researchx.mcp.types import McpHttpServerConfig, McpStdioServerConfig
+from researchx.tools import create_research_tool_registry
 
 
 async def test_host_updates_http_headers_and_reconnects(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     settings = Settings(mcp_servers={"demo": McpHttpServerConfig(url="https://example.com/mcp")})
     save_settings(settings)
     manager = McpClientManager(settings.mcp_servers)
@@ -27,7 +27,7 @@ async def test_host_updates_http_headers_and_reconnects(tmp_path: Path, monkeypa
 
 
 async def test_host_persists_stdio_env(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     settings = Settings(
         mcp_servers={"fixture": McpStdioServerConfig(command="python", args=["-m", "fixture"])}
     )
@@ -40,7 +40,7 @@ async def test_host_persists_stdio_env(tmp_path: Path, monkeypatch):
 
 
 async def test_host_can_persist_active_manager_config(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     save_settings(Settings())
     manager = McpClientManager(
         {"fixture": McpStdioServerConfig(command="python", args=["-m", "fixture"])}

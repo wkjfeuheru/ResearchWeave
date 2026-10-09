@@ -5,18 +5,18 @@ import json
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.query import QueryContext, _execute_tool_call, run_query
-from openharness.engine.query_engine import QueryEngine
-from openharness.permissions.checker import PermissionChecker
-from openharness.research.models import PlanProposal, Record
-from openharness.research.runtime import ResearchAgentRuntime
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from openharness.tools.research.planner import planner_tool
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.engine.query import QueryContext, _execute_tool_call, run_query
+from researchx.engine.query_engine import QueryEngine
+from researchx.permissions.checker import PermissionChecker
+from researchx.state.models import PlanProposal, Record
+from researchx.state.runtime import ResearchAgentRuntime
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import BaseTool, ToolExecutionContext, ToolResult
+from researchx.tools.planner_tool import planner_tool
 from tests.test_research.test_report_runtime import project as project, task, commit, claim
 
 

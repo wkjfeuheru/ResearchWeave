@@ -5,11 +5,11 @@ import json
 import shlex
 from pathlib import Path
 
-from openharness.engine.messages import ToolResultBlock
-from openharness.engine.query import QueryContext, _execute_tool_call
-from openharness.engine.stream_events import ToolExecutionCompleted
-from openharness.research.completion import CompletionPolicy
-from openharness.tools import RESEARCH_EXCLUDED_TOOLS
+from researchx.engine.messages import ToolResultBlock
+from researchx.engine.query import QueryContext, _execute_tool_call
+from researchx.engine.stream_events import ToolExecutionCompleted
+from researchx.state.completion import CompletionPolicy
+from researchx.tools import RESEARCH_EXCLUDED_TOOLS
 from tests.test_research.agent_core_support import (
     FEEDBACK,
     REQUEST,
@@ -374,8 +374,8 @@ async def test_report_shell_cwd_and_absolute_python_are_confined(lab):
 
 
 async def test_e2e_16_process_recovery_revokes_lease_between_tool_executions(lab):
-    from openharness.research.repository import ResearchRepository
-    from openharness.research.store import ResearchStore
+    from researchx.state.repository import ResearchRepository
+    from researchx.state.store import ResearchStore
 
     bundle, store, _, _, pending, _ = await pause_after_research(lab)
     await stop(pending)

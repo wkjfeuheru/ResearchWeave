@@ -1,8 +1,8 @@
-# OpenHarness
+# ResearchX
 
-OpenHarness is a local investment research Web workspace. Each conversation owns its task context, research state, evidence pool and auditable reasoning summaries. Sources carry immutable snapshots, timestamps and stable IDs; answers freeze the versions they cite.
+ResearchX is a local investment research Web workspace. Each conversation owns its task context, research state, evidence pool and auditable reasoning summaries. Sources carry immutable snapshots, timestamps and stable IDs; answers freeze the versions they cite.
 
-[中文说明](README.zh-CN.md) · [Web workspace](docs/web-workspace.md) · [Contributing](CONTRIBUTING.md)
+[中文说明](README.zh-CN.md) · [Web workspace](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界) · [Contributing](CONTRIBUTING.md)
 
 `oh eval` runs a versioned 200-case research benchmark with real runtime traces, independent judging and four-dimensional reports. Langfuse is an optional evaluation dependency; regular conversations are not uploaded. See [evaluation setup and workflow](docs/agent-evaluation.md).
 
@@ -11,12 +11,16 @@ OpenHarness is a local investment research Web workspace. Each conversation owns
 Python 3.10 or newer is required.
 
 ```bash
-pip install 'openharness-ai[web]'
-oh setup
-oh web
+pip install 'researchx-ai[web]'
+rx setup
+rx web
 ```
 
-Open the local address printed by `oh web`. The server accepts local hosts and checks browser origins. Credentials stay on the backend and are redacted from browser output.
+Open the local address printed by `rx web`. The server accepts local hosts and checks browser origins. Credentials stay on the backend and are redacted from browser output.
+
+The Web workspace streams events with FastAPI SSE and sends commands through HTTP POST. Disconnecting stops the active run and saves partial output; reopening restores its snapshot without replaying messages. See [SSE and command contracts](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界).
+
+Internal modules now separate storage, security, research documents, workspace files and Web session coordination. Tools are flat modules, and document ingestion uses `python -m researchx.research.documents`. See the [directory migration and import mapping](docs/DIRECTORY_MIGRATION.md).
 
 For a source checkout, build the frontend with Node.js 20 or newer:
 
@@ -26,10 +30,10 @@ cd frontend/web
 npm ci
 npm run build
 cd ../..
-uv run oh web
+uv run rx web
 ```
 
-The installation scripts support PyPI and source installs. `oh`, `openharness` and `openh` share the same CLI; on PowerShell use `openh web` or `oh.exe web` to avoid the built-in `oh` alias.
+The installation scripts support PyPI and source installs. `rx`, `oh` and `openh` share the same CLI; on PowerShell use `openh web` or `oh.exe web` to avoid the built-in `oh` alias.
 
 ## Research workflow
 
@@ -59,7 +63,9 @@ oh provider list
 oh provider use PROFILE
 ```
 
-Financial data comes from your configured services and retrieved sources; OpenHarness does not add a built-in live quote feed or trading service.
+Financial data comes from your configured services and retrieved sources; ResearchX does not add a built-in live quote feed or trading service.
+
+The official DeepSeek API IDs `deepseek-flash`, `deepseek-v4-pro`, and the Flash aliases `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` have a built-in 1,000,000-token context window ([official specifications](https://api-docs.deepseek.com/quick_start/pricing/)). Set the actual context window in the Web model form if your gateway has a lower limit; explicit `context_window_tokens` always takes precedence. Unknown models require an explicit window, and budget errors preserve the original conversation.
 
 ```bash
 oh mcp list

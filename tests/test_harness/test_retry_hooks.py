@@ -4,30 +4,30 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from openharness.api.client import (
+from researchx.api.client import (
     ApiMessageRequest,
     ApiTextDeltaEvent,
     ApiMessageCompleteEvent,
     ApiRetryEvent,
 )
-from openharness.api.retry import stream_with_retry
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage
-from openharness.hooks import HookExecutor, HookExecutionContext, HookEvent
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import (
+from researchx.api.retry import stream_with_retry
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage
+from researchx.hooks import HookExecutor, HookExecutionContext, HookEvent
+from researchx.hooks.loader import HookRegistry
+from researchx.hooks.schemas import (
     HttpHookDefinition,
     CommandHookDefinition,
     PromptHookDefinition,
 )
-from openharness.hooks.safety import post_hook
-from openharness.services.operations import OperationStore
+from researchx.hooks.safety import post_hook
+from researchx.services.execution.operations import OperationStore
 
 
 @pytest.fixture(autouse=True)
 def isolated_data(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr("openharness.api.retry.retry_delay", lambda *args: 0)
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("researchx.api.retry.retry_delay", lambda *args: 0)
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_api_cancel_never_retries():
 )
 async def test_hook_private_target_blocked_before_http(url, monkeypatch):
     client = AsyncMock()
-    monkeypatch.setattr("openharness.hooks.safety.httpx.AsyncClient", client)
+    monkeypatch.setattr("researchx.hooks.safety.httpx.AsyncClient", client)
     with pytest.raises(ValueError):
         await post_hook(HttpHookDefinition(url=url), "pre_tool_use", {"secret": "value"})
     client.assert_not_called()
@@ -129,7 +129,7 @@ async def test_trusted_http_redirect_not_followed_and_payload_redacted(monkeypat
 
     original = httpx.AsyncClient
     monkeypatch.setattr(
-        "openharness.hooks.safety.httpx.AsyncClient",
+        "researchx.hooks.safety.httpx.AsyncClient",
         lambda **kw: original(transport=httpx.MockTransport(handle), **kw),
     )
     with pytest.raises(ValueError, match="redirect"):
@@ -242,10 +242,10 @@ async def test_hook_cancel_kills_child_process_group(tmp_path):
 
 @pytest.mark.asyncio
 async def test_hook_required_sandbox_cannot_fallback_to_host(tmp_path, monkeypatch):
-    from openharness.config import Settings
-    from openharness.config.settings import SandboxSettings
+    from researchx.config import Settings
+    from researchx.config.settings import SandboxSettings
 
-    monkeypatch.setattr("openharness.sandbox.adapter.shutil.which", lambda name: None)
+    monkeypatch.setattr("researchx.sandbox.adapter.shutil.which", lambda name: None)
     registry = HookRegistry()
     registry.register(
         HookEvent.PRE_TOOL_USE,
@@ -266,13 +266,13 @@ async def test_hook_required_sandbox_cannot_fallback_to_host(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_provider_retry_reaches_engine_without_partial_text(tmp_path, monkeypatch):
-    from openharness.api.openai_client import OpenAICompatibleClient
-    from openharness.config.settings import PermissionSettings
-    from openharness.engine.query_engine import QueryEngine
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.tools.base import ToolRegistry
-    from openharness.engine.stream_events import AssistantTextDelta
-    from openharness.engine.messages import TextBlock
+    from researchx.api.openai_client import OpenAICompatibleClient
+    from researchx.config.settings import PermissionSettings
+    from researchx.engine.query_engine import QueryEngine
+    from researchx.permissions.checker import PermissionChecker
+    from researchx.tools.base import ToolRegistry
+    from researchx.engine.stream_events import AssistantTextDelta
+    from researchx.engine.messages import TextBlock
 
     provider = OpenAICompatibleClient("test-key")
     calls = 0
@@ -318,7 +318,7 @@ async def test_http_hook_pins_validated_ip_and_retains_host_and_tls_name(monkeyp
         assert host == "hooks.example.com"
         return {ipaddress.ip_address("93.184.216.34")}
 
-    monkeypatch.setattr("openharness.utils.network_guard._resolve_host_addresses", resolve)
+    monkeypatch.setattr("researchx.security.network_guard._resolve_host_addresses", resolve)
 
     def handle(request):
         assert request.url.host == "93.184.216.34"
@@ -328,7 +328,7 @@ async def test_http_hook_pins_validated_ip_and_retains_host_and_tls_name(monkeyp
 
     original = httpx.AsyncClient
     monkeypatch.setattr(
-        "openharness.hooks.safety.httpx.AsyncClient",
+        "researchx.hooks.safety.httpx.AsyncClient",
         lambda **kw: original(transport=httpx.MockTransport(handle), **kw),
     )
     assert await post_hook(
@@ -337,7 +337,7 @@ async def test_http_hook_pins_validated_ip_and_retains_host_and_tls_name(monkeyp
 
 
 def test_json_response_secrets_are_redacted():
-    from openharness.hooks.safety import redact
+    from researchx.hooks.safety import redact
 
     value = redact(
         '{"nested":{"api_key":"private-response","authorization":"Basic private"},"ok":true}'

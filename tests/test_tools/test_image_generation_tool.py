@@ -2,11 +2,11 @@
 
 from unittest.mock import AsyncMock
 import pytest
-from openharness.config.settings import ImageGenerationConfig, PermissionSettings
-from openharness.engine.query import QueryContext, _execute_tool_call_impl
-from openharness.permissions.checker import PermissionChecker
-from openharness.permissions.modes import PermissionMode
-from openharness.tools import create_research_tool_registry
+from researchx.config.settings import ImageGenerationConfig, PermissionSettings
+from researchx.engine.query import QueryContext, _execute_tool_call_impl
+from researchx.permissions.checker import PermissionChecker
+from researchx.permissions.modes import PermissionMode
+from researchx.tools import create_research_tool_registry
 
 
 @pytest.mark.parametrize("provider", ["openai", "codex", "auto"])
@@ -14,7 +14,7 @@ from openharness.tools import create_research_tool_registry
 async def test_generation_is_not_callable_even_with_legacy_credentials(
     tmp_path, monkeypatch, provider, mode
 ):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     client = AsyncMock()
     registry = create_research_tool_registry(mode=mode)
     context = QueryContext(
@@ -44,11 +44,11 @@ async def test_generation_is_not_callable_even_with_legacy_credentials(
 
 
 def test_image_generation_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENHARNESS_IMAGE_GENERATION_PROVIDER", "openai")
-    monkeypatch.setenv("OPENHARNESS_IMAGE_GENERATION_MODEL", "gpt-image-1")
-    monkeypatch.setenv("OPENHARNESS_IMAGE_GENERATION_API_KEY", "sk-test")
-    monkeypatch.setenv("OPENHARNESS_IMAGE_GENERATION_BASE_URL", "https://example.test/v1")
-    monkeypatch.setenv("OPENHARNESS_IMAGE_GENERATION_CODEX_MODEL", "gpt-5.4")
+    monkeypatch.setenv("RESEARCHX_IMAGE_GENERATION_PROVIDER", "openai")
+    monkeypatch.setenv("RESEARCHX_IMAGE_GENERATION_MODEL", "gpt-image-1")
+    monkeypatch.setenv("RESEARCHX_IMAGE_GENERATION_API_KEY", "sk-test")
+    monkeypatch.setenv("RESEARCHX_IMAGE_GENERATION_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("RESEARCHX_IMAGE_GENERATION_CODEX_MODEL", "gpt-5.4")
 
     cfg = ImageGenerationConfig.from_env()
 

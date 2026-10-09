@@ -1,10 +1,10 @@
-"""Tests for openharness.prompts.environment."""
+"""Tests for researchx.prompts.environment."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from openharness.prompts.environment import (
+from researchx.prompts.environment import (
     EnvironmentInfo,
     detect_os,
     detect_shell,
@@ -50,7 +50,7 @@ def test_get_environment_info_returns_dataclass():
 def test_get_environment_info_detects_virtual_env_from_python_executable(
     monkeypatch, tmp_path: Path
 ):
-    venv_root = tmp_path / ".openharness-venv"
+    venv_root = tmp_path / ".researchx-venv"
     bin_dir = venv_root / "bin"
     bin_dir.mkdir(parents=True)
     (venv_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
@@ -58,7 +58,7 @@ def test_get_environment_info_detects_virtual_env_from_python_executable(
     fake_python.write_text("", encoding="utf-8")
 
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
-    monkeypatch.setattr("openharness.prompts.environment.sys.executable", str(fake_python))
+    monkeypatch.setattr("researchx.prompts.environment.sys.executable", str(fake_python))
 
     info = get_environment_info(cwd=str(tmp_path))
 

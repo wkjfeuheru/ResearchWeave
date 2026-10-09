@@ -11,21 +11,21 @@ import sys
 from importlib.metadata import distribution
 from pathlib import Path
 import httpx
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.bash_tool import BashTool, BashToolInput
-from openharness.research.store import ResearchStore
-from openharness.skills import load_skill_registry
-from openharness.web.app import create_app
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.bash_tool import BashTool, BashToolInput
+from researchx.state.store import ResearchStore
+from researchx.skills import load_skill_registry
+from researchx.web.app import create_app
 
 
 async def main():
-    import openharness
+    import researchx
 
-    modules = list(pkgutil.walk_packages(openharness.__path__, "openharness."))
+    modules = list(pkgutil.walk_packages(researchx.__path__, "researchx."))
     for module in modules:
         importlib.import_module(module.name)
-    dist = distribution("openharness-ai")
+    dist = distribution("researchx-ai")
     names = [str(f) for f in dist.files]
     assert not any(
         "/ui/" in f or "/channels/" in f or "ohmo/" in f or "/_frontend/" in f or "/memory/" in f
@@ -41,7 +41,7 @@ async def main():
     }
     for plugin, (_, script) in research_plugins.items():
         package = "report-generation" if plugin == "deep-investment-report" else "analysis-modeling"
-        base = f"openharness/plugins/bundled/{package}/"
+        base = f"researchx/plugins/bundled/{package}/"
         assert base + "plugin.json" in names
         for resource in (
             "SKILL.md",
@@ -54,14 +54,28 @@ async def main():
         ):
             assert base + f"skills/{plugin}/" + resource in names
         assert base + f"skills/{plugin}/scripts/run.py" not in names
-    assert not any("/utils/research_workflows/" in name for name in names)
+    assert not any("/utils/" in name for name in names)
+    assert not any("/tools/research/" in name for name in names)
+    tool_modules = [
+        name for name in names if name.startswith("researchx/tools/") and name.endswith(".py")
+    ]
+    assert all(
+        len(Path(name).parts) == 3
+        and (
+            Path(name).name in {"__init__.py", "base.py", "contracts.py"}
+            or name.endswith("_tool.py")
+        )
+        for name in tool_modules
+    )
+    assert "researchx/workspace/session_files.py" in names
+    assert "researchx/research/documents.py" in names
     assert not any("sample_plugins" in f for f in names)
-    assert not any(f.startswith("openharness/skills/bundled/") for f in names)
-    assert {e.name for e in dist.entry_points} == {"oh", "openh", "openharness"}
+    assert not any(f.startswith("researchx/skills/bundled/") for f in names)
+    assert {e.name for e in dist.entry_points} == {"oh", "openh", "rx"}
     with tempfile.TemporaryDirectory() as tmp:
         cwd = Path(tmp)
-        os.environ["OPENHARNESS_CONFIG_DIR"] = str(cwd / "config")
-        os.environ["OPENHARNESS_DATA_DIR"] = str(cwd / "data")
+        os.environ["RESEARCHX_CONFIG_DIR"] = str(cwd / "config")
+        os.environ["RESEARCHX_DATA_DIR"] = str(cwd / "data")
         assert load_skill_registry(cwd).get("skill-creator") is None
         fixtures = Path(__file__).parents[1] / "fixtures" / "research_skills"
         for plugin, (kind, script) in research_plugins.items():
@@ -70,7 +84,7 @@ async def main():
             assert len(skill.metadata.content_hash) == 64, (
                 "wheel build index should supply a cold L0 hash"
             )
-            from openharness.skills.metadata import content_hash
+            from researchx.skills.metadata import content_hash
 
             assert len(content_hash(Path(skill.path))) == 64
             assert len(load_skill_registry(cwd).get(plugin).metadata.content_hash) == 64
@@ -149,7 +163,7 @@ async def main():
             [
                 sys.executable,
                 "-m",
-                "openharness.utils.research_documents",
+                "researchx.research.documents",
                 "--input",
                 str(fixtures / "annual-report.pdf"),
                 "--output-dir",
@@ -221,7 +235,7 @@ def test_built_wheel_includes_both_packages_and_runs_installed_smoke(tmp_path):
             "industry-deep-dive",
         ],
     }.items():
-        base = f"openharness/plugins/bundled/{package}/"
+        base = f"researchx/plugins/bundled/{package}/"
         assert base + "plugin.json" in names
         for skill in skills:
             assert base + f"skills/{skill}/SKILL.md" in names
@@ -245,8 +259,8 @@ def test_built_wheel_includes_both_packages_and_runs_installed_smoke(tmp_path):
     assert installed.returncode == 0, installed.stderr
     env = {
         **os.environ,
-        "OPENHARNESS_CONFIG_DIR": str(tmp_path / "config"),
-        "OPENHARNESS_DATA_DIR": str(tmp_path / "data"),
+        "RESEARCHX_CONFIG_DIR": str(tmp_path / "config"),
+        "RESEARCHX_DATA_DIR": str(tmp_path / "data"),
     }
     env.pop("PYTHONPATH", None)
     executed = subprocess.run(

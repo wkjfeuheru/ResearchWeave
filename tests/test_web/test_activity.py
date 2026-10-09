@@ -1,24 +1,26 @@
 """Public process projections, tool correlation, and destructive session cleanup."""
 
+from tests.test_web.sse_client import sse_connect, RecordingChannel
+
 import json
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
+import httpx
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.stream_events import (
+from researchx.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.engine.stream_events import (
     AssistantTextDelta,
     AssistantTurnComplete,
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
-from openharness.research.store import ResearchStore
-from openharness.web.activity import describe_tool
-from openharness.web.app import create_app
-from openharness.web.runtime import BrowserConnection
+from researchx.state.store import ResearchStore
+from researchx.web.activity import describe_tool
+from researchx.web.app import create_app
+from researchx.web.runtime import SessionController
 from tests.test_web.test_app import ORIGIN, SECRET, add_model, add_session, collect, submit
 
 
@@ -36,7 +38,8 @@ async def test_process_ids_parallel_same_tool_and_redaction(workspace):
     _, app, _, _, _ = workspace
     add_model(workspace[0])
     socket = RecordingSocket()
-    connection = BrowserConnection(socket, "abcdef123456", app.state.workspace)
+    connection = SessionController("abcdef123456", app.state.workspace)
+    connection.channel = RecordingChannel(socket.events)
     connection.request_id = "turn"
     connection.rows = []
     await connection.event(AssistantTextDelta("先读取两份资料。"))
@@ -114,7 +117,7 @@ def test_crashed_running_projection_restores_as_stopped_history(workspace):
 def test_process_completion_persistence_restart_and_stop(workspace):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "ask")
         events = collect(socket, "prompt")
@@ -157,12 +160,12 @@ def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace
     research.capture(origin_id="source", content="snapshot")
     other_research = ResearchStore(cwd, other)
     other_research.capture(origin_id="other", content="other snapshot")
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         response = client.delete(f"/api/sessions/{sid}")
         assert response.status_code == 200 and response.json() == {"ok": True}
         assert socket.receive_json()["type"] == "session_deleted"
-        with pytest.raises(WebSocketDisconnect):
+        with pytest.raises(EOFError):
             socket.receive_json()
     assert not app.state.workspace.store._path(sid).exists()
     assert not research.directory.exists()
@@ -173,8 +176,8 @@ def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace
     assert client.delete(f"/api/sessions/{sid}").status_code == 404
     assert client.delete("/api/sessions/invalid").status_code == 404
     with (
-        pytest.raises(WebSocketDisconnect),
-        client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN),
+        pytest.raises(httpx.HTTPStatusError),
+        sse_connect(client, sid, headers=ORIGIN),
     ):
         pass
     assert not research.directory.exists()
@@ -183,7 +186,7 @@ def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace
 def test_delete_running_and_approval_sessions_rejected_then_allowed(workspace):
     client, app, _, _, _ = workspace
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         for request_id, text, terminal in [("r1", "slow", "delta"), ("r2", "ask", "prompt")]:
             submit(socket, text, request_id=request_id)
@@ -209,7 +212,7 @@ def test_delete_storage_failure_preserves_record_and_allows_retry(workspace, mon
         raise PermissionError("private path must not leak")
 
     with monkeypatch.context() as context:
-        context.setattr("openharness.web.storage.shutil.rmtree", failing_remove)
+        context.setattr("researchx.web.storage.shutil.rmtree", failing_remove)
         response = client.delete(f"/api/sessions/{sid}")
         assert response.status_code == 500 and "private path" not in response.text
         assert client.get(f"/api/sessions/{sid}").status_code == 200
@@ -253,9 +256,9 @@ def test_failure_keeps_progress_without_promoting_it_to_a_final_answer(workspace
             )
 
     monkeypatch.setattr(
-        "openharness.runtime._resolve_api_client_from_settings", lambda settings: FailingModel()
+        "researchx.runtime._resolve_api_client_from_settings", lambda settings: FailingModel()
     )
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "检查报告")
         events = collect(socket)

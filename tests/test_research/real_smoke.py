@@ -7,27 +7,27 @@ Use a disposable external workspace. Credentials are loaded from existing profil
 from __future__ import annotations
 
 import argparse
-from openharness.utils.async_timeout import timeout as async_timeout
+from researchx.services.execution.async_timeout import timeout as async_timeout
 import asyncio
 import json
 import os
 from pathlib import Path
 from tempfile import mkdtemp
 
-from openharness.engine.stream_events import (
+from researchx.engine.stream_events import (
     AssistantTurnComplete,
     ErrorEvent,
     ToolExecutionCompleted,
 )
-from openharness.runtime import build_runtime, close_runtime, start_runtime
-from openharness.web.runtime import RESEARCH_PROMPT
-from openharness.web.storage import WebSessionBackend
+from researchx.runtime import build_runtime, close_runtime, start_runtime
+from researchx.web.runtime import RESEARCH_PROMPT
+from researchx.web.storage import WebSessionBackend
 
 
 async def run(profile: str, workspace: Path) -> None:
     if not workspace.is_dir():
         raise ValueError("An existing disposable workspace is required")
-    os.environ["OPENHARNESS_DATA_DIR"] = mkdtemp(prefix="oh-research-smoke-data-")
+    os.environ["RESEARCHX_DATA_DIR"] = mkdtemp(prefix="oh-research-smoke-data-")
     (workspace / "research-report.txt").write_text(
         "仅供测试的虚构数据：示例公司 2024 年营业收入 100 亿元，2025 年营业收入 120 亿元。\n"
         "本文无发布日期，无独立核验资料，不能作为投资依据。\n",
@@ -132,7 +132,7 @@ async def run(profile: str, workspace: Path) -> None:
                     "turns": 2,
                     "tools": calls,
                     "recovered_tool_errors": errors,
-                    "data_directory": os.environ["OPENHARNESS_DATA_DIR"],
+                    "data_directory": os.environ["RESEARCHX_DATA_DIR"],
                 }
             ),
             flush=True,

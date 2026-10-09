@@ -1,4 +1,4 @@
-"""Paid, opt-in research evaluation through the real HTTP/WebSocket product.
+"""Paid, opt-in research evaluation through the real HTTP/SSE product.
 
 python tests/test_web/real_research_eval.py --profile PROFILE --output /tmp/research-eval
 The selected credentials are copied into a temporary isolated configuration and
@@ -8,7 +8,7 @@ deleted at exit. Provider, tool, storage and Web transports are never mocked.
 from __future__ import annotations
 
 import argparse
-from openharness.utils.async_timeout import timeout as async_timeout
+from researchx.services.execution.async_timeout import timeout as async_timeout
 import asyncio
 import html
 import json
@@ -22,16 +22,16 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-import websockets
+from tests.test_web.http_sse import sse_connection
 
-import openharness.runtime as runtime
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.auth.storage import store_credential
-from openharness.config.settings import Settings, save_settings
-from openharness.research.store import ResearchStore
-from openharness.research.models import ResearchMemory
-from openharness.web.app import create_app
-from openharness.web.catalog import profile_settings
+import researchx.runtime as runtime
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.auth.storage import store_credential
+from researchx.config.settings import Settings, save_settings
+from researchx.state.store import ResearchStore
+from researchx.state.models import ResearchMemory
+from researchx.web.app import create_app
+from researchx.web.catalog import profile_settings
 
 MS_URL = "https://news.microsoft.com/source/2024/07/30/microsoft-cloud-strength-drives-fourth-quarter-results-6/"
 APPLE_URL = "https://www.apple.com/newsroom/2024/10/apple-reports-fourth-quarter-results/"
@@ -102,10 +102,10 @@ class Evaluation:
             flush=True,
         )
         async with async_timeout(900):
-            async with websockets.connect(
-                f"ws://127.0.0.1:{self.port}/api/sessions/{sid}/ws",
-                origin=self.base,
-                max_size=4_000_000,
+            async with sse_connection(
+                self.client,
+                sid,
+                max_event_bytes=4_000_000,
             ) as ws:
                 ready = json.loads(await ws.recv())
                 assert ready["type"] == "ready"
@@ -488,7 +488,7 @@ const browser = await chromium.launch({headless:true, executablePath:process.env
 try {
  const page=await browser.newPage({viewport:{width:1440,height:1100}});
  const errors=[]; page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(id=>sessionStorage.setItem('openharness.web.session',id),process.env.EVAL_SESSION);
+ await page.addInitScript(id=>sessionStorage.setItem('researchx.web.session',id),process.env.EVAL_SESSION);
  await page.goto(process.env.EVAL_BASE);
  await expect(page.getByLabel('研究任务进度')).toBeVisible({timeout:20000});
  await expect(page.locator('.message.assistant').last()).toContainText('来源：');
@@ -539,7 +539,7 @@ async def main(args):
     original = runtime._resolve_api_client_from_settings
     evaluation = Evaluation(args.output.resolve(), args.port, args.browser)
     evaluation.model = selected.model
-    import openharness.engine.query as query_module
+    import researchx.engine.query as query_module
 
     execute_tool = query_module._execute_tool_call
 
@@ -611,8 +611,8 @@ async def main(args):
 
     runtime._resolve_api_client_from_settings = lambda settings: TracedProvider(original(settings))
     with TemporaryDirectory(prefix="research-eval-config-") as config:
-        os.environ["OPENHARNESS_CONFIG_DIR"] = config
-        os.environ["OPENHARNESS_DATA_DIR"] = str(evaluation.output / "data")
+        os.environ["RESEARCHX_CONFIG_DIR"] = config
+        os.environ["RESEARCHX_DATA_DIR"] = str(evaluation.output / "data")
         profile = selected.resolve_profile()[1].model_copy(
             update={"credential_slot": "eval", "label": "真实投研测试"}
         )
@@ -1007,7 +1007,7 @@ if __name__ == "__main__":
     parser.add_argument("--profile", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8767)
-    parser.add_argument("--browser", default=os.environ.get("OPENHARNESS_TEST_BROWSER"))
+    parser.add_argument("--browser", default=os.environ.get("RESEARCHX_TEST_BROWSER"))
     parser.add_argument(
         "--followup-session", help="Append a critical review to an existing evaluation session"
     )

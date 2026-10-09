@@ -5,9 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from openharness.research.completion import CompletionPolicy, ResearchContext
-from openharness.research.errors import ResearchError
-from openharness.research.models import (
+from researchx.state.completion import CompletionPolicy, ResearchContext
+from researchx.state.errors import ResearchError
+from researchx.state.models import (
     PlanPatch,
     PlanProposal,
     ResearchObjective,
@@ -15,11 +15,11 @@ from openharness.research.models import (
     TaskRevision,
     new_id,
 )
-from openharness.research.repository import ResearchRepository
-from openharness.research.runtime import ResearchAgentRuntime
-from openharness.research.store import ResearchStore
-from openharness.research.tasks import validate_dag
-from openharness.utils.session_files import SessionFiles
+from researchx.state.repository import ResearchRepository
+from researchx.state.runtime import ResearchAgentRuntime
+from researchx.state.store import ResearchStore
+from researchx.state.tasks import validate_dag
+from researchx.workspace.session_files import SessionFiles
 from tests.test_research.test_store import apply, reasoning
 
 

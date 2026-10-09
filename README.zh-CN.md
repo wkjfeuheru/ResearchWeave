@@ -1,20 +1,26 @@
-# OpenHarness 投研工作台
+# ResearchX 投研工作台
 
-OpenHarness 是本地运行的投研 Web 产品。每个对话独立保存任务上下文、研究状态、证据池和可审计的论证摘要；资料保存时间戳、不可变快照及稳定 ID，历史回答保留当时引用的版本。
+ResearchX 是本地运行的投研 Web 产品。每个对话独立保存任务上下文、研究状态、证据池和可审计的论证摘要；资料保存时间戳、不可变快照及稳定 ID，历史回答保留当时引用的版本。
 
-[English](README.md) · [Web 工作区](docs/web-workspace.md) · [清理与验收报告](docs/research-product-cleanup.md)
+[English](README.md) · [Web 工作区](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界) · [清理与验收报告](docs/research-product-cleanup.md)
 
 ## 安装与启动
 
 需要 Python 3.10 或更新版本：
 
 ```bash
-pip install 'openharness-ai[web]'
-oh setup
-oh web
+pip install 'researchx-ai[web]'
+rx setup
+rx web
 ```
 
 打开启动命令显示的本地网址。服务检查本地主机和浏览器来源；凭据由后端保存，浏览器输出会脱敏。
+
+Web 工作台通过 FastAPI SSE 推送事件，通过 HTTP POST 提交命令。断连会停止当前执行并保存部分输出；重开会话恢复快照，不自动重发消息。参见 [SSE 与命令接口契约](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界)。
+
+开发者可查看[目录职责与完整迁移映射](docs/DIRECTORY_MIGRATION.md)。通用文件资源位于
+`workspace/`，Web 会话协调留在 `web/`；文档解析入口为
+`python -m researchx.research.documents`。本次目录整理保留现有 FastAPI SSE 与 HTTP 命令协议。
 
 源码安装需要 Node.js 20 或更新版本来构建前端：
 
@@ -24,10 +30,10 @@ cd frontend/web
 npm ci
 npm run build
 cd ../..
-uv run oh web
+uv run rx web
 ```
 
-`oh`、`openharness`、`openh` 使用相同管理入口。PowerShell 请用 `openh web` 或 `oh.exe web`，避免内置 `oh` 别名。
+`rx`、`oh`、`openh` 使用相同管理入口。PowerShell 请用 `openh web` 或 `oh.exe web`，避免内置 `oh` 别名。
 
 ## 研究与恢复
 
@@ -58,6 +64,8 @@ oh provider use PROFILE
 ```
 
 金融资料来自配置的 MCP 与实际检索来源，本次没有新增内置行情接口或交易服务。
+
+DeepSeek 官方模型 `deepseek-flash`、`deepseek-v4-pro` 及 Flash 的兼容名称 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 自动识别为 1,000,000 Token 上下文窗口（[官方规格](https://api-docs.deepseek.com/quick_start/pricing/)）。如果使用的网关限制更低，请在网页模型配置中填写实际的“上下文窗口（Token）”；显式配置的 `context_window_tokens` 优先于内置值。未知模型仍需填写窗口大小，预算检查失败会保留原始对话。
 
 ```bash
 oh mcp list

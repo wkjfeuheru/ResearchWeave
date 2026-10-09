@@ -1,17 +1,17 @@
 """Adversarial scoring contracts, not implementation snapshots."""
 
-from openharness.evaluation.dataset import load_cases
-from openharness.evaluation.judge import (
+from researchx.evaluation.dataset import load_cases
+from researchx.evaluation.judge import (
     CitationReview,
     ClaimReview,
     JudgeResult,
     PathReview,
     RequirementReview,
 )
-from openharness.evaluation.models import Observation, RunArtifact
-from openharness.evaluation.observer import timestamp
-from openharness.evaluation.report import compare_runs, create_report
-from openharness.evaluation.scoring import numeric_match, path_checks, score_case
+from researchx.evaluation.models import Observation, RunArtifact
+from researchx.evaluation.observer import timestamp
+from researchx.evaluation.report import compare_runs, create_report
+from researchx.evaluation.scoring import numeric_match, path_checks, score_case
 
 
 def run(answer="毛利率为40%[1]。"):

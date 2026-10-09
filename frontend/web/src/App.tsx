@@ -82,7 +82,7 @@ export default function App() {
   async function ensureSession() {
     if (sessionId) return sessionId;
     const created = await api<Session>('/sessions', { method: 'POST', body: JSON.stringify({ profile_id: selectedProfile }) });
-    setSessionId(created.session_id); sessionStorage.setItem('openharness.web.session', created.session_id);
+    setSessionId(created.session_id); sessionStorage.setItem('researchx.web.session', created.session_id);
     await refreshSessions();
     return created.session_id;
   }
@@ -106,7 +106,7 @@ export default function App() {
   }
   useEffect(() => {
     Promise.all([refreshCatalog(), refreshSessions()]).then(([, items]) => {
-      const saved = sessionStorage.getItem('openharness.web.session');
+      const saved = sessionStorage.getItem('researchx.web.session');
       if (saved && items.some(item => item.session_id === saved)) setSessionId(saved);
     }).catch(e => setError(errorText(e))).finally(() => setLoading(false));
     const onPop = () => setPage(readPage());
@@ -123,7 +123,7 @@ export default function App() {
     setDraft(''); chat.setError('');
     if (id === sessionId) chat.reconnect();
     else setSessionId(id);
-    sessionStorage.setItem('openharness.web.session', id);
+    sessionStorage.setItem('researchx.web.session', id);
     navigate('chat');
   }
   const selectedProfile = chat.session?.profile_id || profile;
@@ -147,7 +147,7 @@ export default function App() {
     } catch (error) { setError(errorText(error)); } finally { setCreating(false); }
   }
   function resetConversation() {
-    setSessionId(null); sessionStorage.removeItem('openharness.web.session');
+    setSessionId(null); sessionStorage.removeItem('researchx.web.session');
     setDraft(''); chat.setError(''); chat.setSession(null);
     if (defaultProfile) setProfile(defaultProfile);
     navigate('chat');
@@ -169,10 +169,10 @@ export default function App() {
   return <div className="app-shell">
     {sidebarOpen && <button className="sidebar-scrim" aria-label="收起导航" onClick={() => setSidebarOpen(false)} />}
     <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-      <div className="brand"><Layers size={36} role="img" aria-label="OpenHarness" /><div><strong>OpenHarness</strong><span>金融投研工作台</span></div><button className="icon-button mobile-close" aria-label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
+      <div className="brand"><Layers size={36} role="img" aria-label="ResearchX" /><div><strong>ResearchX</strong><span>金融投研工作台</span></div><button className="icon-button mobile-close" aria-label="关闭导航" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
       <nav aria-label="主要导航">{nav.map(({ id, label, icon: Icon }) => <button key={id} aria-label={label} className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)}><Icon size={19} strokeWidth={1.7} /><span>{label}</span>{id === 'skills' && skills.filter(s => s.enabled).length > 0 && <span className="nav-count">{skills.filter(s => s.enabled).length}</span>}</button>)}</nav>
       <button className="new-conversation" disabled={chat.busy || creating || uploading} onClick={() => {
-        setSessionId(null); sessionStorage.removeItem('openharness.web.session'); setDraft(''); chat.setError('');
+        setSessionId(null); sessionStorage.removeItem('researchx.web.session'); setDraft(''); chat.setError('');
         if (defaultProfile) setProfile(defaultProfile); navigate('chat');
       }}><Plus size={18} />新建对话</button>
       <div className="history-heading">研究记录<span>{sessions.length}</span></div>

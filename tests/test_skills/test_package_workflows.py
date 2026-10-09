@@ -9,16 +9,16 @@ import sys
 
 import pytest
 
-from openharness.config.settings import Settings
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.file_read_tool import FileReadTool, FileReadToolInput
-from openharness.tools.skill_tool import SkillTool, SkillToolInput
+from researchx.config.settings import Settings
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.file_read_tool import FileReadTool, FileReadToolInput
+from researchx.tools.skill_tool import SkillTool, SkillToolInput
 from tests.research_skill_support import FUNCTIONS, RESULT_TYPES
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/research_skills"
-FORECAST = "openharness.plugins.bundled.analysis-modeling.skills.earnings-forecast.scripts"
-DEEP = "openharness.plugins.bundled.report-generation.skills.deep-investment-report.scripts"
-REPORTING = import_module("openharness.plugins.bundled.report-generation.reporting")
+FORECAST = "researchx.plugins.bundled.analysis-modeling.skills.earnings-forecast.scripts"
+DEEP = "researchx.plugins.bundled.report-generation.skills.deep-investment-report.scripts"
+REPORTING = import_module("researchx.plugins.bundled.report-generation.reporting")
 
 
 def fixture(kind):
@@ -46,7 +46,7 @@ def test_forecast_cli_initializes_package_before_relative_imports(tmp_path):
 async def test_financial_tool_reference_computation_and_structured_provenance(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     context = ToolExecutionContext(cwd=tmp_path, metadata={"skill_settings": Settings()})
     entry = await SkillTool().execute(SkillToolInput(name="financial-statement-analysis"), context)
     assert not entry.is_error
@@ -84,7 +84,7 @@ async def test_financial_tool_reference_computation_and_structured_provenance(
 async def test_deep_tool_calls_forecast_then_assembles_exact_upstream_results(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     context = ToolExecutionContext(cwd=tmp_path, metadata={"skill_settings": Settings()})
     names = [
         "deep-investment-report",
@@ -140,7 +140,7 @@ async def test_deep_tool_calls_forecast_then_assembles_exact_upstream_results(
     "name", ["financial-commentary", "industry-commentary", "industry-deep-dive"]
 )
 def test_report_templates_are_runnable_and_missing_evidence_is_a_gap(name, tmp_path):
-    scripts = f"openharness.plugins.bundled.report-generation.skills.{name}.scripts"
+    scripts = f"researchx.plugins.bundled.report-generation.skills.{name}.scripts"
     model = import_module(scripts + ".models").ReportResult
     ref = compute("financial").inputs[0].model_dump(mode="json")
     result = model.model_validate(
@@ -177,7 +177,7 @@ def test_report_templates_are_runnable_and_missing_evidence_is_a_gap(name, tmp_p
 
 def financial_commentary(tmp_path):
     model = import_module(
-        "openharness.plugins.bundled.report-generation.skills.financial-commentary.scripts.models"
+        "researchx.plugins.bundled.report-generation.skills.financial-commentary.scripts.models"
     ).ReportResult
     data = compute("financial").model_dump(mode="json")
     upstream = tmp_path / "financial.json"
@@ -295,7 +295,7 @@ def test_commentary_accepts_existing_dimensionless_ratio_contract(tmp_path):
 
 @pytest.mark.asyncio
 async def test_industry_commentary_tool_template_cli_and_evidence_gaps(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     context = ToolExecutionContext(cwd=tmp_path, metadata={"skill_settings": Settings()})
     entry = await SkillTool().execute(SkillToolInput(name="industry-commentary"), context)
     assert not entry.is_error

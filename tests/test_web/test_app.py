@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.test_web.sse_client import sse_connect
+
 import asyncio
 import json
 
@@ -11,12 +13,12 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
-from openharness.api.errors import AuthenticationFailure
-from openharness.api.usage import UsageSnapshot
-from openharness.config import Settings, save_settings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.web.app import create_app
+from researchx.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
+from researchx.api.errors import AuthenticationFailure
+from researchx.api.usage import UsageSnapshot
+from researchx.config import Settings, save_settings
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.web.app import create_app
 
 SECRET = "test-secret-not-for-browser"
 ORIGIN = {"origin": "http://localhost", "host": "localhost"}
@@ -81,14 +83,14 @@ class FakeClient:
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     for name in (
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
-        "OPENHARNESS_OPENAI_API_KEY",
-        "OPENHARNESS_ANTHROPIC_API_KEY",
-        "OPENHARNESS_PROFILE",
+        "RESEARCHX_OPENAI_API_KEY",
+        "RESEARCHX_ANTHROPIC_API_KEY",
+        "RESEARCHX_PROFILE",
         "ANTHROPIC_AUTH_TOKEN",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -101,8 +103,8 @@ def workspace(tmp_path, monkeypatch):
         clients.append(client)
         return client
 
-    monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings", factory)
-    monkeypatch.setattr("openharness.web.app._resolve_api_client_from_settings", factory)
+    monkeypatch.setattr("researchx.runtime._resolve_api_client_from_settings", factory)
+    monkeypatch.setattr("researchx.web.app._resolve_api_client_from_settings", factory)
     cwd = tmp_path / "research"
     cwd.mkdir()
     app = create_app(str(cwd))
@@ -162,7 +164,7 @@ def test_profile_lifecycle_credential_retention_and_protection(workspace):
         ).status_code
         == 200
     )
-    from openharness.web.catalog import profile_settings
+    from researchx.web.catalog import profile_settings
 
     assert profile_settings(profile).resolve_auth().value == SECRET
     assert client.post(f"/api/models/{profile}/activate").status_code == 200
@@ -216,12 +218,40 @@ def test_probe_has_no_session_side_effects(workspace):
     assert client.get("/api/sessions").json()["items"] == []
 
 
+def test_deepseek_profile_without_explicit_window_can_probe_and_chat(workspace):
+    client, _, requests, _, _ = workspace
+    response = client.post(
+        "/api/models",
+        json={
+            "label": "Deepseek",
+            "api_format": "openai",
+            "model": "deepseek-flash",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": SECRET,
+        },
+    )
+    assert response.status_code == 201
+    profile = response.json()["id"]
+    assert client.post(f"/api/models/{profile}/test").json()["ok"]
+    sid = add_session(client, profile)
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
+        assert socket.receive_json()["type"] == "ready"
+        submit(socket, "hello")
+        events = collect(socket)
+    assert not any(event["type"] == "error" for event in events)
+    assert requests[-1].model == "deepseek-flash"
+    from researchx.services.context.budget import request_budget
+
+    assert request_budget(requests[-1]).window == 1_000_000
+    assert requests[-1].messages[0].text == "hello"
+
+
 def test_streaming_resume_model_switch_and_secret_redaction(workspace):
     client, app, requests, clients, _ = workspace
     profile = add_model(client)
     sid = add_session(client, profile)
     assert client.delete(f"/api/models/{profile}").status_code == 409
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         assert socket.receive_json()["type"] == "ready"
         submit(socket, "第一轮研究")
         events = collect(socket)
@@ -255,22 +285,21 @@ def test_cancel_disconnect_and_global_busy(workspace):
     client, app, _, _, _ = workspace
     profile = add_model(client)
     first, second = add_session(client, profile), add_session(client, profile)
-    with client.websocket_connect(f"/api/sessions/{first}/ws", headers=ORIGIN) as one:
+    with sse_connect(client, first, headers=ORIGIN) as one:
         one.receive_json()
         submit(one, "slow")
         collect(one, "delta")
-        with client.websocket_connect(f"/api/sessions/{second}/ws", headers=ORIGIN) as two:
+        with sse_connect(client, second, headers=ORIGIN) as two:
             two.receive_json()
-            submit(two, "another")
-            events = collect(two)
-            assert events[-1]["failed"]
-            assert any("另一个会话" in e.get("message", "") for e in events)
+            rejected = two.command({"type": "submit", "request_id": "r1", "text": "another"})
+            assert rejected.status_code == 409
+            assert "另一个会话" in rejected.json()["detail"]
         one.send_json({"type": "cancel", "request_id": "r1"})
         assert collect(one)[-1]["cancelled"]
         assert not app.state.workspace.lock.locked()
         submit(one, "slow", request_id="r2")
         collect(one, "delta")
-    # Websocket teardown waits for cancellation and persistence.
+    # SSE teardown waits for cancellation and persistence.
     assert not app.state.workspace.lock.locked()
     record = client.get(f"/api/sessions/{first}").json()
     assert record["messages"][-1]["text"] == "部分回复"
@@ -281,7 +310,7 @@ def test_cancel_disconnect_and_global_busy(workspace):
 def test_write_permission_response(workspace, allow):
     client, _, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "write")
         events = collect(socket, "prompt")
@@ -318,7 +347,7 @@ def test_edit_approval_reject_does_not_write(workspace):
     client, _, _, _, cwd = workspace
     (cwd / "note.txt").write_text("original")
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "edit")
         prompt = collect(socket, "prompt")[-1]
@@ -355,7 +384,7 @@ def test_research_skill_enable_invoke_and_disable_next_turn(workspace):
     sample = "financial-statement-analysis"
     assert client.patch(f"/api/skills/{sample}", json={"enabled": True}).status_code == 200
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "/financial-statement-analysis 测试公司")
         events = collect(socket)
@@ -388,7 +417,7 @@ def test_packaged_skill_plugin_disable_and_enable_next_turn(workspace):
     assert len(card["skills"]) == 4
     assert all("content" not in skill for skill in card["skills"])
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "分析财报")
         collect(socket)
@@ -412,7 +441,7 @@ def test_unconfigured_model_and_api_failures_are_recoverable(workspace):
     client, _, _, _, _ = workspace
     profile = add_model(client, key="")
     sid = add_session(client, profile)
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "hello")
         events = collect(socket)
@@ -437,12 +466,12 @@ def test_unconfigured_model_and_api_failures_are_recoverable(workspace):
 def test_question_response_and_stale_request_id(workspace):
     client, _, _, _, _ = workspace
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "ask")
         prompt = collect(socket, "prompt")[-1]
         assert prompt["kind"] == "question"
-        socket.send_json(
+        rejected = socket.command(
             {
                 "type": "response",
                 "request_id": "stale",
@@ -450,6 +479,7 @@ def test_question_response_and_stale_request_id(workspace):
                 "answer": "错误回复",
             }
         )
+        assert rejected.status_code == 409
         socket.send_json(
             {
                 "type": "response",
@@ -470,22 +500,25 @@ def test_question_response_and_stale_request_id(workspace):
         assert "错误回复" not in json.dumps(events, ensure_ascii=False)
 
 
-def test_websocket_origins_duplicate_windows_and_pending_approval_cancel(workspace):
-    from fastapi import WebSocketDisconnect
+def test_sse_origins_duplicate_windows_and_pending_approval_cancel(workspace):
+    import httpx
 
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
-    for headers in ({"host": "localhost"}, {"host": "localhost", "origin": "https://evil.example"}):
+    for headers in (
+        {"host": "evil.example"},
+        {"host": "localhost", "origin": "https://evil.example"},
+    ):
         with (
-            pytest.raises(WebSocketDisconnect),
-            client.websocket_connect(f"/api/sessions/{sid}/ws", headers=headers),
+            pytest.raises(httpx.HTTPStatusError),
+            sse_connect(client, sid, headers=headers),
         ):
             pass
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         with (
-            pytest.raises(WebSocketDisconnect),
-            client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN),
+            pytest.raises(httpx.HTTPStatusError),
+            sse_connect(client, sid, headers=ORIGIN),
         ):
             pass
         submit(socket, "write")
@@ -504,7 +537,7 @@ def test_probe_incomplete_response_is_not_success(workspace, monkeypatch):
             yield ApiTextDeltaEvent("incomplete")
 
     monkeypatch.setattr(
-        "openharness.web.app._resolve_api_client_from_settings", lambda _: IncompleteClient([])
+        "researchx.web.app._resolve_api_client_from_settings", lambda _: IncompleteClient([])
     )
     response = client.post(f"/api/models/{add_model(client)}/test")
     assert not response.json()["ok"]
@@ -517,8 +550,8 @@ def test_cli_auth_exit_does_not_terminate_web_server(workspace, monkeypatch):
     def unavailable(settings):
         raise SystemExit(1)
 
-    monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings", unavailable)
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    monkeypatch.setattr("researchx.runtime._resolve_api_client_from_settings", unavailable)
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "hello")
         assert collect(socket)[-1]["failed"]
@@ -531,7 +564,7 @@ def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
     sample = "financial-statement-analysis"
     client.patch(f"/api/skills/{sample}", json={"enabled": True})
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "skill-transition")
         prompt = collect(socket, "prompt")[-1]
@@ -563,8 +596,8 @@ def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
 def test_subscription_profiles_selectable_without_api_key_conversion(
     workspace, monkeypatch, profile_id
 ):
-    from openharness.config.settings import ResolvedAuth
-    from openharness.web.catalog import profile_settings
+    from researchx.config.settings import ResolvedAuth
+    from researchx.web.catalog import profile_settings
     from types import SimpleNamespace
 
     client, _, _, _, _ = workspace
@@ -578,7 +611,7 @@ def test_subscription_profiles_selectable_without_api_key_conversion(
             source="external:test",
         ),
     )
-    monkeypatch.setattr("openharness.api.copilot_auth.load_copilot_auth", lambda: SimpleNamespace())
+    monkeypatch.setattr("researchx.api.copilot_auth.load_copilot_auth", lambda: SimpleNamespace())
     profiles = client.get("/api/models").json()["items"]
     profile = next(item for item in profiles if item["id"] == profile_id)
     assert profile["supported"] and profile["configured"] and not profile["editable"]
@@ -602,8 +635,8 @@ def test_subscription_profiles_selectable_without_api_key_conversion(
 
 
 def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
-    from openharness.research.store import ResearchStore
-    from openharness.utils.session_files import SessionFiles
+    from researchx.state.store import ResearchStore
+    from researchx.workspace.session_files import SessionFiles
 
     client, app, requests, _, cwd = workspace
     sid = add_session(client, add_model(client))
@@ -620,7 +653,7 @@ def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
     assert (
         client.delete(f"/api/sessions/{second}/attachments/{attachment['id']}").status_code == 404
     )
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         socket.send_json(
             {
@@ -634,9 +667,9 @@ def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
         assert not events[-1]["failed"]
         user = next(m for m in reversed(requests[-1].messages) if m.role == "user")
         assert "text.md" in user.text and "parsed.json" in user.text and "外部资料" in user.text
-    with client.websocket_connect(f"/api/sessions/{second}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, second, headers=ORIGIN) as socket:
         socket.receive_json()
-        socket.send_json(
+        rejected = socket.command(
             {
                 "type": "submit",
                 "request_id": "r1",
@@ -644,8 +677,7 @@ def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
                 "attachment_ids": [attachment["id"]],
             }
         )
-        events = collect(socket)
-        assert events[-1]["failed"] and any("不属于" in e.get("message", "") for e in events)
+        assert rejected.status_code == 404 and "不属于" in rejected.json()["detail"]
     directory = ResearchStore(cwd, sid).directory
     output = cwd / "report.md"
     output.write_text("Report")
@@ -678,7 +710,7 @@ def test_attachment_failures_limits_and_server_id_validation(workspace, monkeypa
         ).status_code
         == 400
     )
-    monkeypatch.setattr("openharness.web.app.MAX_DOCUMENT_BYTES", 10)
+    monkeypatch.setattr("researchx.web.app.MAX_DOCUMENT_BYTES", 10)
     assert client.post(endpoint, files={"files": ("large.txt", b"x" * 11)}).status_code == 413
     assert client.get(f"/api/sessions/{sid}/artifacts/arbitrary-path/download").status_code == 404
 
@@ -695,7 +727,7 @@ def test_model_context_budget_round_trip_and_omitted_edit_preserves_it(workspace
         "auto_compact_threshold_tokens": 12345,
     }
     assert client.put(f"/api/models/{profile}", json=payload).status_code == 200
-    from openharness.web.catalog import profile_settings
+    from researchx.web.catalog import profile_settings
 
     settings = profile_settings(profile)
     assert settings.context_window_tokens == 200_000
@@ -720,7 +752,7 @@ def test_model_rejects_nonpositive_budget_fields(workspace, field):
 
 def test_skill_catalog_is_metadata_only_and_details_are_selected(workspace, monkeypatch):
     from pathlib import Path
-    from openharness.plugins.loader import BUNDLED_PLUGINS_DIR
+    from researchx.plugins.loader import BUNDLED_PLUGINS_DIR
 
     client, _, _, _, _ = workspace
     original = Path.read_text
@@ -752,7 +784,7 @@ def test_skill_catalog_is_metadata_only_and_details_are_selected(workspace, monk
 
 def test_legacy_skill_configuration_and_explicit_switches(workspace):
     client, _, _, _, _ = workspace
-    from openharness.config.settings import load_settings
+    from researchx.config.settings import load_settings
 
     settings = load_settings().model_copy(
         update={"enabled_plugins": {"financial-statement-analysis": False}}

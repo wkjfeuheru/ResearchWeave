@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiRetryEvent, ApiTextDeltaEvent
-from openharness.api.errors import RequestFailure
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.engine.stream_events import (
+from researchx.api.client import ApiMessageCompleteEvent, ApiRetryEvent, ApiTextDeltaEvent
+from researchx.api.errors import RequestFailure
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.engine.query_engine import QueryEngine
+from researchx.engine.stream_events import (
     AssistantTextDelta,
     AssistantTurnComplete,
     CompactProgressEvent,
@@ -23,17 +23,17 @@ from openharness.engine.stream_events import (
     ToolExecutionCompleted,
     ToolExecutionStarted,
 )
-from openharness.permissions import PermissionChecker, PermissionMode
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
-from openharness.tools.glob_tool import GlobTool
-from openharness.tools.grep_tool import GrepTool
+from researchx.permissions import PermissionChecker, PermissionMode
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
+from researchx.tools.glob_tool import GlobTool
+from researchx.tools.grep_tool import GrepTool
 from pydantic import BaseModel
-from openharness.engine.messages import ToolResultBlock
-from openharness.hooks import HookExecutionContext, HookExecutor, HookEvent
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import PromptHookDefinition
-from openharness.engine.query import QueryContext, _execute_tool_call, _is_prompt_too_long_error
+from researchx.engine.messages import ToolResultBlock
+from researchx.hooks import HookExecutionContext, HookExecutor, HookEvent
+from researchx.hooks.loader import HookRegistry
+from researchx.hooks.schemas import PromptHookDefinition
+from researchx.engine.query import QueryContext, _execute_tool_call, _is_prompt_too_long_error
 
 
 @dataclass
@@ -637,7 +637,7 @@ class _RecordingHookExecutor:
         self.calls: list[tuple[HookEvent, dict]] = []
 
     async def execute(self, event: HookEvent, payload: dict):
-        from openharness.hooks.types import AggregatedHookResult
+        from researchx.hooks.types import AggregatedHookResult
 
         self.calls.append((event, dict(payload)))
         return AggregatedHookResult(results=[])
@@ -1207,7 +1207,7 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
     assert any(
         isinstance(event, CompactProgressEvent) and event.phase == "compact_end" for event in events
     )
-    assert any("This session is being continued" in message.text for message in engine.messages)
+    assert any("本会话将从先前" in message.text for message in engine.messages)
     assert any(
         isinstance(block, ToolUseBlock) and block.id == "toolu_ok_after_compact"
         for message in engine.messages
@@ -1439,9 +1439,9 @@ async def test_query_engine_continue_pending_sanitizes_dangling_tool_use(tmp_pat
 
 @pytest.mark.asyncio
 async def test_query_engine_offloads_large_tool_result_outputs(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("OPENHARNESS_TOOL_OUTPUT_INLINE_CHARS", "256")
-    monkeypatch.setenv("OPENHARNESS_TOOL_OUTPUT_PREVIEW_CHARS", "128")
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_TOOL_OUTPUT_INLINE_CHARS", "256")
+    monkeypatch.setenv("RESEARCHX_TOOL_OUTPUT_PREVIEW_CHARS", "128")
     registry = ToolRegistry()
     registry.register(_LargeOutputTool())
 

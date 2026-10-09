@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.bash_tool import BashTool, BashToolInput
-from openharness.tools.base import ToolExecutionContext
-from openharness.config.settings import Settings, load_settings, save_settings
+from researchx.tools.bash_tool import BashTool, BashToolInput
+from researchx.tools.base import ToolExecutionContext
+from researchx.config.settings import Settings, load_settings, save_settings
 import json
-from openharness.tools.file_edit_tool import FileEditTool, FileEditToolInput
-from openharness.tools.file_read_tool import FileReadTool, FileReadToolInput
-from openharness.tools.file_write_tool import FileWriteTool, FileWriteToolInput
-from openharness.tools.glob_tool import GlobTool, GlobToolInput
-from openharness.tools.grep_tool import GrepTool, GrepToolInput
-from openharness.tools.skill_tool import SkillTool, SkillToolInput
-from openharness.tools.tool_search_tool import ToolSearchTool, ToolSearchToolInput
-from openharness.tools import create_research_tool_registry
+from researchx.tools.file_edit_tool import FileEditTool, FileEditToolInput
+from researchx.tools.file_read_tool import FileReadTool, FileReadToolInput
+from researchx.tools.file_write_tool import FileWriteTool, FileWriteToolInput
+from researchx.tools.glob_tool import GlobTool, GlobToolInput
+from researchx.tools.grep_tool import GrepTool, GrepToolInput
+from researchx.tools.skill_tool import SkillTool, SkillToolInput
+from researchx.tools.tool_search_tool import ToolSearchTool, ToolSearchToolInput
+from researchx.tools import create_research_tool_registry
 
 
 @pytest.mark.asyncio
@@ -144,7 +144,7 @@ async def test_glob_and_grep(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_glob_tool_accepts_absolute_patterns(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("openharness.tools.glob_tool.shutil.which", lambda _: None)
+    monkeypatch.setattr("researchx.tools.glob_tool.shutil.which", lambda _: None)
     context = ToolExecutionContext(cwd=tmp_path.parent)
     nested = tmp_path / "pkg"
     nested.mkdir()
@@ -184,7 +184,7 @@ async def test_tool_search_tools(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_skill_and_config_tools(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = tmp_path / "config" / "skills"
     skills_dir.mkdir(parents=True)
     pytest_dir = skills_dir / "pytest"
@@ -204,7 +204,7 @@ async def test_skill_and_config_tools(tmp_path: Path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_skill_tool_rejects_user_only_skills(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     skills_dir = tmp_path / "config" / "skills"
     skills_dir.mkdir(parents=True)
     deploy_dir = skills_dir / "deploy"

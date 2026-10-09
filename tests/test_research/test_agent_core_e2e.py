@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from openharness.engine.messages import ToolResultBlock
-from openharness.engine.stream_events import AssistantTurnComplete, ToolExecutionCompleted
-from openharness.research.completion import CompletionPolicy, ResearchContext
-from openharness.utils.session_files import SessionFiles
+from researchx.engine.messages import ToolResultBlock
+from researchx.engine.stream_events import AssistantTurnComplete, ToolExecutionCompleted
+from researchx.state.completion import CompletionPolicy, ResearchContext
+from researchx.workspace.session_files import SessionFiles
 from tests.test_research.agent_core_support import (
     FEEDBACK,
     REQUEST,
@@ -22,8 +22,8 @@ from tests.test_research.agent_core_support import (
 
 @pytest.fixture
 async def lab(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
 
     async def forbid_network(*args, **kwargs):
         raise AssertionError("Agent core integration tests must not send HTTP requests")

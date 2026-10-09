@@ -5,11 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from openharness.research.models import new_id
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.research.store import ResearchError, ResearchStore
-from openharness.services.token_estimation import estimate_tokens
-from openharness.utils.session_files import SessionFiles
+from researchx.state.models import new_id
+from researchx.engine.messages import ConversationMessage, TextBlock
+from researchx.state.store import ResearchError, ResearchStore
+from researchx.services.context.token_estimation import estimate_tokens
+from researchx.workspace.session_files import SessionFiles
 
 
 @pytest.fixture
@@ -545,7 +545,7 @@ def test_write_failure_does_not_publish_partial_state(store, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("openharness.research.store.atomic_write_text", fail)
+    monkeypatch.setattr("researchx.state.store.atomic_write_text", fail)
     with pytest.raises(OSError, match="disk full"):
         apply(store, "create_plan", title="replacement", tasks=["新任务"])
     assert store.path.read_bytes() == previous
@@ -639,9 +639,9 @@ def test_prompt_snapshot_keeps_old_injection_budget_and_zero_memory_quota(store)
 
 @pytest.mark.parametrize("max_memory,component_enabled", [(40, True), (10000, True), (40, False)])
 def test_composed_recall_respects_legacy_and_component_quotas(store, max_memory, component_enabled):
-    from openharness.config.context_components import ContextComponentsSettings
-    from openharness.services.context_sources import ContextSnapshot, compose_research_context
-    from openharness.services.context_budget import budget_limits
+    from researchx.config.context_components import ContextComponentsSettings
+    from researchx.services.context.sources import ContextSnapshot, compose_research_context
+    from researchx.services.context.budget import budget_limits
 
     plan(store)
     evidence(store)

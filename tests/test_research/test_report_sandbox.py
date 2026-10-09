@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config import Settings
-from openharness.sandbox.policy import report_settings, report_environment, ExecutionOwner
-from openharness.utils.shell import create_shell_subprocess, terminate_shell_process
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.bash_tool import BashTool, BashToolInput
+from researchx.config import Settings
+from researchx.sandbox.policy import report_settings, report_environment, ExecutionOwner
+from researchx.services.execution.shell import create_shell_subprocess, terminate_shell_process
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.bash_tool import BashTool, BashToolInput
 from tests.test_research.test_dispatch_subagents import project as project
 
 
 def _settings() -> Settings:
     """Permit testing a freshly built image without replacing a user's tags."""
     settings = Settings()
-    if image := os.environ.get("OPENHARNESS_TEST_DOCKER_IMAGE"):
+    if image := os.environ.get("RESEARCHX_TEST_DOCKER_IMAGE"):
         settings.sandbox.docker.image = image
     return settings
 
@@ -42,7 +42,7 @@ async def run(workspace, command, *, backend="srt", key="test"):
     finally:
         await terminate_shell_process(process, force=True)
         if backend == "docker":
-            from openharness.sandbox.session import stop_docker_sandbox
+            from researchx.sandbox.session import stop_docker_sandbox
 
             await stop_docker_sandbox(f"acceptance:project:{key}")
 
@@ -83,7 +83,7 @@ for value in {[str(root / "MEMORY.md"), str(project.store.path)]!r}:
  except OSError: pass
 Path('reports/allowed.txt').write_text('allowed')
 assert 'ANTHROPIC_API_KEY' not in os.environ
-assert 'OPENHARNESS_RESEARCH_SESSION_DIR' not in os.environ
+assert 'RESEARCHX_RESEARCH_SESSION_DIR' not in os.environ
 assert not failures,failures
 print('ISOLATED')"""
     rc, output = await run(root, "python -c " + shlex.quote(program), backend=backend)
@@ -94,7 +94,7 @@ print('ISOLATED')"""
 
 
 async def test_report_backend_missing_fails_closed(project, monkeypatch):
-    import openharness.sandbox.adapter as adapter
+    import researchx.sandbox.adapter as adapter
 
     original = adapter.shutil.which
     monkeypatch.setattr(
@@ -165,7 +165,7 @@ try: Path('MEMORY.md').write_text('corrupt')
 except OSError: pass
 else: raise AssertionError('memory writable')
 Path('reports/result').write_text('ok')
-assert 'OPENHARNESS_RESEARCH_SESSION_DIR' not in os.environ
+assert 'RESEARCHX_RESEARCH_SESSION_DIR' not in os.environ
 print('DOCKER_ISOLATED')"""
         programs.append(run(root, "python -c " + shlex.quote(code), backend=backend, key=root.name))
     outcomes = await asyncio.gather(*programs)
@@ -174,7 +174,7 @@ print('DOCKER_ISOLATED')"""
 
 
 async def test_actual_docker_cancel_removes_only_owned_execution(project, tmp_path):
-    from openharness.sandbox.session import (
+    from researchx.sandbox.session import (
         get_docker_sandbox,
         start_docker_sandbox,
         stop_docker_sandbox,
@@ -215,7 +215,7 @@ async def test_actual_docker_cancel_removes_only_owned_execution(project, tmp_pa
 
 @pytest.mark.parametrize("backend", ["srt", "docker"])
 async def test_actual_isolated_exports_registered_only_by_host(project, backend):
-    from openharness.utils.session_files import SessionFiles
+    from researchx.workspace.session_files import SessionFiles
 
     root = project.resolve_workspace("P")
     settings = _settings()
@@ -231,7 +231,7 @@ async def test_actual_isolated_exports_registered_only_by_host(project, backend)
     program = f"""import json
 from pathlib import Path
 from pydantic import BaseModel
-from openharness.utils.research_exports import export_result
+from researchx.research.exports import export_result
 class Candidate(BaseModel):
  kind: str = 'sandbox-candidate'
  status: str = 'partial'
@@ -256,9 +256,9 @@ print(json.dumps(packet))"""
 
 
 async def test_export_registration_rejects_revoked_lease_and_link(project, tmp_path):
-    from openharness.research.errors import ResearchError
-    from openharness.tools.bash_tool import _register_exports
-    from openharness.utils.session_files import SessionFiles
+    from researchx.state.errors import ResearchError
+    from researchx.tools.bash_tool import _register_exports
+    from researchx.workspace.session_files import SessionFiles
     import json
 
     root = project.resolve_workspace("P")

@@ -9,25 +9,25 @@ import json
 import pytest
 
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest
-from openharness.api.codex_client import _convert_messages_to_codex
-from openharness.api.openai_client import OpenAICompatibleClient, _convert_messages_to_openai
-from openharness.api.usage import UsageSnapshot, usage_from_provider
-from openharness.config.settings import Settings, PermissionSettings
-from openharness.engine.cost_tracker import CostTracker
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageCompleteEvent, ApiMessageRequest
+from researchx.api.codex_client import _convert_messages_to_codex
+from researchx.api.openai_client import OpenAICompatibleClient, _convert_messages_to_openai
+from researchx.api.usage import UsageSnapshot, usage_from_provider
+from researchx.config.settings import Settings, PermissionSettings
+from researchx.engine.cost_tracker import CostTracker
+from researchx.engine.messages import (
     ConversationMessage,
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
 )
-from openharness.engine.query_engine import QueryEngine
-from openharness.permissions.checker import PermissionChecker
-from openharness.prompts.context import RuntimePrompt, build_runtime_prompt
-from openharness.prompts.environment import get_environment_info
-from openharness.services.compact import compact_messages, estimate_message_tokens
-from openharness.tools import create_research_tool_registry
-from openharness.tools.base import ToolRegistry
+from researchx.engine.query_engine import QueryEngine
+from researchx.permissions.checker import PermissionChecker
+from researchx.prompts.context import RuntimePrompt, build_runtime_prompt
+from researchx.prompts.environment import get_environment_info
+from researchx.services.compact import compact_messages, estimate_message_tokens
+from researchx.tools import create_research_tool_registry
+from researchx.tools.base import ToolRegistry
 
 
 @pytest.mark.parametrize(
@@ -148,11 +148,11 @@ async def test_stream_usage_final_or_repeated_counts_once(usage_only):
 
 
 def test_split_prompt_stability(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("CLAUDE_CODE_COORDINATOR_MODE", raising=False)
     env = get_environment_info(str(tmp_path))
-    monkeypatch.setattr("openharness.prompts.context.get_environment_info", lambda **_: env)
+    monkeypatch.setattr("researchx.prompts.context.get_environment_info", lambda **_: env)
     settings = Settings()
     first = build_runtime_prompt(settings, cwd=tmp_path)
     env = replace(env, date="2099-01-01")
@@ -229,8 +229,8 @@ async def test_history_snapshot_stable_and_restore(tmp_path):
 
 
 async def test_tool_pair_then_mode_update_and_compaction(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     settings = Settings(memory={"enabled": False})
     client = RecordingClient(
         [
@@ -246,7 +246,7 @@ async def test_tool_pair_then_mode_update_and_compaction(tmp_path, monkeypatch):
     second = client.requests[1].messages
     use_index = next(i for i, m in enumerate(second) if m.tool_uses)
     assert isinstance(second[use_index + 1].content[0], ToolResultBlock)
-    assert second[0].runtime_context and "Plan mode is enabled" in second[0].runtime_context
+    assert second[0].runtime_context and "当前已启用计划模式" in second[0].runtime_context
     assert second[-1].text == ""
     assert client.requests[0].system_prompt == client.requests[1].system_prompt
     latest = second[0].runtime_context
@@ -268,7 +268,7 @@ async def test_cancel_during_tool_loop_retains_results(tmp_path):
         ]
     )
     engine = make_engine(tmp_path, client)
-    from openharness.engine.stream_events import AssistantTurnComplete
+    from researchx.engine.stream_events import AssistantTurnComplete
 
     stream = engine.submit_message("list")
     async for event in stream:
@@ -304,8 +304,8 @@ def test_reasoning_replay_survives_session_serialization():
 
 
 def test_mcp_schema_property_order_does_not_change_wire():
-    from openharness.mcp.types import McpToolInfo
-    from openharness.tools.mcp_tool import McpToolAdapter
+    from researchx.mcp.types import McpToolInfo
+    from researchx.tools.mcp_tool import McpToolAdapter
 
     registries = []
     for properties in (
@@ -341,13 +341,13 @@ def test_pending_results_remain_resumable_after_hidden_state_update(tmp_path):
 
 
 def test_persisted_context_not_in_transcript_or_title(tmp_path, monkeypatch):
-    from openharness.services.session_storage import (
+    from researchx.services.sessions.storage import (
         save_session_snapshot,
         load_session_snapshot,
         export_session_markdown,
     )
 
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     message = ConversationMessage(
         role="user", content=[TextBlock(text="Research")], runtime_context="PRIVATE_REFERENCE"
     )

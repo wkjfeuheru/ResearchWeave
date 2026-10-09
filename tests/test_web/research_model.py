@@ -3,10 +3,10 @@
 import asyncio
 from uuid import uuid4
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.research.store import ResearchStore
+from researchx.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.state.store import ResearchStore
 
 
 class ResearchModel:

@@ -14,12 +14,12 @@ from pathlib import Path
 
 import uvicorn
 
-import openharness.runtime as agent_runtime
-import openharness.web.app as web_app
-from openharness.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config import Settings, save_settings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+import researchx.runtime as agent_runtime
+import researchx.web.app as web_app
+from researchx.api.client import ApiMessageCompleteEvent, ApiTextDeltaEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config import Settings, save_settings
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
 from research_model import ResearchModel
 
 
@@ -31,6 +31,8 @@ class BrowserModel:
         pass
 
     async def stream_message(self, request):
+        if any(message.text == "长篇研究" for message in request.messages):
+            await asyncio.sleep(3600)
         last = next(message for message in reversed(request.messages) if message.content)
         user_text = next(
             (
@@ -91,7 +93,7 @@ class BrowserModel:
         if last.text.startswith("导出固定验收产物"):
             scripts = (
                 Path(__file__).resolve().parents[2]
-                / "src/openharness/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts"
+                / "src/researchx/plugins/bundled/analysis-modeling/skills/research-report-digest/scripts"
             )
             python = shlex.quote(
                 str(Path(sys.executable).parent.resolve() / Path(sys.executable).name)
@@ -153,16 +155,16 @@ class BrowserModel:
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory(prefix="openharness-browser-") as directory:
+    with tempfile.TemporaryDirectory(prefix="researchx-browser-") as directory:
         root = Path(directory)
-        os.environ["OPENHARNESS_CONFIG_DIR"] = str(root / "config")
-        os.environ["OPENHARNESS_DATA_DIR"] = str(root / "data")
+        os.environ["RESEARCHX_CONFIG_DIR"] = str(root / "config")
+        os.environ["RESEARCHX_DATA_DIR"] = str(root / "data")
         for name in (
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
-            "OPENHARNESS_OPENAI_API_KEY",
-            "OPENHARNESS_ANTHROPIC_API_KEY",
-            "OPENHARNESS_PROFILE",
+            "RESEARCHX_OPENAI_API_KEY",
+            "RESEARCHX_ANTHROPIC_API_KEY",
+            "RESEARCHX_PROFILE",
         ):
             os.environ.pop(name, None)
         # Synthetic model names have no provider context-window entry.
@@ -176,11 +178,34 @@ if __name__ == "__main__":
         agent_runtime._resolve_api_client_from_settings = lambda settings: BrowserModel()
         web_app._resolve_api_client_from_settings = lambda settings: BrowserModel()
         app = web_app.create_app(str(root / "workspace"))
+        # Deterministic projection for UI states that cannot all be reached at
+        # once in a real run. Delivery still goes through the real SSE route.
+        from researchx.state.store import ResearchStore
+
+        progress_fixtures = {}
+        original_progress = ResearchStore.progress
+
+        def projected_progress(store, memory=None):
+            return progress_fixtures.get(store.session_id) or original_progress(store, memory)
+
+        ResearchStore.progress = projected_progress
+
+        @app.post("/__test/project-progress/{session_id}")
+        def project_progress(session_id: str, progress: dict):
+            app.state.workspace.record(session_id)
+            progress_fixtures[session_id] = progress
+            return {"ok": True}
+
+        @app.post("/__test/stream-delta/{session_id}")
+        async def stream_delta(session_id: str, payload: dict):
+            connection = app.state.workspace.connections[session_id]
+            await connection.emit("delta", **payload)
+            return {"ok": True}
 
         @app.post("/__test/citation-layout")
         def citation_layout(profile_id: str):
             from uuid import uuid4
-            from openharness.research.store import ResearchStore
+            from researchx.state.store import ResearchStore
 
             record = app.state.workspace.store.create(profile_id)
             store = ResearchStore(WORKSPACE, record["session_id"])
@@ -242,7 +267,7 @@ if __name__ == "__main__":
         @app.post("/__test/conflict-progress")
         def conflict_progress(profile_id: str, outcome: str = "unresolved"):
             from uuid import uuid4
-            from openharness.research.store import ResearchStore
+            from researchx.state.store import ResearchStore
 
             seeded = citation_layout(profile_id)
             store = ResearchStore(WORKSPACE, seeded["session_id"])
@@ -295,7 +320,7 @@ if __name__ == "__main__":
                     for key in evidence_ids
                 ],
             )
-            from openharness.research.models import ArbitrationDecision
+            from researchx.state.models import ArbitrationDecision
 
             store.finish_investigation(
                 arbitration.id, report=ArbitrationDecision.model_validate(report)

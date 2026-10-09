@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from openharness.research.models import ArbitrationDecision, new_id
-from openharness.research.store import ResearchError, ResearchStore
-from openharness.utils.fs import atomic_write_text
+from researchx.state.models import ArbitrationDecision, new_id
+from researchx.state.store import ResearchError, ResearchStore
+from researchx.storage.filesystem import atomic_write_text
 
 
 def apply(store, action, **fields):

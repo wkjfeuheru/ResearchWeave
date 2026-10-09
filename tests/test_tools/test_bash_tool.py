@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.bash_tool import BashTool, BashToolInput
-import openharness.tools.bash_tool as bash_tool_module
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.bash_tool import BashTool, BashToolInput
+import researchx.tools.bash_tool as bash_tool_module
 
 
 class _FakeStdout:
@@ -177,8 +177,8 @@ async def test_bash_tool_collects_combined_output(monkeypatch, tmp_path: Path):
 async def test_bash_tool_uses_devnull_stdin_for_non_interactive_shell(
     monkeypatch, tmp_path: Path, host
 ):
-    from openharness.config import Settings
-    from openharness.permissions.capabilities import CapabilityContext
+    from researchx.config import Settings
+    from researchx.permissions.capabilities import CapabilityContext
 
     settings = Settings()
     settings.sandbox.allow_trusted_host = host
@@ -219,7 +219,7 @@ async def test_bash_tool_timeout_does_not_hang_when_stdout_stays_open(monkeypatc
         return process
 
     monkeypatch.setattr(
-        "openharness.tools.bash_tool.create_shell_subprocess", fake_create_shell_subprocess
+        "researchx.tools.bash_tool.create_shell_subprocess", fake_create_shell_subprocess
     )
     monkeypatch.setattr(
         bash_tool_module,

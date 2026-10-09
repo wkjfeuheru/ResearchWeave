@@ -6,19 +6,19 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from openharness.config import Settings
-from openharness.config.settings import PermissionSettings
-from openharness.engine.query import QueryContext, _execute_tool_call_impl
-from openharness.hooks import HookEvent, HookExecutor, HookExecutionContext
-from openharness.hooks.loader import HookRegistry
-from openharness.hooks.schemas import CommandHookDefinition
-from openharness.permissions.checker import PermissionChecker
-from openharness.permissions.capabilities import CapabilityContext
-from openharness.permissions.modes import PermissionMode
-from openharness.services.operations import OperationStore
-from openharness.tools.base import BaseTool, ToolRegistry, ToolResult
-from openharness.tools.contracts import resolve_contract, ToolContract
-from openharness.tools.file_write_tool import FileWriteTool
+from researchx.config import Settings
+from researchx.config.settings import PermissionSettings
+from researchx.engine.query import QueryContext, _execute_tool_call_impl
+from researchx.hooks import HookEvent, HookExecutor, HookExecutionContext
+from researchx.hooks.loader import HookRegistry
+from researchx.hooks.schemas import CommandHookDefinition
+from researchx.permissions.checker import PermissionChecker
+from researchx.permissions.capabilities import CapabilityContext
+from researchx.permissions.modes import PermissionMode
+from researchx.services.execution.operations import OperationStore
+from researchx.tools.base import BaseTool, ToolRegistry, ToolResult
+from researchx.tools.contracts import resolve_contract, ToolContract
+from researchx.tools.file_write_tool import FileWriteTool
 
 
 class Input(BaseModel):
@@ -50,7 +50,7 @@ class Write(BaseTool):
 
 def setup(tmp_path, monkeypatch, tool=None, mode=PermissionMode.FULL_AUTO, hooks=None):
     monkeypatch.setattr(
-        "openharness.services.tool_execution.get_data_dir", lambda: tmp_path / "data"
+        "researchx.services.execution.tool_execution.get_data_dir", lambda: tmp_path / "data"
     )
     tool = tool or Write()
     registry = ToolRegistry()
@@ -376,10 +376,10 @@ async def test_missing_success_artifact_never_reexecutes(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_workspace_escape_rejected_before_pre_hook(tmp_path, monkeypatch):
-    from openharness.research.models import ResearchObjective
-    from openharness.research.runtime import ResearchAgentRuntime
-    from openharness.research.store import ResearchStore
-    from openharness.tools.file_read_tool import FileReadTool
+    from researchx.state.models import ResearchObjective
+    from researchx.state.runtime import ResearchAgentRuntime
+    from researchx.state.store import ResearchStore
+    from researchx.tools.file_read_tool import FileReadTool
 
     store = ResearchStore(tmp_path, "b" * 12, root=tmp_path / "state")
     store.capture(origin_id="user", kind="user", content="research")
@@ -411,7 +411,7 @@ async def test_workspace_escape_rejected_before_pre_hook(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_recovery_cannot_reset_total_tool_attempt_limit(tmp_path, monkeypatch):
-    from openharness.services.tool_execution import ToolExecutionService
+    from researchx.services.execution.tool_execution import ToolExecutionService
 
     class RetryRead(Write):
         contract = {
@@ -448,10 +448,10 @@ async def test_recovery_cannot_reset_total_tool_attempt_limit(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_plugin_collision_cannot_replace_builtin_and_closes_transports(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    from openharness import runtime
+    from researchx import runtime
 
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     manager = SimpleNamespace(list_tools=lambda: [], close=AsyncMock())
     client = AsyncMock()
     monkeypatch.setattr(

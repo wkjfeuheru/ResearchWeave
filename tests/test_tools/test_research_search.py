@@ -7,23 +7,23 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from openharness.config.settings import (
+from researchx.config.settings import (
     ResearchSiteConfig,
     Settings,
     WebSettings,
     load_settings,
     save_settings,
 )
-from openharness.utils import research_sites
-from openharness.tools.base import ToolExecutionContext
-from openharness.utils.research_sites import classify_source, get_research_sites
-from openharness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
-from openharness.tools.web_search_tool import WebSearchTool, WebSearchToolInput
+from researchx.research import sites as research_sites
+from researchx.tools.base import ToolExecutionContext
+from researchx.research.sites import classify_source, get_research_sites
+from researchx.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
+from researchx.tools.web_search_tool import WebSearchTool, WebSearchToolInput
 
 
 @pytest.fixture
 def catalogue(monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_WEB_SEARCH_URL", "https://search.example/html")
+    monkeypatch.setenv("RESEARCHX_WEB_SEARCH_URL", "https://search.example/html")
     settings = WebSettings(
         research_sites=[
             ResearchSiteConfig(
@@ -58,7 +58,7 @@ def install_search(monkeypatch, urls):
         )
         return httpx.Response(200, text=body, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("openharness.tools.web_search_tool.fetch_public_http_response", fetch)
+    monkeypatch.setattr("researchx.tools.web_search_tool.fetch_public_http_response", fetch)
     return calls
 
 
@@ -114,7 +114,7 @@ async def test_category_restricts_queries_and_results_without_automatic_expansio
     assert len(calls) == 1 and "site:official.example" in calls[0][1]
     assert "site:industry.example" not in calls[0][1]
     assert len(result.metadata["research_source_specs"]) == 1
-    assert "Found 1 of 5" in result.output and "not expanded automatically" in result.output
+    assert "请求 5 条，实际找到 1 条" in result.output and "范围没有自动扩大" in result.output
 
 
 @pytest.mark.asyncio
@@ -160,7 +160,7 @@ async def test_category_with_no_sites_makes_no_request(tmp_path, monkeypatch, ca
 
 @pytest.mark.asyncio
 async def test_search_partial_failure_preserves_other_results(tmp_path, monkeypatch, catalogue):
-    monkeypatch.setattr("openharness.tools.web_search_tool.SITES_PER_QUERY", 1)
+    monkeypatch.setattr("researchx.tools.web_search_tool.SITES_PER_QUERY", 1)
     calls = []
 
     async def fetch(url, **kwargs):
@@ -174,7 +174,7 @@ async def test_search_partial_failure_preserves_other_results(tmp_path, monkeypa
             request=httpx.Request("GET", url),
         )
 
-    monkeypatch.setattr("openharness.tools.web_search_tool.fetch_public_http_response", fetch)
+    monkeypatch.setattr("researchx.tools.web_search_tool.fetch_public_http_response", fetch)
     result = await WebSearchTool().execute(
         WebSearchToolInput(query="产业"), ToolExecutionContext(cwd=tmp_path)
     )
@@ -199,7 +199,7 @@ async def test_fetch_classifies_final_url_and_keeps_snapshot(
             request=httpx.Request("GET", final_url),
         )
 
-    monkeypatch.setattr("openharness.tools.web_fetch_tool.fetch_public_http_response", fetch)
+    monkeypatch.setattr("researchx.tools.web_fetch_tool.fetch_public_http_response", fetch)
     result = await WebFetchTool().execute(
         WebFetchToolInput(url="https://media.example/redirect"),
         ToolExecutionContext(cwd=tmp_path),
@@ -213,7 +213,7 @@ async def test_fetch_classifies_final_url_and_keeps_snapshot(
 
 
 def test_catalogue_partial_overrides_survive_settings_roundtrip(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     settings = Settings(
         web=WebSettings(
             research_sites=[

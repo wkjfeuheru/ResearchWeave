@@ -1,25 +1,28 @@
 """Concurrent confirmations must all remain reachable and cancellable."""
 
-from openharness.utils.async_timeout import timeout as async_timeout
+from tests.test_web.sse_client import RecordingChannel
+
+from researchx.services.execution.async_timeout import timeout as async_timeout
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
-from openharness.web.runtime import BrowserConnection, Redactor
-from openharness.engine.stream_events import ToolExecutionCompleted, ToolExecutionStarted
+from researchx.web.runtime import SessionController
+from researchx.web.redaction import Redactor
+from researchx.engine.stream_events import ToolExecutionCompleted, ToolExecutionStarted
 
 
 @pytest.fixture
 def connection(monkeypatch, tmp_path):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr("openharness.web.runtime.models_list", lambda: {"items": []})
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("researchx.web.redaction.models_list", lambda: {"items": []})
     events = []
 
     async def send_json(data):
         events.append(data)
 
-    connection = BrowserConnection(SimpleNamespace(send_json=send_json), "session", None)
+    connection = SessionController("session", None)
+    connection.channel = RecordingChannel(events)
     connection.request_id = "turn"
     connection.rows = []
     return connection, events

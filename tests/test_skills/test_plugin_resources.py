@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from openharness.config.settings import Settings
-from openharness.plugins.loader import BUNDLED_PLUGINS_DIR, load_plugins
-from openharness.skills import load_skill_registry
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.file_read_tool import FileReadTool, FileReadToolInput
-from openharness.tools.skill_tool import SkillTool, SkillToolInput
+from researchx.config.settings import Settings
+from researchx.plugins.loader import BUNDLED_PLUGINS_DIR, load_plugins
+from researchx.skills import load_skill_registry
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.file_read_tool import FileReadTool, FileReadToolInput
+from researchx.tools.skill_tool import SkillTool, SkillToolInput
 
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     return tmp_path
 
@@ -69,7 +69,7 @@ async def test_disabled_packaged_plugin_cannot_be_loaded_by_tool(isolated_home):
             },
         ),
     )
-    assert result.is_error and "Skill not found" in result.output
+    assert result.is_error and "未找到技能" in result.output
 
 
 def test_directory_skill_wins_over_legacy_and_nested_templates_are_not_discovered(isolated_home):
@@ -178,7 +178,7 @@ def test_full_research_plugins_have_metadata_and_independent_switches(isolated_h
 
 
 def test_metadata_hash_stable_resources_change_and_hash_field_excluded(isolated_home):
-    from openharness.skills.metadata import content_hash
+    from researchx.skills.metadata import content_hash
 
     base = isolated_home / "example"
     (base / "references").mkdir(parents=True)
@@ -198,7 +198,7 @@ def test_metadata_hash_stable_resources_change_and_hash_field_excluded(isolated_
 
 
 def test_skill_hash_covers_its_relocated_business_implementation(isolated_home):
-    from openharness.skills.metadata import content_hash
+    from researchx.skills.metadata import content_hash
 
     source = BUNDLED_PLUGINS_DIR / "analysis-modeling" / "skills" / "financial-statement-analysis"
     base = isolated_home / "financial-skill-copy"
@@ -213,8 +213,8 @@ def test_skill_hash_covers_its_relocated_business_implementation(isolated_home):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["draft", "retired"])
 async def test_lifecycle_prevents_auto_invocation_and_skill_execution(isolated_home, status):
-    from openharness.prompts.context import _build_skills_section
-    from openharness.skills.loader import load_skills_from_dirs
+    from researchx.prompts.context import _build_skills_section
+    from researchx.skills.loader import load_skills_from_dirs
 
     base = isolated_home / "fixture"
     base.mkdir()

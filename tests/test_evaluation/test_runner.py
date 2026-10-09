@@ -4,14 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config import Settings
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.evaluation.dataset import load_cases, DEFAULT_DATASET
-from openharness.evaluation.report import read_results
-from openharness.evaluation.runner import ExperimentRunner
-from openharness.evaluation.models import Turn
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config import Settings
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.evaluation.dataset import load_cases, DEFAULT_DATASET
+from researchx.evaluation.report import read_results
+from researchx.evaluation.runner import ExperimentRunner
+from researchx.evaluation.models import Turn
 
 
 class Provider:
@@ -49,7 +49,7 @@ class Provider:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [False, True])
 async def test_runtime_retains_records_and_never_passes_gold(tmp_path, monkeypatch, failure):
-    from openharness.evaluation import runner
+    from researchx.evaluation import runner
 
     settings = Settings()
     settings.context_window_tokens = 200000
@@ -81,7 +81,7 @@ async def test_runtime_retains_records_and_never_passes_gold(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_runtime_startup_failure_closes_provider_and_retains_task(tmp_path, monkeypatch):
-    from openharness.evaluation import runner
+    from researchx.evaluation import runner
 
     settings = Settings(context_window_tokens=200000)
     monkeypatch.setattr(runner, "resolve_profile", lambda _: settings)
@@ -107,8 +107,8 @@ async def test_runtime_startup_failure_closes_provider_and_retains_task(tmp_path
 
 @pytest.mark.asyncio
 async def test_runtime_closes_provider_when_end_hook_fails(monkeypatch):
-    from openharness.runtime import close_runtime
-    from openharness.sandbox import session
+    from researchx.runtime import close_runtime
+    from researchx.sandbox import session
 
     async def no_sandbox():
         pass
@@ -131,7 +131,7 @@ async def test_runtime_closes_provider_when_end_hook_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scripted_cancellation_and_resume_keeps_closed_turn_traces(tmp_path, monkeypatch):
-    from openharness.evaluation import runner
+    from researchx.evaluation import runner
 
     settings = Settings(context_window_tokens=200000)
     monkeypatch.setattr(runner, "resolve_profile", lambda _: settings)

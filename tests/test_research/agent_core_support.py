@@ -6,21 +6,21 @@ import asyncio
 import json
 from pathlib import Path
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import Settings
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import Settings
+from researchx.engine.messages import (
     ConversationMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
 )
-from openharness.engine.stream_events import ErrorEvent, ToolExecutionCompleted
-from openharness.research.models import PlanProposal, ResearchObjective, ResearchTask, new_id
-from openharness.research.store import ResearchStore
-from openharness.runtime import build_runtime, close_runtime
-from openharness.tools.base import BaseTool, ToolResult
-from openharness.tools.web_fetch_tool import WebFetchToolInput
+from researchx.engine.stream_events import ErrorEvent, ToolExecutionCompleted
+from researchx.state.models import PlanProposal, ResearchObjective, ResearchTask, new_id
+from researchx.state.store import ResearchStore
+from researchx.runtime import build_runtime, close_runtime
+from researchx.tools.base import BaseTool, ToolResult
+from researchx.tools.web_fetch_tool import WebFetchToolInput
 
 REQUEST = (
     "请对虚构上市公司 AlphaTech 初步研究：公司基本情况、行业竞争格局和近期财务表现，生成研究摘要。"

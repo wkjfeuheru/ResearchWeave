@@ -1,8 +1,10 @@
 """Transport, restoration, and cancellation coverage for research memory."""
 
+from tests.test_web.sse_client import sse_connect
+
 import json
 
-from openharness.research.store import ResearchStore
+from researchx.state.store import ResearchStore
 from tests.test_web.research_model import ResearchModel
 from tests.test_web.test_app import ORIGIN, add_model, add_session, collect, submit
 
@@ -19,8 +21,8 @@ def test_research_progress_provenance_and_history_restore(workspace, monkeypatch
         models.append(model)
         return model
 
-    monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings", factory)
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    monkeypatch.setattr("researchx.runtime._resolve_api_client_from_settings", factory)
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "研究公司 A")
         events = collect(socket)
@@ -76,7 +78,7 @@ def test_research_progress_provenance_and_history_restore(workspace, monkeypatch
     assert "research_memory" in tools and "lsp" not in tools and "enter_worktree" not in tools
     other = add_session(client, response["profile_id"])
     assert not ResearchStore(cwd, other).load().evidence_pool
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         ready = socket.receive_json()
         assert ready["session"]["research_progress"]["completed"] == 2
         assert ready["session"]["messages"][-1]["text"] == text
@@ -95,8 +97,8 @@ def test_steering_cancels_old_run_then_commits_new_plan(workspace, monkeypatch):
         models.append(model)
         return model
 
-    monkeypatch.setattr("openharness.runtime._resolve_api_client_from_settings", factory)
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    monkeypatch.setattr("researchx.runtime._resolve_api_client_from_settings", factory)
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "研究公司 A", request_id="old")
         collect(socket, "delta")

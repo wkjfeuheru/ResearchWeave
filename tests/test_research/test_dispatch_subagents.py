@@ -7,24 +7,24 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings, ResearchMemorySettings
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings, ResearchMemorySettings
+from researchx.engine.messages import (
     ConversationMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
 )
-from openharness.engine.query import QueryContext, _execute_tool_call
-from openharness.permissions.checker import PermissionChecker
-from openharness.research.errors import ResearchError
-from openharness.research.models import PlanProposal, ResearchObjective
-from openharness.research.runtime import ResearchAgentRuntime
-from openharness.research.store import ResearchStore
-from openharness.tools import RESEARCH_EXCLUDED_TOOLS, create_research_tool_registry
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.dispatch_subagents_tool import (
+from researchx.engine.query import QueryContext, _execute_tool_call
+from researchx.permissions.checker import PermissionChecker
+from researchx.state.errors import ResearchError
+from researchx.state.models import PlanProposal, ResearchObjective
+from researchx.state.runtime import ResearchAgentRuntime
+from researchx.state.store import ResearchStore
+from researchx.tools import RESEARCH_EXCLUDED_TOOLS, create_research_tool_registry
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.dispatch_subagents_tool import (
     DispatchInput,
     SubagentTask,
     dispatch_subagents,
@@ -560,13 +560,13 @@ async def test_plain_answer_is_not_accepted_as_structured_success(project):
 
 
 async def test_child_prompt_hooks_share_budget_and_keep_parent_context(project):
-    from openharness.hooks import HookEvent, HookExecutionContext, HookExecutor
-    from openharness.hooks.loader import HookRegistry
-    from openharness.hooks.schemas import PromptHookDefinition
+    from researchx.hooks import HookEvent, HookExecutionContext, HookExecutor
+    from researchx.hooks.loader import HookRegistry
+    from researchx.hooks.schemas import PromptHookDefinition
 
     class HookModel(ChildModel):
         async def stream_message(self, request):
-            if "hook condition" in request.system_prompt:
+            if "判断 ResearchX 中某个 Hook 条件" in request.system_prompt:
                 yield ApiMessageCompleteEvent(
                     message=ConversationMessage.from_user_text('{"ok": true}'),
                     usage=UsageSnapshot(input_tokens=2, output_tokens=1),
@@ -611,7 +611,7 @@ async def test_scope_change_during_edit_approval_revokes_child_write(project):
 
 
 async def test_generic_child_cannot_call_planning_helper_directly(project):
-    from openharness.tools.research.planner import planner_tool
+    from researchx.tools.planner_tool import planner_tool
 
     ctx, _ = context(project, ChildModel(), subagent_child=True)
     with pytest.raises(ResearchError, match="child recursion"):

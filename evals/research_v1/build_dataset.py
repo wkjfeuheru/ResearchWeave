@@ -1,6 +1,6 @@
 """Explicit corpus-authoring step. Normal evaluations only read frozen files.
 
-python evals/research_v1/build_dataset.py --pdf-dir /tmp/openharness-evaluation-source-pdfs
+python evals/research_v1/build_dataset.py --pdf-dir /tmp/researchx-evaluation-source-pdfs
 """
 
 import argparse
@@ -13,7 +13,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from recipes import BROKERS, FORECAST_SKILL, REAL, SKILLS, SOURCES, SYNTHETIC
 
-from openharness.evaluation.models import (
+from researchx.evaluation.models import (
     Budget,
     EvalCase,
     Fault,
@@ -22,11 +22,11 @@ from openharness.evaluation.models import (
     SourceAsset,
     Turn,
 )
-from openharness.evaluation.calibration import calibration_cases
+from researchx.evaluation.calibration import calibration_cases
 
 from typing import Literal
 from typing_extensions import TypedDict
-from openharness.evaluation.models import Category
+from researchx.evaluation.models import Category
 
 Material = Literal["synthetic", "snapshot", "live"]
 Difficulty = Literal["basic", "intermediate", "complex"]
@@ -458,7 +458,7 @@ def synthetic(
     asset = source_asset(
         path,
         identifier + "-source",
-        f"https://fixtures.openharness.invalid/{identifier}",
+        f"https://fixtures.researchx.invalid/{identifier}",
         "样例精工合成资料",
         "synthetic:" + identifier,
         "synthetic",
@@ -661,7 +661,7 @@ def build(pdf_dir: Path) -> list[EvalCase]:
                             source_asset(
                                 note,
                                 identifier + "-note",
-                                "https://fixtures.openharness.invalid/" + identifier + "/note",
+                                "https://fixtures.researchx.invalid/" + identifier + "/note",
                                 "人工构造的非权威审阅笔记",
                                 "official:" + name,
                                 "synthetic",
@@ -1009,7 +1009,7 @@ def build(pdf_dir: Path) -> list[EvalCase]:
         late = source_asset(
             late_path,
             case.id + "-revision",
-            "https://fixtures.openharness.invalid/" + case.id + "/revision",
+            "https://fixtures.researchx.invalid/" + case.id + "/revision",
             "第二轮新增的更正材料",
             case.family,
             "synthetic",

@@ -3,7 +3,7 @@ requires = ["hatchling", "pydantic>=2.0.0", "pyyaml>=6.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "openharness-ai"
+name = "researchx-ai"
 version = "0.1.9"
 description = "Investment research workspace with session-isolated evidence and agent infrastructure"
 readme = "README.md"
@@ -57,19 +57,19 @@ dev = [
 ]
 
 [project.scripts]
-openharness = "openharness.cli:app"
-oh = "openharness.cli:app"
-openh = "openharness.cli:app"
+rx = "researchx.cli:app"
+oh = "researchx.cli:app"
+openh = "researchx.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openharness"]
+packages = ["src/researchx"]
 
 [tool.hatch.build]
 exclude = [
     "/.git",
     "/.venv",
-    "/.openharness-venv",
-    "/.openharness",
+    "/.researchx-venv",
+    "/.researchx",
     "/.pytest_cache",
     "/.mypy_cache",
     "/.ruff_cache",

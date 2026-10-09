@@ -10,7 +10,7 @@ build/
 .mypy_cache/
 .ruff_cache/
 .venv/
-.openharness-venv/
+.researchx-venv/
 venv/
 env/
 .env
@@ -34,7 +34,7 @@ frontend/web/test-results/
 .superdesign/tmp/
 
 # User data (never commit API keys or session data)
-.openharness/
+.researchx/
 react_tui_smoke.txt
 
 # OS

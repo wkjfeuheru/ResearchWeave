@@ -1,4 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+async function observeSSE(page: Page, observe: (event: any) => void) {
+  await page.exposeFunction('__captureSSE', observe);
+  await page.addInitScript(() => {
+    const NativeSource = window.EventSource;
+    window.EventSource = class extends NativeSource {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options);
+        this.addEventListener('message', event => {
+          void (window as any).__captureSSE(JSON.parse(event.data));
+        });
+      }
+    };
+  });
+}
 
 test('report project status and extended task states survive history refresh', async ({ page }) => {
   const created = await page.request.post('/api/models', { data: {
@@ -6,29 +21,21 @@ test('report project status and extended task states survive history refresh', a
   } });
   const { id } = await created.json();
   const session = await (await page.request.post('/api/sessions', { data: { profile_id: id } })).json();
-  let projectStatus = 'running';
-  await page.routeWebSocket(`**/api/sessions/${session.session_id}/ws`, route => {
-    const server = route.connectToServer();
-    server.onMessage(message => {
-      const data = JSON.parse(String(message));
-      if (data.type === 'ready') data.session.research_progress = {
+  const progressFixture = {
       revision: 10, plan_id: 'report-plan', title: '离线财报点评', current_task_id: null,
       tasks: ['ready', 'validating', 'failed'].map((status, index) => ({
         id: `task-${index}`, title: `任务${index + 1}`, status, blocker: '', completion_note: '',
-      })), completed: 0, total: 3, replan_required: false, project_status: projectStatus,
-      };
-      route.send(JSON.stringify(data));
-    });
-    route.onMessage(message => server.send(message));
-  });
-  await page.addInitScript(sid => sessionStorage.setItem('openharness.web.session', sid), session.session_id);
+      })), completed: 0, total: 3, replan_required: false, project_status: 'running',
+  };
+  expect((await page.request.post(`/__test/project-progress/${session.session_id}`, { data: progressFixture })).ok()).toBe(true);
+  await page.addInitScript(sid => sessionStorage.setItem('researchx.web.session', sid), session.session_id);
   await page.goto('/');
   const progress = page.getByLabel('研究任务进度');
   await expect(progress).toContainText('研究中 · 0/3 项任务完成');
   await expect(progress).toContainText('可执行');
   await expect(progress).toContainText('验证中');
   await expect(progress).toContainText('失败');
-  projectStatus = 'suspended';
+  expect((await page.request.post(`/__test/project-progress/${session.session_id}`, { data: { ...progressFixture, project_status: 'suspended' } })).ok()).toBe(true);
   await page.reload();
   await expect(progress).toContainText('已暂停 · 0/3 项任务完成');
   await expect(progress).not.toContainText('研报已完成');
@@ -43,7 +50,7 @@ for (const outcome of ['unresolved', 'compatible']) {
     const response = await page.request.post(`/__test/conflict-progress?profile_id=${id}&outcome=${outcome}`);
     expect(response.ok()).toBe(true);
     const { session_id } = await response.json();
-    await page.addInitScript(sid => sessionStorage.setItem('openharness.web.session', sid), session_id);
+    await page.addInitScript(sid => sessionStorage.setItem('researchx.web.session', sid), session_id);
     await page.goto('/');
     const progress = page.getByLabel('研究任务进度');
     const toggle = progress.getByRole('button');
@@ -68,7 +75,7 @@ test('long collapsed progress and website-only source rows survive refresh and c
   expect(response.ok()).toBe(true);
   const { session_id } = await response.json();
   await page.addInitScript(sid => {
-    sessionStorage.setItem('openharness.web.session', sid);
+    sessionStorage.setItem('researchx.web.session', sid);
     Object.defineProperty(navigator, 'clipboard', { value: {
       writeText: async (text: string) => { (window as any).copiedAnswer = text; },
     }, configurable: true });
@@ -112,10 +119,9 @@ test('long collapsed progress and website-only source rows survive refresh and c
 
 test('session approvals skip repeated confirmations and remain isolated after refresh', async ({ page }) => {
   const prompts: { kind: string; tool_name?: string }[] = [];
-  page.on('websocket', socket => socket.on('framereceived', event => {
-    const data = JSON.parse(String(event.payload));
+  await observeSSE(page, data => {
     if (data.type === 'prompt') prompts.push(data);
-  }));
+  });
   const created = await page.request.post('/api/models', { data: {
     label: '会话授权测试模型', api_format: 'openai', model: 'session-approval-test', api_key: 'session-approval-secret', context_window_tokens: 200000,
   } });
@@ -126,7 +132,7 @@ test('session approvals skip repeated confirmations and remain isolated after re
   const approval = page.getByRole('dialog', { name: '操作确认' });
   const sendWrite = async () => {
     await page.getByLabel('对话输入').fill('请写入测试文件');
-    const needsSession = await page.evaluate(() => !sessionStorage.getItem('openharness.web.session'));
+    const needsSession = await page.evaluate(() => !sessionStorage.getItem('researchx.web.session'));
     const sessionCreated = needsSession ? page.waitForResponse(response =>
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/sessions' && response.status() === 201,
     ) : null;
@@ -271,12 +277,9 @@ test('responsive navigation and empty skill search', async ({ page }) => {
 
 test('research progress, source footnotes and interrupt to replan', async ({ page }) => {
   const progressFrames: any[] = [];
-  page.on('websocket', socket => socket.on('framereceived', event => {
-    try {
-      const data = JSON.parse(String(event.payload));
-      if (data.type === 'research_progress') progressFrames.push(data.progress);
-    } catch { /* Ignore non-JSON transport frames. */ }
-  }));
+  await observeSSE(page, data => {
+    if (data.type === 'research_progress') progressFrames.push(data.progress);
+  });
   const created = await page.request.post('/api/models', { data: {
     label: '研究记忆测试模型', api_format: 'openai', model: 'memory-test', api_key: 'memory-test-secret', context_window_tokens: 200000,
   } });
@@ -422,7 +425,7 @@ test('delete confirmation, failure retry, noncurrent and current session cleanup
   await prepareProcessChat(page);
   await expect(page.locator('.answer-content').last()).toContainText('已整理资料；第二份文件不可用', { timeout: 15_000 });
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
-  const currentId = await page.evaluate(() => sessionStorage.getItem('openharness.web.session'));
+  const currentId = await page.evaluate(() => sessionStorage.getItem('researchx.web.session'));
   const session = await (await page.request.get(`/api/sessions/${currentId}`)).json();
   const other = await (await page.request.post('/api/sessions', { data: { profile_id: session.profile_id } })).json();
   await page.reload();
@@ -447,14 +450,14 @@ test('delete confirmation, failure retry, noncurrent and current session cleanup
   await dialog.getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect((await page.request.get(`/api/sessions/${other.session_id}`)).status()).toBe(404);
-  expect(await page.evaluate(() => sessionStorage.getItem('openharness.web.session'))).toBe(currentId);
+  expect(await page.evaluate(() => sessionStorage.getItem('researchx.web.session'))).toBe(currentId);
   await page.getByLabel('对话输入').fill('未发送草稿');
   await page.locator('.session-row.selected').hover();
   await page.locator('.session-row.selected .session-delete').click();
   await dialog.getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(page.getByText('让研究，从一个好问题开始')).toBeVisible();
   await expect(page.getByLabel('对话输入')).toHaveValue('');
-  expect(await page.evaluate(() => sessionStorage.getItem('openharness.web.session'))).toBe(null);
+  expect(await page.evaluate(() => sessionStorage.getItem('researchx.web.session'))).toBe(null);
   expect((await page.request.get(`/api/sessions/${currentId}`)).status()).toBe(404);
   await expect(page.getByText('连接已断开', { exact: false })).toHaveCount(0);
 });
@@ -477,11 +480,11 @@ test('mobile deletion remains visible and returns to welcome', async ({ page }) 
 
 test('disconnect marks pending activity interrupted and restores the saved process', async ({ page }) => {
   await page.addInitScript(() => {
-    const NativeSocket = window.WebSocket;
-    window.WebSocket = class extends NativeSocket {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols);
-        (window as Window & { testSocket?: WebSocket }).testSocket = this;
+    const NativeSource = window.EventSource;
+    window.EventSource = class extends NativeSource {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options);
+        (window as Window & { testStream?: EventSource }).testStream = this;
       }
     };
   });
@@ -494,7 +497,11 @@ test('disconnect marks pending activity interrupted and restores the saved proce
   await page.getByLabel('对话输入').fill('请提问');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
-  await page.evaluate(() => (window as Window & { testSocket?: WebSocket }).testSocket!.close(4000, '测试断线'));
+  await page.evaluate(() => {
+    const stream = (window as Window & { testStream?: EventSource }).testStream!;
+    stream.close();
+    stream.dispatchEvent(new Event('error'));
+  });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const heading = page.locator('.process-heading');
   await expect(heading).toHaveText('执行过程 · 已停止');
@@ -502,7 +509,7 @@ test('disconnect marks pending activity interrupted and restores the saved proce
   await heading.click();
   await page.locator('.activity-summary').click();
   await expect(page.locator('.activity-status.interrupted')).toHaveText('已中断');
-  const sid = await page.evaluate(() => sessionStorage.getItem('openharness.web.session'));
+  const sid = await page.evaluate(() => sessionStorage.getItem('researchx.web.session'));
   await expect.poll(async () => {
     const session = await (await page.request.get(`/api/sessions/${sid}`)).json();
     return session.messages.find((row: { role: string }) => row.role === 'activity')?.status;
@@ -518,28 +525,26 @@ test('new stream content follows the bottom without interrupting reading above',
   } });
   const { id } = await created.json();
   const session = await (await page.request.post('/api/sessions', { data: { profile_id: id } })).json();
-  let routed: import('@playwright/test').WebSocketRoute | undefined;
   let requestId = '';
-  await page.routeWebSocket(`**/api/sessions/${session.session_id}/ws`, route => {
-    routed = route;
-    route.send(JSON.stringify({ type: 'ready', session_id: session.session_id, session }));
-    route.onMessage(raw => {
-      const request = JSON.parse(String(raw));
-      if (request.type === 'submit') {
-        requestId = request.request_id;
-        route.send(JSON.stringify({ type: 'started', session_id: session.session_id, request_id: requestId, profile_id: id, model: 'scroll-test' }));
-      }
-    });
+  page.on('request', request => {
+    if (request.url().endsWith(`/api/sessions/${session.session_id}/commands`) && request.method() === 'POST') {
+      const command = request.postDataJSON();
+      if (command.type === 'submit') requestId = command.request_id;
+    }
   });
-  await page.addInitScript(sid => sessionStorage.setItem('openharness.web.session', sid), session.session_id);
+  await page.addInitScript(sid => sessionStorage.setItem('researchx.web.session', sid), session.session_id);
   await page.goto('/');
   await expect(page.getByLabel('当前对话模型')).toHaveValue(id);
   await page.getByLabel('对话输入').fill('长篇研究');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect.poll(() => requestId).not.toBe('');
-  const send = (text: string) => routed!.send(JSON.stringify({ type: 'delta', session_id: session.session_id,
-    request_id: requestId, turn_id: requestId, id: 'long-reply', text }));
-  send('研究资料段落。\n\n'.repeat(100));
+  const send = async (text: string) => {
+    const response = await page.request.post(`/__test/stream-delta/${session.session_id}`, { data: {
+      request_id: requestId, turn_id: requestId, id: 'long-reply', text,
+    } });
+    expect(response.ok()).toBe(true);
+  };
+  await send('研究资料段落。\n\n'.repeat(100));
   const scroll = page.locator('.conversation-scroll');
   await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(10);
   await scroll.evaluate(element => {
@@ -547,7 +552,7 @@ test('new stream content follows the bottom without interrupting reading above',
     element.dispatchEvent(new Event('scroll'));
   });
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(0);
-  send('新增资料。\n\n'.repeat(10));
+  await send('新增资料。\n\n'.repeat(10));
   await expect(page.locator('.answer-content')).toContainText('新增资料');
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(0);
   await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -561,7 +566,7 @@ test('new stream content follows the bottom without interrupting reading above',
     });
     observer.observe(element.querySelector('.answer-content')!, { childList: true, characterData: true, subtree: true });
   });
-  send('继续补充。\n\n'.repeat(10));
+  await send('继续补充。\n\n'.repeat(10));
   await expect(page.locator('.answer-content')).toContainText('继续补充');
   await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(10);
 });
@@ -595,17 +600,17 @@ test('attachments, real script artifacts, download, reload and isolation', async
   await expect(page.getByLabel('会话附件')).toHaveCount(0);
 });
 
-test('first message is delivered when socket becomes ready before session refresh finishes', async ({ page }) => {
+test('first message is delivered when SSE becomes ready before session refresh finishes', async ({ page }) => {
   const created = await page.request.post('/api/models', { data: {
     label: '首次连接竞态模型', api_format: 'openai', model: 'browser-test-model', api_key: 'first-connection-secret', context_window_tokens: 200000,
   } });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
   await page.addInitScript(() => {
-    const NativeWebSocket = window.WebSocket;
-    window.WebSocket = class extends NativeWebSocket {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols);
+    const NativeSource = window.EventSource;
+    window.EventSource = class extends NativeSource {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options);
         this.addEventListener('message', event => {
           if (JSON.parse(String(event.data)).type === 'ready') {
             queueMicrotask(() => { (window as any).__sessionReadyDelivered = true; });

@@ -9,18 +9,18 @@ import json
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest
-from openharness.api.usage import UsageSnapshot
-from openharness.config.settings import PermissionSettings
-from openharness.engine.cost_tracker import CostTracker
-from openharness.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from openharness.engine.query_engine import QueryEngine
-from openharness.engine.stream_events import StatusEvent
-from openharness.engine.subagents import BoundedSubagentClient
-from openharness.permissions.checker import PermissionChecker
-from openharness.research.errors import ResearchError
-from openharness.tools.base import ToolExecutionContext, ToolRegistry
-from openharness.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
+from researchx.api.client import ApiMessageCompleteEvent, ApiMessageRequest
+from researchx.api.usage import UsageSnapshot
+from researchx.config.settings import PermissionSettings
+from researchx.engine.cost_tracker import CostTracker
+from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
+from researchx.engine.query_engine import QueryEngine
+from researchx.engine.stream_events import StatusEvent
+from researchx.engine.subagents import BoundedSubagentClient
+from researchx.permissions.checker import PermissionChecker
+from researchx.state.errors import ResearchError
+from researchx.tools.base import ToolExecutionContext, ToolRegistry
+from researchx.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
 from tests.test_research.test_conflicts import apply, conflict, decision, make_research
 
 
@@ -152,7 +152,7 @@ def test_reopened_report_cannot_resolve_stale_decision(research):
 
 
 async def test_readonly_child_cannot_submit_report_or_parent_mutations(research, tmp_path):
-    from openharness.tools.dispatch_subagents_tool import ReadOnlyResearchMemoryTool
+    from researchx.tools.dispatch_subagents_tool import ReadOnlyResearchMemoryTool
     from pydantic import ValidationError
 
     store, _, _, _ = research

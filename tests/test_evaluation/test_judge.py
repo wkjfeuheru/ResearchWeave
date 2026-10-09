@@ -2,11 +2,11 @@
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, TextBlock
-from openharness.evaluation.dataset import load_cases
-from openharness.evaluation.judge import (
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, TextBlock
+from researchx.evaluation.dataset import load_cases
+from researchx.evaluation.judge import (
     JudgeOutputError,
     citation_map,
     evaluated_text,
@@ -14,7 +14,7 @@ from openharness.evaluation.judge import (
     judge_case,
     validate_judgment,
 )
-from openharness.evaluation.scoring import score_case
+from researchx.evaluation.scoring import score_case
 from tests.test_evaluation.test_scoring import judgment, run, values
 
 

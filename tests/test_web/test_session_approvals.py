@@ -1,20 +1,22 @@
 """Conversation grants survive recovery without crossing policy or session boundaries."""
 
-from openharness.utils.async_timeout import timeout as async_timeout
+from tests.test_web.sse_client import sse_connect, RecordingChannel
+
+from researchx.services.execution.async_timeout import timeout as async_timeout
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.config import load_settings, save_settings
-from openharness.config.settings import PathRuleConfig
-from openharness.engine.messages import ConversationMessage, ToolUseBlock
-from openharness.services.session_storage import _persistable_tool_metadata
-from openharness.web.app import create_app
-from openharness.web.runtime import BrowserConnection
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.config import load_settings, save_settings
+from researchx.config.settings import PathRuleConfig
+from researchx.engine.messages import ConversationMessage, ToolUseBlock
+from researchx.services.sessions.storage import _persistable_tool_metadata
+from researchx.web.app import create_app
+from researchx.web.runtime import SessionController
 from tests.test_web.test_app import ORIGIN, FakeClient, add_model, add_session, collect, submit
 
 
@@ -45,7 +47,7 @@ def test_session_grants_survive_new_turn_model_switch_and_server_recovery(worksp
     profile = add_model(client)
     second_profile = add_model(client, label="Second model")
     sid = add_session(client, profile)
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         grant_write(socket)
         submit(socket, "write", request_id="r2", profile_id=second_profile)
@@ -55,13 +57,13 @@ def test_session_grants_survive_new_turn_model_switch_and_server_recovery(worksp
     assert saved == {"tools": ["write_file"], "edit_paths": [str(cwd / "note.txt")]}
     assert load_settings().permission.allowed_tools == []
     with TestClient(create_app(str(cwd)), base_url="http://localhost") as recovered:
-        with recovered.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+        with sse_connect(recovered, sid, headers=ORIGIN) as socket:
             socket.receive_json()
             submit(socket, "write", request_id="restored")
             events = collect(socket)
             assert not events[-1]["failed"] and not any(e["type"] == "prompt" for e in events)
         other = add_session(recovered, profile)
-        with recovered.websocket_connect(f"/api/sessions/{other}/ws", headers=ORIGIN) as socket:
+        with sse_connect(recovered, other, headers=ORIGIN) as socket:
             socket.receive_json()
             submit(socket, "write")
             prompt = collect(socket, "prompt")[-1]
@@ -94,11 +96,11 @@ class ActionClient(FakeClient):
 def test_grant_does_not_authorize_other_tools_or_other_file_reviews(workspace, monkeypatch):
     client, _, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         grant_write(socket)
         monkeypatch.setattr(
-            "openharness.runtime._resolve_api_client_from_settings",
+            "researchx.runtime._resolve_api_client_from_settings",
             lambda settings: ActionClient(("write_file", {"path": "other.txt", "content": "new"})),
         )
         submit(socket, "action", request_id="different-file")
@@ -109,7 +111,7 @@ def test_grant_does_not_authorize_other_tools_or_other_file_reviews(workspace, m
         assert not (cwd / "other.txt").exists()
         (cwd / "note.txt").write_text("original")
         monkeypatch.setattr(
-            "openharness.runtime._resolve_api_client_from_settings", lambda settings: FakeClient([])
+            "researchx.runtime._resolve_api_client_from_settings", lambda settings: FakeClient([])
         )
         submit(socket, "edit", request_id="different-tool")
         prompt = collect(socket, "prompt")[-1]
@@ -122,7 +124,7 @@ def test_grant_does_not_authorize_other_tools_or_other_file_reviews(workspace, m
 def test_one_off_permission_does_not_become_a_session_grant(workspace):
     client, app, _, _, _ = workspace
     sid = add_session(client, add_model(client))
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "write")
         respond(socket, collect(socket, "prompt")[-1], "allow")
@@ -162,10 +164,10 @@ def test_session_grants_cannot_bypass_permission_policy(workspace, monkeypatch, 
     record["tool_metadata"]["session_approvals"] = {"tools": [name], "edit_paths": [str(target)]}
     app.state.workspace.store.write(record)
     monkeypatch.setattr(
-        "openharness.runtime._resolve_api_client_from_settings",
+        "researchx.runtime._resolve_api_client_from_settings",
         lambda settings: ActionClient((name, arguments)),
     )
-    with client.websocket_connect(f"/api/sessions/{sid}/ws", headers=ORIGIN) as socket:
+    with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         submit(socket, "action")
         events = collect(socket)
@@ -186,7 +188,8 @@ async def test_parallel_calls_reuse_grant_and_ignore_stale_responses(workspace):
     async def send_json(event):
         events.append(event)
 
-    connection = BrowserConnection(SimpleNamespace(send_json=send_json), sid, app.state.workspace)
+    connection = SessionController(sid, app.state.workspace)
+    connection.channel = RecordingChannel(events)
     connection.bundle = SimpleNamespace(engine=SimpleNamespace(tool_metadata={}))
     connection.request_id = "turn"
     tasks = [
@@ -234,7 +237,8 @@ async def test_failed_grant_commit_does_not_authorize_operation(workspace, monke
     async def send_json(event):
         events.append(event)
 
-    connection = BrowserConnection(SimpleNamespace(send_json=send_json), sid, app.state.workspace)
+    connection = SessionController(sid, app.state.workspace)
+    connection.channel = RecordingChannel(events)
     connection.bundle = SimpleNamespace(engine=SimpleNamespace(tool_metadata={}))
     connection.request_id = "turn"
     task = asyncio.create_task(connection.permission("bash", "confirm"))

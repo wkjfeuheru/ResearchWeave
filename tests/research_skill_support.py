@@ -19,7 +19,7 @@ SKILLS = {
 def module(kind, name):
     plugin = SKILLS[kind][0]
     package = "report-generation" if kind == "deep" else "analysis-modeling"
-    return import_module(f"openharness.plugins.bundled.{package}.skills.{plugin}.scripts.{name}")
+    return import_module(f"researchx.plugins.bundled.{package}.skills.{plugin}.scripts.{name}")
 
 
 RESULT_TYPES = {kind: getattr(module(kind, "models"), config[3]) for kind, config in SKILLS.items()}

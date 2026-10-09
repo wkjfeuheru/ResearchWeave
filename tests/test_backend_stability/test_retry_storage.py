@@ -7,14 +7,14 @@ import sqlite3
 
 import pytest
 
-from openharness.api.client import ApiMessageCompleteEvent, ApiMessageRequest, ApiTextDeltaEvent
-from openharness.api.retry import classify_error, stream_with_retry
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import ConversationMessage, ToolUseBlock
-from openharness.services.operations import OperationStore
-from openharness.services.tool_execution import ToolExecutionService
-from openharness.tools.base import ToolResult
-from openharness.tools.contracts import resolve_contract
+from researchx.api.client import ApiMessageCompleteEvent, ApiMessageRequest, ApiTextDeltaEvent
+from researchx.api.retry import classify_error, stream_with_retry
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import ConversationMessage, ToolUseBlock
+from researchx.services.execution.operations import OperationStore
+from researchx.services.execution.tool_execution import ToolExecutionService
+from researchx.tools.base import ToolResult
+from researchx.tools.contracts import resolve_contract
 from tests.test_harness.test_execution import setup, Write
 from tests.test_backend_stability.storage_worker import open_store
 
@@ -153,8 +153,8 @@ def test_provider_structured_code_wins_over_generic_status(code, expected):
 
 
 async def test_full_message_event_limit_discards_partial_and_closes_provider(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr("openharness.api.retry.MAX_BUFFER_BYTES", 1000)
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("researchx.api.retry.MAX_BUFFER_BYTES", 1000)
     records, delivered = [], []
     closed = False
 
@@ -181,9 +181,9 @@ async def test_full_message_event_limit_discards_partial_and_closes_provider(tmp
 
 
 async def test_cancel_still_propagates_when_settlement_audit_is_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
-        "openharness.api.retry._record",
+        "researchx.api.retry._record",
         lambda *args: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
     )
     entered = asyncio.Event()
@@ -220,7 +220,7 @@ def test_schema_initialized_once_with_hot_query_indexes(tmp_path, monkeypatch):
         db.set_trace_callback(statements.append)
         return db
 
-    monkeypatch.setattr("openharness.services.operations.sqlite3.connect", traced)
+    monkeypatch.setattr("researchx.services.execution.operations.sqlite3.connect", traced)
     path = tmp_path / "private/operations.sqlite3"
     first = OperationStore(path)
     statements.clear()

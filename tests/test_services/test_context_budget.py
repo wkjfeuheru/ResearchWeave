@@ -6,34 +6,34 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from openharness.config.context_components import ContextComponentsSettings, COMPONENT_KEYS
-from openharness.config.settings import Settings, save_settings, load_settings
-from openharness.engine.messages import ContextSpan
-from openharness.services.context_sources import ContextSnapshot, runtime_fragments
+from researchx.config.context_components import ContextComponentsSettings, COMPONENT_KEYS
+from researchx.config.settings import Settings, save_settings, load_settings
+from researchx.engine.messages import ContextSpan
+from researchx.services.context.sources import ContextSnapshot, runtime_fragments
 
-from openharness.api.client import ApiMessageRequest, ApiMessageCompleteEvent, AnthropicApiClient
-from openharness.api.openai_client import OpenAICompatibleClient
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageRequest, ApiMessageCompleteEvent, AnthropicApiClient
+from researchx.api.openai_client import OpenAICompatibleClient
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import (
     ConversationMessage as Message,
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
     ImageBlock,
 )
-from openharness.engine.query import QueryContext, run_query
-from openharness.engine.stream_events import ErrorEvent, AssistantTurnComplete
-from openharness.permissions.checker import PermissionChecker
-from openharness.config.settings import PermissionSettings
-from openharness.tools.base import ToolRegistry
-from openharness.services.context_budget import (
+from researchx.engine.query import QueryContext, run_query
+from researchx.engine.stream_events import ErrorEvent, AssistantTurnComplete
+from researchx.permissions.checker import PermissionChecker
+from researchx.config.settings import PermissionSettings
+from researchx.tools.base import ToolRegistry
+from researchx.services.context.budget import (
     ContextBudgetError,
     prepare_request,
     request_budget,
     budget_limits,
 )
-from openharness.services.token_estimation import estimate_tokens
-from openharness.services.compact import (
+from researchx.services.context.token_estimation import estimate_tokens
+from researchx.services.compact import (
     AutoCompactState,
     auto_compact_if_needed,
     compact_conversation,
@@ -46,7 +46,7 @@ MODEL = "claude-sonnet-4-6"
 
 @pytest.fixture(autouse=True)
 def isolated_artifacts(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
 
 
 class Client:
@@ -93,6 +93,25 @@ def test_unknown_window_and_no_input_capacity():
     with pytest.raises(ContextBudgetError, match="没有可用输入"):
         budget(context_window_tokens=4000, max_tokens=4096)
     assert budget_limits("unknown-model", 512, 4000)[0] == 4000
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"],
+)
+def test_deepseek_official_windows_and_explicit_override(model):
+    window, safety, available, trigger, target = budget_limits(model, 16_384)
+    assert window == 1_000_000
+    assert safety == 50_000
+    assert available == 933_616
+    assert 0 < target < trigger < available
+    # A gateway or deployment with a lower limit must retain its explicit setting.
+    assert budget_limits(model, 512, 32_000)[0] == 32_000
+
+
+def test_unregistered_deepseek_alias_requires_explicit_window():
+    with pytest.raises(ContextBudgetError, match="context_window_tokens"):
+        budget_limits("deepseek-flash-custom", 512)
 
 
 def test_manual_threshold_is_clamped_to_hard_limit():
@@ -275,7 +294,7 @@ async def test_snapshot_failure_prevents_summary_call(monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("openharness.services.compact.save_context_snapshot", fail)
+    monkeypatch.setattr("researchx.services.compact.save_context_snapshot", fail)
     client = Client()
     messages = history()
     result, changed = await auto_compact_if_needed(
@@ -387,6 +406,21 @@ async def test_unknown_model_query_errors_without_call(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_deepseek_query_without_explicit_window_preserves_user_input(tmp_path):
+    client = Client("normal answer")
+    ctx = context(tmp_path, client)
+    ctx.model, ctx.context_window_tokens, ctx.max_tokens = "deepseek-flash", None, 16_384
+    prompt = "请分析公司的最新财务表现。"
+    messages = [Message.from_user_text(prompt)]
+    events = [e async for e, _ in run_query(ctx, messages)]
+    assert isinstance(events[-1], AssistantTurnComplete)
+    assert len(client.requests) == 1
+    assert client.requests[0].model == "deepseek-flash"
+    assert client.requests[0].messages[0].text == prompt
+    assert request_budget(client.requests[0]).window == 1_000_000
+
+
+@pytest.mark.asyncio
 async def test_latest_user_round_keeps_entire_tool_chain():
     messages = history()
     for i in range(8):
@@ -427,7 +461,7 @@ async def test_summary_output_reservation_scales_with_window():
 
 @pytest.mark.asyncio
 async def test_timeout_rolls_back_after_real_summary_attempt(monkeypatch):
-    monkeypatch.setattr("openharness.services.compact.COMPACT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("researchx.services.compact.COMPACT_TIMEOUT_SECONDS", 0.01)
 
     class Slow(Client):
         async def stream_message(self, request):
@@ -488,7 +522,7 @@ async def test_image_description_is_counted_before_main_call(tmp_path, monkeypat
         if False:
             yield
 
-    monkeypatch.setattr("openharness.engine.query._preprocess_images_in_messages", convert)
+    monkeypatch.setattr("researchx.engine.query._preprocess_images_in_messages", convert)
     client = Client()
     messages = [Message(role="user", content=[ImageBlock(media_type="image/png", data="abc")])]
     events = [e async for e, _ in run_query(context(tmp_path, client), messages)]
@@ -515,8 +549,8 @@ async def test_runtime_growth_during_summary_rejects_candidate():
 
 
 def test_research_prompt_uses_requested_model_counter(tmp_path, monkeypatch):
-    from openharness.research.store import ResearchStore
-    from openharness.research.errors import ResearchError
+    from researchx.state.store import ResearchStore
+    from researchx.state.errors import ResearchError
 
     store = ResearchStore(tmp_path, "a" * 12)
     seen = []
@@ -525,7 +559,7 @@ def test_research_prompt_uses_requested_model_counter(tmp_path, monkeypatch):
         seen.append(model)
         return 10_000
 
-    monkeypatch.setattr("openharness.research.store.estimate_tokens", count)
+    monkeypatch.setattr("researchx.state.store.estimate_tokens", count)
     with pytest.raises(ResearchError, match="预算"):
         store.prompt(6000, model="requested-model")
     assert seen == ["requested-model"]
@@ -563,7 +597,7 @@ def component_request(messages=None, *, client=None, policy=None, **kwargs):
 
 
 def test_default_component_policy_and_old_settings_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     settings = Settings.model_validate(
         {
             "research_memory": {"injection_budget_tokens": 777},
@@ -631,7 +665,7 @@ def test_schemas_and_provider_system_attribution_are_s_and_wire_unchanged(provid
     elif provider == "openai":
         client = OpenAICompatibleClient(api_key="SECRET")
     else:
-        from openharness.api.codex_client import CodexApiClient
+        from researchx.api.codex_client import CodexApiClient
 
         client = CodexApiClient(auth_token="SECRET")
     req = component_request(
@@ -915,7 +949,7 @@ async def test_memory_disabled_does_not_replay_old_injected_memory(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [False, True])
 async def test_disabled_memory_rejects_stale_recall_from_runtime_provider(tmp_path, structured):
-    from openharness.services.context_sources import tagged_snapshot
+    from researchx.services.context.sources import tagged_snapshot
 
     text = '<research_memory>{"evidence_pool":["stale recall"]}</research_memory>'
     client = Client("answer")
@@ -934,7 +968,7 @@ async def test_disabled_memory_rejects_stale_recall_from_runtime_provider(tmp_pa
 
 def test_tokenizer_import_failure_keeps_conservative_capacity_check(monkeypatch):
     import builtins
-    from openharness.services.token_estimation import _encoding, counting_method
+    from researchx.services.context.token_estimation import _encoding, counting_method
 
     original = builtins.__import__
 
@@ -976,7 +1010,7 @@ def test_invalid_or_overlapping_manifests_fall_back_without_double_counting(span
 
 
 def test_new_snapshot_manifest_round_trip_does_not_change_provider_input():
-    from openharness.services.context_snapshots import save_context_snapshot
+    from researchx.services.context.snapshots import save_context_snapshot
 
     snapshot = ContextSnapshot.join(
         [
@@ -998,7 +1032,7 @@ def test_segment_boundary_positive_difference_is_other_and_never_lowers_wire(mon
     # Force a boundary estimator that penalizes separate text pieces to exercise
     # the conservative branch independently of whichever tokenizer is installed.
     monkeypatch.setattr(
-        "openharness.services.context_budget.estimate_tokens",
+        "researchx.services.context.budget.estimate_tokens",
         lambda text, model="": len(text) + 100 if text else 0,
     )
     snapshot = ContextSnapshot.join(
@@ -1038,8 +1072,8 @@ def test_current_user_id_selects_latest_matching_submission():
 
 
 def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
-    from openharness.prompts.context import build_runtime_prompt
-    from openharness.engine.query_engine import QueryEngine
+    from researchx.prompts.context import build_runtime_prompt
+    from researchx.engine.query_engine import QueryEngine
 
     settings = Settings(fast_mode=True)
     prompt = build_runtime_prompt(settings, cwd=tmp_path)
@@ -1064,8 +1098,8 @@ def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
         for span in snapshot.manifest
         if span.component == "dynamic_context"
     )
-    assert "Plan mode is enabled" in s and "Fast mode is enabled" in s and "Reasoning Settings" in s
-    assert "Plan mode is enabled" not in d
+    assert "当前已启用计划模式" in s and "当前已启用快速模式" in s and "推理设置" in s
+    assert "当前已启用计划模式" not in d
     message = Message.from_user_text("question").model_copy(
         update={"runtime_context": snapshot.text, "runtime_context_manifest": snapshot.manifest}
     )
@@ -1075,7 +1109,7 @@ def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
 
 
 def test_replacing_recall_preserves_other_sources_and_never_duplicates_memory():
-    from openharness.services.context_sources import (
+    from researchx.services.context.sources import (
         combine_snapshots,
         tagged_snapshot,
         refresh_runtime_messages,
@@ -1137,7 +1171,7 @@ def test_every_component_hard_limit_is_enforced(key):
 
 @pytest.mark.asyncio
 async def test_actual_runtime_tool_result_preserves_dynamic_marker(tmp_path):
-    from openharness.tools.base import BaseTool, ToolResult
+    from researchx.tools.base import BaseTool, ToolResult
     from pydantic import BaseModel
 
     class Input(BaseModel):

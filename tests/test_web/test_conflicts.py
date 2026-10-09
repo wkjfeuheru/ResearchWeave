@@ -1,8 +1,8 @@
 """Public conflict progress, crash recovery and privacy at the Web boundary."""
 
-from openharness.research.store import ResearchStore
-from openharness.tools.research_memory_tool import ResearchMemoryTool
-from openharness.web.activity import describe_tool
+from researchx.state.store import ResearchStore
+from researchx.tools.research_memory_tool import ResearchMemoryTool
+from researchx.web.activity import describe_tool
 from tests.test_research.test_conflicts import apply
 from tests.test_web.test_app import add_model, add_session
 

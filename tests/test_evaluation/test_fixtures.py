@@ -5,13 +5,13 @@ import shutil
 
 import pytest
 
-from openharness.evaluation.dataset import DEFAULT_DATASET, load_cases
-from openharness.evaluation.fixtures import FrozenExternalTool, RestrictedPythonTool, FaultTool
-from openharness.evaluation.models import Fault
-from openharness.research.store import ResearchStore
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.bash_tool import BashTool, BashToolInput
-from openharness.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
+from researchx.evaluation.dataset import DEFAULT_DATASET, load_cases
+from researchx.evaluation.fixtures import FrozenExternalTool, RestrictedPythonTool, FaultTool
+from researchx.evaluation.models import Fault
+from researchx.state.store import ResearchStore
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.bash_tool import BashTool, BashToolInput
+from researchx.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
 
 
 @pytest.mark.asyncio
@@ -49,7 +49,7 @@ async def test_real_python_executes_and_cannot_read_gold_or_open_network(tmp_pat
         "python -c 'from pathlib import Path; print(Path(\"../gold.json\").read_text())'",
         "python -c 'import socket; socket.create_connection((\"example.org\", 443))'",
         "cat ../gold.json",
-        "python -m openharness.evaluation.dataset",
+        "python -m researchx.evaluation.dataset",
     ]
     for command in forbidden:
         result = await tool.execute(BashToolInput(command=command), context)
@@ -64,7 +64,7 @@ async def test_real_python_executes_and_cannot_read_gold_or_open_network(tmp_pat
         context,
     )
     assert not exported.is_error
-    from openharness.evaluation.artifacts import read_deliverable
+    from researchx.evaluation.artifacts import read_deliverable
 
     text, metadata = read_deliverable(workspace / "report.docx")
     assert "真实导出报告" in text and metadata["valid"]

@@ -5,20 +5,20 @@ import builtins
 
 import pytest
 
-from openharness.config.settings import Settings
-from openharness.plugins.loader import BUNDLED_PLUGINS_DIR, load_plugins
-from openharness.prompts.context import _build_skills_section
-from openharness.skills.loader import load_skill_registry, load_skills_from_dirs
-from openharness.skills.metadata import cached_content_hash, content_hash
-from openharness.tools.base import ToolExecutionContext, ToolRegistry
-from openharness.tools.file_read_tool import FileReadTool, FileReadToolInput
-from openharness.tools.skill_tool import SkillTool, SkillToolInput
+from researchx.config.settings import Settings
+from researchx.plugins.loader import BUNDLED_PLUGINS_DIR, load_plugins
+from researchx.prompts.context import _build_skills_section
+from researchx.skills.loader import load_skill_registry, load_skills_from_dirs
+from researchx.skills.metadata import cached_content_hash, content_hash
+from researchx.tools.base import ToolExecutionContext, ToolRegistry
+from researchx.tools.file_read_tool import FileReadTool, FileReadToolInput
+from researchx.tools.skill_tool import SkillTool, SkillToolInput
 
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     return tmp_path
 
@@ -151,7 +151,7 @@ async def test_navigation_does_not_execute_and_file_reader_rejects_escape(isolat
 
 
 def test_hash_cache_invalidation_persistence_and_explicit_verification(isolated, monkeypatch):
-    import openharness.skills.metadata as metadata
+    import researchx.skills.metadata as metadata
 
     base = make_skill(isolated / "skills")
     entry = base / "SKILL.md"
@@ -183,7 +183,7 @@ def test_hash_cache_invalidation_persistence_and_explicit_verification(isolated,
 
 
 def test_hash_cache_write_failure_and_read_only_skill_root(isolated, monkeypatch):
-    import openharness.skills.metadata as metadata
+    import researchx.skills.metadata as metadata
 
     base = make_skill(isolated / "skills")
     monkeypatch.setattr(
@@ -238,7 +238,7 @@ async def test_missing_required_tool_checked_before_entry_read(isolated, monkeyp
 def test_all_bundled_metadata_and_relative_resource_links(isolated):
     import re
     import yaml
-    from openharness.skills.resources import resolve_resource
+    from researchx.skills.resources import resolve_resource
 
     fields = {
         "name",
@@ -328,7 +328,7 @@ async def test_selected_resource_access_rechecks_switches_and_workspace_boundary
 
 def test_hash_same_size_write_preserved_mtime_and_corrupt_cache(isolated):
     import os
-    import openharness.skills.metadata as metadata
+    import researchx.skills.metadata as metadata
 
     base = make_skill(isolated / "skills")
     entry = base / "SKILL.md"
@@ -345,9 +345,9 @@ def test_hash_same_size_write_preserved_mtime_and_corrupt_cache(isolated):
 
 
 def test_bundled_shared_report_code_participates_in_hash_invalidation(isolated, monkeypatch):
-    import openharness.skills.metadata as metadata
+    import researchx.skills.metadata as metadata
 
-    app = isolated / "openharness"
+    app = isolated / "researchx"
     bundled = app / "plugins/bundled"
     base = make_skill(bundled / "report-generation/skills", "industry-commentary")
     helper = bundled / "report-generation/reporting.py"

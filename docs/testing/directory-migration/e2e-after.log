@@ -1,0 +1,117 @@
+
+> researchx-web@0.1.0 test:e2e
+> playwright test --output=/tmp/researchx-directory-migration/playwright
+
+[WebServer] INFO:     Started server process [259634]
+[WebServer] INFO:     Waiting for application startup.
+[WebServer] INFO:     Application startup complete.
+[WebServer] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+
+Running 18 tests using 1 worker
+
+(node:259711) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 e2e/skills.spec.ts:3:1 › skill package metadata, selected entry loading and independent switches (14.8s)
+  ✓   2 e2e/workspace.spec.ts:18:1 › report project status and extended task states survive history refresh (1.8s)
+  ✓   3 e2e/workspace.spec.ts:45:3 › conflict outcomes remain visible after tasks complete and history restores: unresolved (2.8s)
+  ✓   4 e2e/workspace.spec.ts:45:3 › conflict outcomes remain visible after tasks complete and history restores: compatible (3.8s)
+  ✓   5 e2e/workspace.spec.ts:69:1 › long collapsed progress and website-only source rows survive refresh and copy (3.5s)
+  ✓   6 e2e/workspace.spec.ts:120:1 › session approvals skip repeated confirmations and remain isolated after refresh (17.2s)
+  ✓   7 e2e/workspace.spec.ts:175:1 › model configuration, skills, streaming, approvals, stop and recovery (18.6s)
+  ✓   8 e2e/workspace.spec.ts:265:1 › responsive navigation and empty skill search (1.3s)
+  ✘   9 e2e/workspace.spec.ts:278:1 › research progress, source footnotes and interrupt to replan (21.6s)
+(node:261211) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  10 e2e/workspace.spec.ts:338:1 › blocked research task stays expanded with its blocker (6.7s)
+  ✓  11 e2e/workspace.spec.ts:371:1 › two levels of process disclosure, final answer and refresh recovery (11.0s)
+  ✓  12 e2e/workspace.spec.ts:404:1 › manual process disclosure survives completion and stopping preserves partial progress (7.6s)
+  ✓  13 e2e/workspace.spec.ts:424:1 › delete confirmation, failure retry, noncurrent and current session cleanup (10.7s)
+  ✓  14 e2e/workspace.spec.ts:465:1 › mobile deletion remains visible and returns to welcome (7.9s)
+  ✓  15 e2e/workspace.spec.ts:481:1 › disconnect marks pending activity interrupted and restores the saved process (5.4s)
+  ✓  16 e2e/workspace.spec.ts:522:1 › new stream content follows the bottom without interrupting reading above (6.1s)
+  ✘  17 e2e/workspace.spec.ts:575:1 › attachments, real script artifacts, download, reload and isolation (9.2s)
+(node:262403) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  18 e2e/workspace.spec.ts:603:1 › first message is delivered when SSE becomes ready before session refresh finishes (4.0s)
+
+
+  1) e2e/workspace.spec.ts:278:1 › research progress, source footnotes and interrupt to replan ─────
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByLabel('研究任务进度')
+    Expected substring: "2/2 项任务完成"
+    Received string:    "公司 B 简要研究1/2 项任务完成收集年报已完成·核验与分析进行中"
+    Timeout: 5000ms
+
+    Call log:
+      - Expect "toContainText" getByLabel('研究任务进度') with timeout 5000ms
+      - waiting for getByLabel('研究任务进度')
+        5 × locator resolved to <div aria-live="polite" aria-label="研究任务进度" class="research-progress">…</div>
+          - unexpected value "公司 B 简要研究0/2 项任务完成·收集年报待执行·核验与分析待执行"
+        3 × locator resolved to <div aria-live="polite" aria-label="研究任务进度" class="research-progress">…</div>
+          - unexpected value "公司 B 简要研究0/2 项任务完成·收集年报进行中·核验与分析待执行"
+        - locator resolved to <div aria-live="polite" aria-label="研究任务进度" class="research-progress">…</div>
+        - unexpected value "公司 B 简要研究1/2 项任务完成收集年报已完成·核验与分析待执行"
+        5 × locator resolved to <div aria-live="polite" aria-label="研究任务进度" class="research-progress">…</div>
+          - unexpected value "公司 B 简要研究1/2 项任务完成收集年报已完成·核验与分析进行中"
+
+
+      326 |   await page.getByRole('button', { name: '打断并修改', exact: true }).click();
+      327 |   await expect(page.getByLabel('研究任务进度')).toContainText('公司 B 简要研究');
+    > 328 |   await expect(page.getByLabel('研究任务进度')).toContainText('2/2 项任务完成');
+          |                                           ^
+      329 |   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+      330 |   await expect(page.locator('.message.user').filter({ hasText: '改为研究公司 B' })).toHaveCount(1);
+      331 |   await page.reload();
+        at /home/jason/pythonproject/OpenHarness/frontend/web/e2e/workspace.spec.ts:328:43
+
+    Error Context: ../../../../../../tmp/researchx-directory-migration/playwright/workspace-research-progres-d9f65-tes-and-interrupt-to-replan/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../../../../tmp/researchx-directory-migration/playwright/workspace-research-progres-d9f65-tes-and-interrupt-to-replan/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../../../../tmp/researchx-directory-migration/playwright/workspace-research-progres-d9f65-tes-and-interrupt-to-replan/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/workspace.spec.ts:575:1 › attachments, real script artifacts, download, reload and isolation 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByRole('button', { name: '停止生成' })
+    Expected: 0
+    Received: 1
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" getByRole('button', { name: '停止生成' }) with timeout 5000ms
+      - waiting for getByRole('button', { name: '停止生成' })
+        14 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+      586 |   await page.getByRole('button', {name:'发送消息', exact:true}).click();
+      587 |   await page.getByRole('dialog', {name:'操作确认'}).getByRole('button', {name:'允许此次操作'}).click();
+    > 588 |   await expect(page.getByRole('button', {name:'停止生成'})).toHaveCount(0);
+          |                                                         ^
+      589 |   await expect(page.getByLabel('研究产物').getByRole('link')).toHaveCount(4);
+      590 |   const response = await page.request.get(await page.getByLabel('研究产物').getByRole('link').filter({hasText:'digest.json'}).getAttribute('href') || '');
+      591 |   expect(response.ok()).toBe(true);
+        at /home/jason/pythonproject/OpenHarness/frontend/web/e2e/workspace.spec.ts:588:57
+
+    Error Context: ../../../../../../tmp/researchx-directory-migration/playwright/workspace-attachments-real-82ad5-wnload-reload-and-isolation/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../../../../../../tmp/researchx-directory-migration/playwright/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+    Usage:
+
+        npx playwright show-trace ../../../../../../tmp/researchx-directory-migration/playwright/workspace-attachments-real-82ad5-wnload-reload-and-isolation/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    e2e/workspace.spec.ts:278:1 › research progress, source footnotes and interrupt to replan ──────
+    e2e/workspace.spec.ts:575:1 › attachments, real script artifacts, download, reload and isolation 
+  16 passed (2.8m)

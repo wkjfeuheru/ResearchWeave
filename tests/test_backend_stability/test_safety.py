@@ -8,20 +8,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openharness.config import Settings
-from openharness.config.settings import save_settings, load_settings
-from openharness.engine.messages import ConversationMessage
-from openharness.api.usage import UsageSnapshot
-from openharness.permissions.modes import PermissionMode
-from openharness.services.operations import OperationStore
-from openharness.services.tool_execution import ToolExecutionService
-from openharness.services.session_storage import save_session_snapshot
-from openharness.skills.loader import load_skills_from_dirs
-from openharness.plugins.loader import discover_plugin_paths, load_plugin
-from openharness.tools.base import ToolExecutionContext
-from openharness.tools.bash_tool import BashTool, BashToolInput
-from openharness.utils.fs import atomic_write_text
-from openharness.utils.session_files import SessionFiles
+from researchx.config import Settings
+from researchx.config.settings import save_settings, load_settings
+from researchx.engine.messages import ConversationMessage
+from researchx.api.usage import UsageSnapshot
+from researchx.permissions.modes import PermissionMode
+from researchx.services.execution.operations import OperationStore
+from researchx.services.execution.tool_execution import ToolExecutionService
+from researchx.services.sessions.storage import save_session_snapshot
+from researchx.skills.loader import load_skills_from_dirs
+from researchx.plugins.loader import discover_plugin_paths, load_plugin
+from researchx.tools.base import ToolExecutionContext
+from researchx.tools.bash_tool import BashTool, BashToolInput
+from researchx.storage.filesystem import atomic_write_text
+from researchx.workspace.session_files import SessionFiles
 from tests.test_harness.test_execution import setup, Write, ledger
 
 
@@ -34,8 +34,8 @@ def mode(path):
     reason="POSIX permission-bit assertions; other platforms document ACL limits",
 )
 def test_private_storage_new_and_existing_modes_do_not_chmod_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "private-data"))
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "private-config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "private-data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "private-config"))
     os.chmod(tmp_path, 0o755)
     normal = tmp_path / "user.txt"
     normal.write_text("ordinary workspace")
@@ -93,7 +93,7 @@ def test_explicit_sensitive_mode_failure_does_not_replace_existing_file(tmp_path
     target = tmp_path / "secret"
     target.write_text("old")
     monkeypatch.setattr(
-        "openharness.utils.fs.os.chmod",
+        "researchx.storage.filesystem.os.chmod",
         lambda *args: (_ for _ in ()).throw(PermissionError("chmod denied")),
     )
     with pytest.raises(PermissionError):
@@ -179,7 +179,7 @@ def test_skill_escape_rejected_before_frontmatter_is_read(tmp_path, monkeypatch,
         (approved / "local").mkdir()
         (approved / "local/SKILL.md").symlink_to(outside / "SKILL.md")
     read = AsyncMock()  # No read-discovery call should happen at all.
-    monkeypatch.setattr("openharness.skills.loader.read_discovery_header", read)
+    monkeypatch.setattr("researchx.skills.loader.read_discovery_header", read)
     assert load_skills_from_dirs([approved]) == [] and read.call_count == 0
 
 
@@ -204,7 +204,7 @@ def test_plugin_discovery_and_manifest_cannot_escape_approved_root(tmp_path, mon
     outside.mkdir()
     (outside / "plugin.json").write_text('{"name":"external"}')
     (approved / "external").symlink_to(outside, target_is_directory=True)
-    monkeypatch.setattr("openharness.plugins.loader.BUNDLED_PLUGINS_DIR", approved)
+    monkeypatch.setattr("researchx.plugins.loader.BUNDLED_PLUGINS_DIR", approved)
     assert outside not in discover_plugin_paths(tmp_path)
     assert not any(p.name == "external" for p in discover_plugin_paths(tmp_path))
     local = approved / "local"
@@ -219,7 +219,7 @@ def test_plugin_discovery_and_manifest_cannot_escape_approved_root(tmp_path, mon
 async def test_default_agent_shell_fails_closed_even_if_metadata_requests_host(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr("openharness.sandbox.adapter.shutil.which", lambda name: None)
+    monkeypatch.setattr("researchx.sandbox.adapter.shutil.which", lambda name: None)
     settings = Settings()
     settings.sandbox.allow_trusted_host = True
     context = ToolExecutionContext(
@@ -231,7 +231,7 @@ async def test_default_agent_shell_fails_closed_even_if_metadata_requests_host(
 
 
 def test_automatic_user_skill_root_alias_does_not_scan_external_content(tmp_path, monkeypatch):
-    from openharness.skills.loader import load_user_skills
+    from researchx.skills.loader import load_user_skills
 
     home, outside = tmp_path / "home", tmp_path / "outside"
     (home / ".agents").mkdir(parents=True)
@@ -239,20 +239,20 @@ def test_automatic_user_skill_root_alias_does_not_scan_external_content(tmp_path
     (outside / "SKILL.md").write_text("# UnapprovedExternal")
     (home / ".agents/skills").symlink_to(outside, target_is_directory=True)
     monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(home / ".openharness"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(home / ".researchx"))
     assert all(skill.name != "UnapprovedExternal" for skill in load_user_skills())
 
 
 async def test_explicit_main_host_mode_is_visible_before_execution(tmp_path, monkeypatch):
-    from openharness.api.client import ApiMessageCompleteEvent
-    from openharness.engine.query_engine import QueryEngine
-    from openharness.engine.messages import ToolUseBlock, TextBlock
-    from openharness.engine.stream_events import StatusEvent, ToolExecutionStarted
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.config.settings import PermissionSettings
-    from openharness.tools.base import ToolRegistry
+    from researchx.api.client import ApiMessageCompleteEvent
+    from researchx.engine.query_engine import QueryEngine
+    from researchx.engine.messages import ToolUseBlock, TextBlock
+    from researchx.engine.stream_events import StatusEvent, ToolExecutionStarted
+    from researchx.permissions.checker import PermissionChecker
+    from researchx.config.settings import PermissionSettings
+    from researchx.tools.base import ToolRegistry
 
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "private-data"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "private-data"))
 
     class Client:
         calls = 0
@@ -299,12 +299,12 @@ async def test_explicit_main_host_mode_is_visible_before_execution(tmp_path, mon
 
 
 async def test_child_does_not_inherit_host_authority(tmp_path):
-    from openharness.engine.query import QueryContext
-    from openharness.engine.subagents import execute_subagent
-    from openharness.permissions.capabilities import CapabilityContext
-    from openharness.permissions.checker import PermissionChecker
-    from openharness.config.settings import PermissionSettings
-    from openharness.tools.base import ToolRegistry
+    from researchx.engine.query import QueryContext
+    from researchx.engine.subagents import execute_subagent
+    from researchx.permissions.capabilities import CapabilityContext
+    from researchx.permissions.checker import PermissionChecker
+    from researchx.config.settings import PermissionSettings
+    from researchx.tools.base import ToolRegistry
 
     captured = []
 
@@ -325,7 +325,7 @@ async def test_child_does_not_inherit_host_authority(tmp_path):
         max_tokens=100,
         capabilities=CapabilityContext(allow_trusted_host=True),
     )
-    with patch("openharness.engine.query.run_query", inspect):
+    with patch("researchx.engine.query.run_query", inspect):
         await execute_subagent(
             parent,
             registry=ToolRegistry(),
@@ -348,11 +348,11 @@ def test_html_search_import_does_not_import_tavily_transport():
 import sys, importlib.abc
 class BlockTavily(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
-        if fullname == 'openharness.utils.tavily_search':
+        if fullname == 'researchx.api.tavily_search':
             raise AssertionError('HTML must import independently of the Tavily transport')
 sys.meta_path.insert(0, BlockTavily())
-import openharness.tools.web_search_tool
-assert 'openharness.utils.tavily_search' not in sys.modules
+import researchx.tools.web_search_tool
+assert 'researchx.api.tavily_search' not in sys.modules
 """
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=20
@@ -361,7 +361,7 @@ assert 'openharness.utils.tavily_search' not in sys.modules
 
 
 def test_private_file_handles_removed_sqlite_sidecar_without_recreating_it(tmp_path, monkeypatch):
-    from openharness.utils.fs import private_file
+    from researchx.storage.filesystem import private_file
 
     sidecar = tmp_path / "operations.sqlite3-wal"
     sidecar.write_text("ephemeral")
@@ -372,7 +372,7 @@ def test_private_file_handles_removed_sqlite_sidecar_without_recreating_it(tmp_p
             sidecar.unlink()
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr("openharness.utils.fs.os.open", removed)
+    monkeypatch.setattr("researchx.storage.filesystem.os.open", removed)
     private_file(sidecar)
     assert not sidecar.exists()
 
@@ -405,11 +405,11 @@ def test_legacy_export_import_is_host_scoped_and_rejects_private_or_stale_data(
     tmp_path, monkeypatch, case
 ):
     import json
-    from openharness.tools.bash_tool import _register_legacy_exports
+    from researchx.tools.bash_tool import _register_legacy_exports
     from tests.test_research.test_conflicts import make_research, apply
 
-    monkeypatch.setenv("OPENHARNESS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     store, evs, _, _ = make_research(tmp_path)
     memory = store.load()
     baseline = (

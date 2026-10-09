@@ -1,4 +1,4 @@
-"""Comprehensive integration tests for all previously untested OpenHarness features.
+"""Comprehensive integration tests for all previously untested ResearchX features.
 
 Run with: python -m pytest tests/test_untested_features.py -v --tb=short -x
 Or standalone: python tests/test_untested_features.py
@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from openharness.config.settings import Settings
+from researchx.config.settings import Settings
 
 
 # ====================================================================
@@ -29,10 +29,10 @@ from openharness.config.settings import Settings
 # ====================================================================
 async def test_hooks_command_block():
     """Register a pre_tool_use command hook that blocks bash, verify it fires."""
-    from openharness.hooks.events import HookEvent
-    from openharness.hooks.loader import HookRegistry
-    from openharness.hooks.schemas import CommandHookDefinition
-    from openharness.hooks.executor import HookExecutor, HookExecutionContext
+    from researchx.hooks.events import HookEvent
+    from researchx.hooks.loader import HookRegistry
+    from researchx.hooks.schemas import CommandHookDefinition
+    from researchx.hooks.executor import HookExecutor, HookExecutionContext
 
     registry = HookRegistry()
     # Hook: run 'echo BLOCKED' when bash is used — block_on_failure means if exit!=0 it blocks
@@ -73,10 +73,10 @@ async def test_hooks_command_block():
 # ====================================================================
 async def test_hooks_post_tool_use():
     """Register a post_tool_use hook that logs tool output, verify it runs."""
-    from openharness.hooks.events import HookEvent
-    from openharness.hooks.loader import HookRegistry
-    from openharness.hooks.schemas import CommandHookDefinition
-    from openharness.hooks.executor import HookExecutor, HookExecutionContext
+    from researchx.hooks.events import HookEvent
+    from researchx.hooks.loader import HookRegistry
+    from researchx.hooks.schemas import CommandHookDefinition
+    from researchx.hooks.executor import HookExecutor, HookExecutionContext
 
     registry = HookRegistry()
     hook = CommandHookDefinition(
@@ -110,8 +110,8 @@ async def test_hooks_post_tool_use():
 # ====================================================================
 async def test_skills_load():
     """Create skill files, load them, verify registry."""
-    from openharness.skills.registry import SkillRegistry
-    from openharness.skills.loader import load_user_skills
+    from researchx.skills.registry import SkillRegistry
+    from researchx.skills.loader import load_user_skills
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create skill files
@@ -133,7 +133,7 @@ Fetch the PR diff, review for bugs, style issues, and security problems.
 """)
 
         # Monkey-patch skills dir
-        import openharness.skills.loader as sl
+        import researchx.skills.loader as sl
 
         orig = sl.get_user_skills_dir
         sl.get_user_skills_dir = lambda: Path(tmpdir)
@@ -166,7 +166,7 @@ Fetch the PR diff, review for bugs, style issues, and security problems.
 # ====================================================================
 async def test_plugins_load():
     """Create a plugin directory, load it, verify manifest and skills."""
-    from openharness.plugins.loader import load_plugin
+    from researchx.plugins.loader import load_plugin
 
     with tempfile.TemporaryDirectory() as tmpdir:
         plugin_dir = Path(tmpdir) / "my-plugin"
@@ -210,14 +210,14 @@ Build and deploy the app to production.
 # ====================================================================
 async def test_session_storage():
     """Test session save/load/list/export cycle."""
-    from openharness.services.session_storage import (
+    from researchx.services.sessions.storage import (
         save_session_snapshot,
         load_session_snapshot,
         list_session_snapshots,
         export_session_markdown,
     )
-    from openharness.engine.messages import ConversationMessage, TextBlock
-    from openharness.api.usage import UsageSnapshot
+    from researchx.engine.messages import ConversationMessage, TextBlock
+    from researchx.api.usage import UsageSnapshot
 
     with tempfile.TemporaryDirectory() as tmpdir:
         messages = [
@@ -272,8 +272,8 @@ async def test_session_storage():
 # ====================================================================
 async def test_config_settings():
     """Test settings loading, env var overrides, and path functions."""
-    from openharness.config.settings import load_settings
-    from openharness.config.paths import (
+    from researchx.config.settings import load_settings
+    from researchx.config.paths import (
         get_config_dir,
         get_sessions_dir,
     )
@@ -317,7 +317,7 @@ async def test_config_settings():
         and s2.verbose is True
         and loaded.model == "custom-model"
         and loaded.research_memory.enabled is True
-        and config_dir.name == ".openharness"
+        and config_dir.name == ".researchx"
     )
 
 
@@ -341,7 +341,7 @@ async def test_config_settings():
 # ====================================================================
 async def test_mcp_types():
     """Test MCP config model validation."""
-    from openharness.mcp.types import McpStdioServerConfig, McpToolInfo, McpConnectionStatus
+    from researchx.mcp.types import McpStdioServerConfig, McpToolInfo, McpConnectionStatus
 
     # Stdio config
     stdio = McpStdioServerConfig(
@@ -370,7 +370,7 @@ async def test_mcp_types():
 # ====================================================================
 async def test_config_paths():
     """Verify all config path functions return sensible paths."""
-    from openharness.config.paths import (
+    from researchx.config.paths import (
         get_config_dir,
         get_config_file_path,
         get_data_dir,
@@ -388,8 +388,8 @@ async def test_config_paths():
     for name, p in paths.items():
         print(f"  {name}: {p}")
 
-    # All should be under ~/.openharness
-    all_under_home = all(".openharness" in str(p) for p in paths.values())
+    # All should be under ~/.researchx
+    all_under_home = all(".researchx" in str(p) for p in paths.values())
     assert all_under_home
 
 

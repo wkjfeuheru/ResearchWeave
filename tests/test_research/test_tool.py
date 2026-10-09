@@ -5,17 +5,17 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from openharness.api.client import ApiMessageCompleteEvent
-from openharness.api.usage import UsageSnapshot
-from openharness.engine.messages import (
+from researchx.api.client import ApiMessageCompleteEvent
+from researchx.api.usage import UsageSnapshot
+from researchx.engine.messages import (
     ConversationMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
 )
-from openharness.research.models import AddEvidence
-from openharness.research.store import ResearchStore
-from openharness.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
+from researchx.state.models import AddEvidence
+from researchx.state.store import ResearchStore
+from researchx.tools.research_memory_tool import ResearchMemoryInput, ResearchMemoryTool
 from tests.test_research.test_engine import engine
 
 
@@ -89,7 +89,7 @@ async def test_engine_commits_empty_note_and_recovers_nonempty_note(tmp_path, ca
                 assert results[-1].is_error
                 assert "verification_note" in results[-1].content
                 assert "accepts:" in results[-1].content
-                assert "No write was committed" in results[-1].content
+                assert "没有提交任何写入" in results[-1].content
                 assert memory.revision == self.rejected_revision
                 assert len(memory.evidence_pool) == 1
             if self.phase < 3:

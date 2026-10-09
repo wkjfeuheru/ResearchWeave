@@ -1,2 +1,0 @@
-Interpreter: /tmp/openharness-ci-next-9p1npvvz/source/.venv/bin/python Canonical command: /tmp/openharness-ci-next-9p1npvvz/source/.venv/bin/python
-42 {'returncode': 0, 'safety_level': 'sandbox'}

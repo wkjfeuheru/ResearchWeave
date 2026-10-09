@@ -11,7 +11,7 @@ def test_authoring_synthetic_cases_preserve_fixture_contract(tmp_path, monkeypat
     root = Path(__file__).resolve().parents[2] / "evals/research_v1"
     monkeypatch.syspath_prepend(str(root))
     spec = importlib.util.spec_from_file_location(
-        "openharness_test_authoring", root / "build_dataset.py"
+        "researchx_test_authoring", root / "build_dataset.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

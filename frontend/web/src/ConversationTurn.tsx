@@ -45,7 +45,7 @@ export default function ConversationTurn({ rows }: { rows: Message[] }) {
   return <article className="message assistant">
     <div className="message-avatar"><BookOpen size={18} /></div>
     <div className="message-body">
-      <div className="message-label">OpenHarness<span>投研助手</span></div>
+      <div className="message-label">ResearchX<span>投研助手</span></div>
       {process.length > 0 && <section className="execution-process" aria-label="执行过程">
         <button type="button" className="process-toggle process-heading" aria-expanded={open} onClick={() => setManualOpen(!open)}>
           {status === 'running' && <LoaderCircle size={14} className="spin" />}<span>执行过程 · {states[status]}</span><ChevronRight size={14} className={open ? 'expanded' : ''} />

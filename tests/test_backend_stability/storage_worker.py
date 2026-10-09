@@ -1,7 +1,7 @@
 """Small spawn target: avoid importing API SDKs just to initialize SQLite."""
 
 import os
-from openharness.services.operations import OperationStore
+from researchx.services.execution.operations import OperationStore
 
 
 def open_store(path, queue):

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from openharness.research.dispatch_audit import dispatch_summaries, read_batch
-from openharness.research.repository import ResearchRepository
-from openharness.research.runtime import ResearchAgentRuntime
-from openharness.research.store import ResearchStore
-from openharness.tools.dispatch_subagents_tool import dispatch_subagents
+from researchx.state.dispatch_audit import dispatch_summaries, read_batch
+from researchx.state.repository import ResearchRepository
+from researchx.state.runtime import ResearchAgentRuntime
+from researchx.state.store import ResearchStore
+from researchx.tools.dispatch_subagents_tool import dispatch_subagents
 from tests.test_research.test_dispatch_subagents import (
     project as project,
     context,
@@ -111,7 +111,7 @@ async def test_recovery_does_not_revoke_live_dispatch(project):
 
 
 async def test_retry_rejects_completed_and_changed_direction(project):
-    from openharness.research.errors import ResearchError
+    from researchx.state.errors import ResearchError
 
     ctx, _ = context(project, ChildModel(fail=("bad",)))
     result = await dispatch_subagents(assignments("ok", "bad"), ctx)
@@ -123,7 +123,7 @@ async def test_retry_rejects_completed_and_changed_direction(project):
 
 
 async def test_live_owner_before_initial_checkpoint_is_not_recovered(project):
-    from openharness.research.dispatch_audit import lifecycle_lock
+    from researchx.state.dispatch_audit import lifecycle_lock
 
     directory = project.store.directory / "dispatches" / ("dispatch_" + "a" * 32)
     before = project.store.load().model_dump()
@@ -135,7 +135,7 @@ async def test_live_owner_before_initial_checkpoint_is_not_recovered(project):
 
 async def test_legacy_audit_is_recovered_and_visible_through_project_tool(project):
     import json
-    from openharness.tools.research.project import ResearchProjectTool, ResearchProjectInput
+    from researchx.tools.research_project_tool import ResearchProjectTool, ResearchProjectInput
 
     identifier = "dispatch_" + "b" * 32
     directory = project.store.directory / "dispatches" / identifier
@@ -179,7 +179,7 @@ async def test_legacy_audit_is_recovered_and_visible_through_project_tool(projec
 
 async def test_unknown_audit_schema_is_not_rewritten(project):
     import json
-    from openharness.research.errors import ResearchError
+    from researchx.state.errors import ResearchError
 
     identifier = "dispatch_" + "c" * 32
     directory = project.store.directory / "dispatches" / identifier

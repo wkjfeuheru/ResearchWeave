@@ -5,13 +5,13 @@ import json
 
 import pytest
 
-from openharness.research.models import Evidence
+from researchx.state.models import Evidence
 from tests.test_web.real_research_eval import Evaluation
 
 
 @pytest.fixture
 def evaluation(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     instance = Evaluation(tmp_path, 8767, None)
     yield instance
     asyncio.run(instance.client.aclose())

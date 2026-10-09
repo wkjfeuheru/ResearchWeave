@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from openharness.engine.query import _execute_tool_call_impl
-from openharness.mcp.client import McpClientManager, McpServerNotConnectedError
-from openharness.mcp.types import McpStdioServerConfig, McpToolInfo
-from openharness.tools.base import BaseTool, ToolRegistry, ToolResult
-from openharness.tools.mcp_tool import McpToolAdapter
-from openharness.tools.retired import RETIRED_TOOL_NAMES
+from researchx.engine.query import _execute_tool_call_impl
+from researchx.mcp.client import McpClientManager, McpServerNotConnectedError
+from researchx.mcp.types import McpStdioServerConfig, McpToolInfo
+from researchx.tools.base import BaseTool, ToolRegistry, ToolResult
+from researchx.tools.mcp_tool import McpToolAdapter
+from researchx.tools.contracts import RETIRED_TOOL_NAMES
 from tests.test_harness.test_execution import setup, ledger
 
 
@@ -102,7 +102,7 @@ async def test_mcp_after_dispatch_uncertain_survives_restart_without_replay(
 async def test_reconciliation_requires_matching_success_artifact_before_reuse(
     tmp_path, monkeypatch
 ):
-    from openharness.engine.messages import ToolResultBlock
+    from researchx.engine.messages import ToolResultBlock
     from pathlib import Path
 
     manager = McpClientManager({"demo": McpStdioServerConfig(command="unused")})
