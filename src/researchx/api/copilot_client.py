@@ -120,7 +120,9 @@ class CopilotClient:
         If a *model* was provided at construction time it overrides the
         model in *request*; otherwise the request model is passed through.
         """
-        patched = request if request.prepared_payload is not None else self.prepare_request(request)
+        patched = (
+            request if request.prepared_payload is not None else (self.prepare_request(request))
+        )
         async for event in self._inner.stream_message(patched):
             yield event
 

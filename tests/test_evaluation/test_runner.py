@@ -120,6 +120,8 @@ async def test_runtime_closes_provider_when_end_hook_fails(monkeypatch):
     provider = Provider()
     bundle = SimpleNamespace(
         cwd="/workspace",
+        session_id="test-close",
+        runtime_id="test-close-runtime",
         api_client=provider,
         mcp_manager=SimpleNamespace(close=no_sandbox),
         hook_executor=SimpleNamespace(execute=failed_hook),

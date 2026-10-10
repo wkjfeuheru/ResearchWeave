@@ -120,8 +120,8 @@ async def test_capture_precedes_output_offload_and_microcompact(tmp_path, monkey
     store = ResearchStore(tmp_path, "a" * 12)
     agent = engine(tmp_path, store, LargeSourceTool())
     _ = [event async for event in agent.submit_message("读取资料")]
-    source = next(source for source in store.load().sources.values() if source.kind == "web")
-    assert len(store.read_source(source)) > 20000
+    source = next(source for source in (await store.load()).sources.values() if source.kind == "web")
+    assert len((await store.read_source(source))) > 20000
     tool_result = next(
         block
         for message in agent.messages
@@ -131,8 +131,8 @@ async def test_capture_precedes_output_offload_and_microcompact(tmp_path, monkey
     assert len(tool_result.content) < 2000
     assert "research_source_specs" not in tool_result.result_metadata
     assert source.id in tool_result.content
-    microcompact_messages(agent.messages, keep_recent=0)
-    assert len(store.read_source(source)) > 20000
+    (await microcompact_messages(agent.messages, keep_recent=0))
+    assert len((await store.read_source(source))) > 20000
 
 
 @pytest.mark.asyncio
@@ -143,9 +143,9 @@ async def test_cancellation_keeps_captured_sources_and_completes_tool_pair(tmp_p
 
     class SlowTool(LargeSourceTool):
         async def execute(self, arguments, context):
-            store.capture(
+            (await store.capture(
                 origin_id="source-call", content="captured before cancellation", is_error=is_error
-            )
+            ))
             captured.set()
             await asyncio.sleep(3600)
 
@@ -165,7 +165,7 @@ async def test_cancellation_keeps_captured_sources_and_completes_tool_pair(tmp_p
     assert isinstance(result, ToolResultBlock) and result.tool_use_id == "source-call"
     assert "Retained research sources" in result.content
     assert (
-        store.read_source(store.load().sources[result.result_metadata["research_sources"][0]])
+        (await store.read_source((await store.load()).sources[result.result_metadata["research_sources"][0]]))
         == "captured before cancellation"
     )
     assert result.is_error is is_error
@@ -174,8 +174,8 @@ async def test_cancellation_keeps_captured_sources_and_completes_tool_pair(tmp_p
 @pytest.mark.asyncio
 async def test_planned_retrieval_requires_committed_active_task(tmp_path):
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
-    user = store.capture(origin_id="user", content="研究行业", kind="user")
-    store.apply(
+    user = (await store.capture(origin_id="user", content="研究行业", kind="user"))
+    (await store.apply(
         {
             "action": "set_context",
             "operation_id": "context",
@@ -183,8 +183,8 @@ async def test_planned_retrieval_requires_committed_active_task(tmp_path):
             "goal": "研究行业",
             "user_source_ids": [user.id],
         }
-    )
-    plan = store.apply(
+    ))
+    plan = (await store.apply(
         {
             "action": "create_plan",
             "operation_id": "plan",
@@ -192,7 +192,7 @@ async def test_planned_retrieval_requires_committed_active_task(tmp_path):
             "title": "研究",
             "tasks": ["采集资料"],
         }
-    )
+    ))
     agent = engine(tmp_path, store, LargeSourceTool())
     _ = [event async for event in agent.submit_message("研究")]
     result = next(
@@ -202,28 +202,28 @@ async def test_planned_retrieval_requires_committed_active_task(tmp_path):
         if isinstance(block, ToolResultBlock)
     )
     assert result.is_error and "in_progress" in result.content
-    assert not any(source.kind == "web" for source in store.load().sources.values())
-    store.apply(
+    assert not any(source.kind == "web" for source in (await store.load()).sources.values())
+    (await store.apply(
         {
             "action": "update_task",
             "operation_id": "start",
-            "expected_revision": store.load().revision,
+            "expected_revision": (await store.load()).revision,
             "task_id": plan["tasks"][0]["id"],
             "status": "in_progress",
         }
-    )
+    ))
     # A new logical request receives a fresh provider call ID, not the rejected operation ID.
     agent = engine(
         tmp_path, store, LargeSourceTool(), OneToolModel(call_id="retrieval-after-task-start")
     )
     _ = [event async for event in agent.submit_message("继续研究")]
-    assert any(source.kind == "web" for source in store.load().sources.values())
+    assert any(source.kind == "web" for source in (await store.load()).sources.values())
 
 
 @pytest.mark.asyncio
 async def test_full_compaction_uses_research_prompt_and_keeps_store(tmp_path):
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
-    source = store.capture(origin_id="report", content="research source")
+    source = (await store.capture(origin_id="report", content="research source"))
     messages = [ConversationMessage.from_user_text(f"资料 {i}") for i in range(16)]
     messages[0].content = [TextBlock(text="历史资料 " * 2000)]
     requests = []
@@ -253,7 +253,7 @@ async def test_full_compaction_uses_research_prompt_and_keeps_store(tmp_path):
     assert "用户目标" in prompt and "Files and Code Sections" not in prompt
     assert any(item.kind == "research_memory" for item in result.attachments)
     assert not any(item.kind == "recent_verified_work" for item in result.attachments)
-    assert store.read_source(store.load().sources[source.id]) == "research source"
+    assert (await store.read_source((await store.load()).sources[source.id])) == "research source"
 
 
 @pytest.mark.asyncio
@@ -292,7 +292,7 @@ async def test_unknown_citations_get_bounded_correction_without_publishing_draft
     from researchx.engine.stream_events import StatusEvent
 
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
-    ev = evidence(store, "公开报告中的营收增长")
+    ev = (await evidence(store, "公开报告中的营收增长"))
 
     class CitationModel:
         def __init__(self):
@@ -316,7 +316,7 @@ async def test_unknown_citations_get_bounded_correction_without_publishing_draft
     assert len(model.requests) == (2 if repairs else 3)
     final = agent.messages[-1]
     assert "来源：" in final.text if repairs else "来源不可核验" in final.text
-    assert len(store.load().answers) == 1
+    assert len((await store.load()).answers) == 1
     assert agent.total_usage.input_tokens == 10 * len(model.requests)
     assert any(isinstance(event, StatusEvent) and event.discard_draft for event in events)
     assert not any(
@@ -354,14 +354,14 @@ async def test_empty_search_specs_do_not_fall_back_to_generic_evidence(tmp_path,
         if isinstance(block, ToolResultBlock)
     )
     assert result.result_metadata["research_sources"] == []
-    assert not any(source.origin_id == "source-call" for source in store.load().sources.values())
+    assert not any(source.origin_id == "source-call" for source in (await store.load()).sources.values())
 
 
 @pytest.mark.asyncio
 async def test_final_verification_is_bounded_to_three_rounds(tmp_path):
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
-    user = store.capture(origin_id="user", content="核验营收", kind="user")
-    store.apply(
+    user = (await store.capture(origin_id="user", content="核验营收", kind="user"))
+    (await store.apply(
         {
             "action": "set_context",
             "operation_id": "context",
@@ -369,8 +369,8 @@ async def test_final_verification_is_bounded_to_three_rounds(tmp_path):
             "goal": "核验营收",
             "user_source_ids": [user.id],
         }
-    )
-    plan = store.apply(
+    ))
+    plan = (await store.apply(
         {
             "action": "create_plan",
             "operation_id": "plan",
@@ -378,9 +378,9 @@ async def test_final_verification_is_bounded_to_three_rounds(tmp_path):
             "title": "核验",
             "tasks": ["核对原文"],
         }
-    )
+    ))
     task_id = plan["tasks"][0]["id"]
-    store.apply(
+    (await store.apply(
         {
             "action": "update_task",
             "operation_id": "start",
@@ -388,33 +388,33 @@ async def test_final_verification_is_bounded_to_three_rounds(tmp_path):
             "task_id": task_id,
             "status": "in_progress",
         }
-    )
-    source = store.capture(
+    ))
+    source = (await store.capture(
         origin_id="full-report",
         content="完整年报披露营收增长",
         kind="web",
         locator="https://example.org/report",
         fragment=False,
-    )
-    item = store.apply(
+    ))
+    item = (await store.apply(
         {
             "action": "add_evidence",
             "operation_id": "evidence",
-            "expected_revision": store.load().revision,
+            "expected_revision": (await store.load()).revision,
             "source_id": source.id,
             "statement": "营收增长",
         }
-    )["evidence_id"]
-    store.apply(
+    ))["evidence_id"]
+    (await store.apply(
         {
             "action": "update_task",
             "operation_id": "complete",
-            "expected_revision": store.load().revision,
+            "expected_revision": (await store.load()).revision,
             "task_id": task_id,
             "status": "completed",
             "completion_note": "已登记完整原文，等待核验",
         }
-    )
+    ))
 
     class UncooperativeModel:
         def __init__(self):

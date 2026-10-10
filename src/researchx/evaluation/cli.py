@@ -255,52 +255,55 @@ def score(
         raise typer.BadParameter("裁判必须与被测模型不同")
 
     async def execute() -> None:
-        from researchx.evaluation.models import RunArtifact
-        from researchx.evaluation.observer import RecordingObserver
-        from researchx.security.redaction import evaluation_credentials
+        from researchx.storage.database import database_lifespan
 
-        cleaner = RecordingObserver(
-            secrets=[settings.resolve_auth().value, *evaluation_credentials()]
-        )
-        for index, artifact in enumerate(artifacts):
-            client = None
-            try:
-                client = _resolve_api_client_from_settings(settings)
-                judgment = await asyncio.wait_for(
-                    judge_case(
-                        cases[artifact.case_id],
-                        artifact,
-                        client,
-                        settings.model,
-                        context_window_tokens=settings.context_window_tokens,
-                    ),
-                    timeout=300,
-                )
-                artifact.judge_results = judgment.model_dump()
-                artifact.scores = score_case(cases[artifact.case_id], artifact, judgment)
-                artifact.provenance["judge_profile"] = judge_profile
-                artifact.provenance.pop("judge_error", None)
-            except Exception as exc:
-                artifact.judge_results = None
-                reason = str(exc) if isinstance(exc, JudgeOutputError) else type(exc).__name__
-                artifact.provenance["judge_error"] = f"裁判未判定：{reason}"
-                artifact.scores = score_case(cases[artifact.case_id], artifact)
-            finally:
-                if client:
-                    try:
-                        close = getattr(client, "close", None)
-                        if close:
-                            await close()
-                    except Exception:
-                        artifact.provenance["judge_close_error"] = "裁判连接关闭失败"
-            artifact = RunArtifact.model_validate(cleaner.clean(artifact.model_dump()))
-            artifacts[index] = artifact
-            write_artifact(
-                results
-                / "results"
-                / f"{artifact.case_id}-r{artifact.repetition}-{artifact.run_id}.json",
-                artifact,
+        async with database_lifespan():
+            from researchx.evaluation.models import RunArtifact
+            from researchx.evaluation.observer import RecordingObserver
+            from researchx.security.redaction import evaluation_credentials
+
+            cleaner = RecordingObserver(
+                secrets=[settings.resolve_auth().value, *evaluation_credentials()]
             )
+            for index, artifact in enumerate(artifacts):
+                client = None
+                try:
+                    client = _resolve_api_client_from_settings(settings)
+                    judgment = await asyncio.wait_for(
+                        judge_case(
+                            cases[artifact.case_id],
+                            artifact,
+                            client,
+                            settings.model,
+                            context_window_tokens=settings.context_window_tokens,
+                        ),
+                        timeout=300,
+                    )
+                    artifact.judge_results = judgment.model_dump()
+                    artifact.scores = score_case(cases[artifact.case_id], artifact, judgment)
+                    artifact.provenance["judge_profile"] = judge_profile
+                    artifact.provenance.pop("judge_error", None)
+                except Exception as exc:
+                    artifact.judge_results = None
+                    reason = str(exc) if isinstance(exc, JudgeOutputError) else type(exc).__name__
+                    artifact.provenance["judge_error"] = f"裁判未判定：{reason}"
+                    artifact.scores = score_case(cases[artifact.case_id], artifact)
+                finally:
+                    if client:
+                        try:
+                            close = getattr(client, "close", None)
+                            if close:
+                                await close()
+                        except Exception:
+                            artifact.provenance["judge_close_error"] = "裁判连接关闭失败"
+                artifact = RunArtifact.model_validate(cleaner.clean(artifact.model_dump()))
+                artifacts[index] = artifact
+                write_artifact(
+                    results
+                    / "results"
+                    / f"{artifact.case_id}-r{artifact.repetition}-{artifact.run_id}.json",
+                    artifact,
+                )
 
     asyncio.run(execute())
     write_report(results, artifacts)

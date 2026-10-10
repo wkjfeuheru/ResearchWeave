@@ -128,9 +128,9 @@ class ResearchProjectTool(BaseTool[ResearchProjectInput]):
             if operation.action == "read":
                 from researchx.state.dispatch_audit import dispatch_summaries
 
-                memory = store.load()
+                memory = await store.load()
                 receipt = {
-                    "dispatches": dispatch_summaries(store.directory, memory.project.id)
+                    "dispatches": (await dispatch_summaries(store, memory.project.id))
                     if memory.project
                     else [],
                     "revision": memory.revision,
@@ -150,7 +150,7 @@ class ResearchProjectTool(BaseTool[ResearchProjectInput]):
                     },
                 }
             elif operation.action == "start":
-                receipt = runtime.start_project(
+                receipt = await runtime.start_project(
                     operation.objective,
                     operation.user_source_ids,
                     operation.expected_revision,
@@ -161,15 +161,15 @@ class ResearchProjectTool(BaseTool[ResearchProjectInput]):
 
                     await stop_docker_sandbox(context.runtime_id)
             elif operation.action == "submit_artifact":
-                receipt = repository.submit_artifact(
+                receipt = await repository.submit_artifact(
                     operation.artifact.model_dump(mode="json"),
                     operation.expected_revision,
                     operation.operation_id,
                 )
             else:
-                project = repository._project(store.load())
+                project = repository._project((await store.load()))
                 if operation.action in {"claim_task", "transition_task"}:
-                    receipt = repository.transition_task(
+                    receipt = await repository.transition_task(
                         operation.task_id,
                         operation.from_status if operation.action == "transition_task" else "ready",
                         operation.to_status
@@ -181,7 +181,7 @@ class ResearchProjectTool(BaseTool[ResearchProjectInput]):
                         operation_id=operation.operation_id,
                     )
                 elif operation.action == "complete_task":
-                    receipt = repository.request_task_completion(
+                    receipt = await repository.request_task_completion(
                         project.id,
                         operation.task_id,
                         operation.expected_revision,
@@ -189,34 +189,34 @@ class ResearchProjectTool(BaseTool[ResearchProjectInput]):
                         operation_id=operation.operation_id,
                     )
                 elif operation.action == "finalize":
-                    receipt = repository.finalize(
+                    receipt = await repository.finalize(
                         project.id, operation.expected_revision, operation_id=operation.operation_id
                     )
                 elif operation.action == "feedback":
-                    receipt = repository.submit_feedback(
+                    receipt = await repository.submit_feedback(
                         project.id,
                         operation.feedback,
                         operation.expected_revision,
                         operation_id=operation.operation_id,
                     )
                 elif operation.action == "resume":
-                    receipt = runtime.resume_project(
+                    receipt = await runtime.resume_project(
                         project.id,
                         expected_revision=operation.expected_revision,
                         operation_id=operation.operation_id,
                     )
                 elif operation.action == "cancel":
-                    receipt = repository.cancel(
+                    receipt = await repository.cancel(
                         project.id,
                         operation.reason,
                         operation.expected_revision,
                         operation_id=operation.operation_id,
                     )
             return ToolResult(
-                output=json.dumps(receipt, ensure_ascii=False),
+                output=json.dumps(receipt, ensure_ascii=False, sort_keys=True),
                 metadata={
                     "context_component": "dynamic_context",
-                    "research_progress": store.progress(),
+                    "research_progress": (await store.progress()),
                     "research_source_specs": [],
                 },
             )

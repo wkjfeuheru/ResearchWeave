@@ -53,7 +53,7 @@ class FileEditTool(BaseTool[FileEditToolInput]):
     async def _edit(
         self, arguments: FileEditToolInput, context: ToolExecutionContext
     ) -> ToolResult:
-        path = context.resolve_path(arguments.path, write=True)
+        path = await context.resolve_path(arguments.path, write=True)
 
         from researchx.sandbox.session import is_docker_sandbox_active
 
@@ -71,7 +71,7 @@ class FileEditTool(BaseTool[FileEditToolInput]):
                 output=f"File not found: {path}", is_error=True, metadata={"no_effect": True}
             )
 
-        with context.file_lock(arguments.path) as path:
+        async with context.file_lock(arguments.path) as path:
             original = path.read_text(encoding="utf-8")
         if arguments.old_str not in original:
             return ToolResult(
@@ -97,7 +97,7 @@ class FileEditTool(BaseTool[FileEditToolInput]):
                     metadata={"no_effect": True},
                 )
             stats = f"  ({_ANSI_GREEN}+{added}{_ANSI_RESET} {_ANSI_RED}-{removed}{_ANSI_RESET})"
-        with context.file_lock(arguments.path, write=True) as path:
+        async with context.file_lock(arguments.path, write=True) as path:
             current = path.read_text(encoding="utf-8")
             if approval_prompt is not None and current != original:
                 return ToolResult(

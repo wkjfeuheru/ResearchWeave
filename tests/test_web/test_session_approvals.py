@@ -42,7 +42,7 @@ def grant_write(socket):
     assert not collect(socket)[-1]["failed"]
 
 
-def test_session_grants_survive_new_turn_model_switch_and_server_recovery(workspace):
+async def test_session_grants_survive_new_turn_model_switch_and_server_recovery(workspace):
     client, app, _, _, cwd = workspace
     profile = add_model(client)
     second_profile = add_model(client, label="Second model")
@@ -53,7 +53,7 @@ def test_session_grants_survive_new_turn_model_switch_and_server_recovery(worksp
         submit(socket, "write", request_id="r2", profile_id=second_profile)
         events = collect(socket)
         assert not events[-1]["failed"] and not any(e["type"] == "prompt" for e in events)
-    saved = app.state.workspace.record(sid)["tool_metadata"]["session_approvals"]
+    saved = (await app.state.workspace.record(sid))["tool_metadata"]["session_approvals"]
     assert saved == {"tools": ["write_file"], "edit_paths": [str(cwd / "note.txt")]}
     assert load_settings().permission.allowed_tools == []
     with TestClient(create_app(str(cwd)), base_url="http://localhost") as recovered:
@@ -71,7 +71,7 @@ def test_session_grants_survive_new_turn_model_switch_and_server_recovery(worksp
             respond(socket, prompt, "deny")
             collect(socket)
         assert (
-            "session_approvals" not in recovered.app.state.workspace.record(other)["tool_metadata"]
+            "session_approvals" not in (await recovered.app.state.workspace.record(other))["tool_metadata"]
         )
 
 
@@ -121,7 +121,7 @@ def test_grant_does_not_authorize_other_tools_or_other_file_reviews(workspace, m
         assert (cwd / "note.txt").read_text() == "original"
 
 
-def test_one_off_permission_does_not_become_a_session_grant(workspace):
+async def test_one_off_permission_does_not_become_a_session_grant(workspace):
     client, app, _, _, _ = workspace
     sid = add_session(client, add_model(client))
     with sse_connect(client, sid, headers=ORIGIN) as socket:
@@ -135,13 +135,13 @@ def test_one_off_permission_does_not_become_a_session_grant(workspace):
         assert prompt["kind"] == "permission"
         respond(socket, prompt, "deny")
         collect(socket)
-    assert "session_approvals" not in app.state.workspace.record(sid)["tool_metadata"]
+    assert "session_approvals" not in (await app.state.workspace.record(sid))["tool_metadata"]
 
 
 @pytest.mark.parametrize(
     "policy", ["denied_tool", "denied_path", "sensitive_path", "denied_command"]
 )
-def test_session_grants_cannot_bypass_permission_policy(workspace, monkeypatch, policy):
+async def test_session_grants_cannot_bypass_permission_policy(workspace, monkeypatch, policy):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
     target = cwd / "blocked.txt"
@@ -160,9 +160,9 @@ def test_session_grants_cannot_bypass_permission_policy(workspace, monkeypatch, 
         if policy == "denied_command"
         else ("write_file", {"path": str(target), "content": "must not write"})
     )
-    record = app.state.workspace.record(sid)
+    record = (await app.state.workspace.record(sid))
     record["tool_metadata"]["session_approvals"] = {"tools": [name], "edit_paths": [str(target)]}
-    app.state.workspace.store.write(record)
+    (await app.state.workspace.store.write(record))
     monkeypatch.setattr(
         "researchx.runtime._resolve_api_client_from_settings",
         lambda settings: ActionClient((name, arguments)),
@@ -206,7 +206,7 @@ async def test_parallel_calls_reuse_grant_and_ignore_stale_responses(workspace):
     connection.respond("turn", prompt["prompt_id"], "allow_session")
     assert await asyncio.gather(*tasks) == [True] * 4
     assert len(events) == 1 and not connection.prompts
-    assert app.state.workspace.record(sid)["tool_metadata"]["session_approvals"] == {
+    assert (await app.state.workspace.record(sid))["tool_metadata"]["session_approvals"] == {
         "tools": ["mcp__finance__income"]
     }
     waiting = [
@@ -254,7 +254,7 @@ async def test_failed_grant_commit_does_not_authorize_operation(workspace, monke
     with pytest.raises(OSError, match="disk full"):
         await task
     assert "session_approvals" not in connection.bundle.engine.tool_metadata
-    assert "session_approvals" not in app.state.workspace.record(sid)["tool_metadata"]
+    assert "session_approvals" not in (await app.state.workspace.record(sid))["tool_metadata"]
     assert not connection.prompts and not connection.prompt_lock.locked()
 
 

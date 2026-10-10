@@ -185,14 +185,14 @@ if __name__ == "__main__":
         progress_fixtures = {}
         original_progress = ResearchStore.progress
 
-        def projected_progress(store, memory=None):
-            return progress_fixtures.get(store.session_id) or original_progress(store, memory)
+        async def projected_progress(store, memory=None):
+            return progress_fixtures.get(store.session_id) or await original_progress(store, memory)
 
         ResearchStore.progress = projected_progress
 
         @app.post("/__test/project-progress/{session_id}")
-        def project_progress(session_id: str, progress: dict):
-            app.state.workspace.record(session_id)
+        async def project_progress(session_id: str, progress: dict):
+            await app.state.workspace.record(session_id)
             progress_fixtures[session_id] = progress
             return {"ok": True}
 
@@ -203,35 +203,37 @@ if __name__ == "__main__":
             return {"ok": True}
 
         @app.post("/__test/citation-layout")
-        def citation_layout(profile_id: str):
+        async def citation_layout(profile_id: str):
             from uuid import uuid4
             from researchx.state.store import ResearchStore
 
-            record = app.state.workspace.store.create(profile_id)
+            record = await app.state.workspace.store.create(profile_id)
             store = ResearchStore(WORKSPACE, record["session_id"])
 
-            def update(action, **fields):
-                return store.apply(
+            async def update(action, **fields):
+                return await store.apply(
                     dict(
                         action=action,
                         operation_id=uuid4().hex,
-                        expected_revision=store.load().revision,
+                        expected_revision=(await store.load()).revision,
                         **fields,
                     )
                 )
 
-            user = store.capture(origin_id="user-layout", kind="user", content="研究光伏行业")
-            update("set_context", goal="光伏研究", user_source_ids=[user.id])
-            update(
-                "create_plan",
-                title="光伏行业景气度与供需变化分析" * 5,
-                tasks=["收集国内新增装机及组件出口月度量价数据" * 4],
+            user = await store.capture(origin_id="user-layout", kind="user", content="研究光伏行业")
+            await update("set_context", goal="光伏研究", user_source_ids=[user.id])
+            (
+                await update(
+                    "create_plan",
+                    title="光伏行业景气度与供需变化分析" * 5,
+                    tasks=["收集国内新增装机及组件出口月度量价数据" * 4],
+                )
             )
-            task = next(iter(store.load().plans.values())).tasks[0]
-            update("update_task", task_id=task.id, status="in_progress")
+            task = next(iter((await store.load()).plans.values())).tasks[0]
+            (await update("update_task", task_id=task.id, status="in_progress"))
             keys = []
             for index, kind in enumerate(["mcp", "web", "tool", "search"]):
-                source = store.capture(
+                source = await store.capture(
                     origin_id=f"source-{index}",
                     kind=kind,
                     title="外部网页资料与光伏行业最新供需数据" * 5
@@ -241,11 +243,13 @@ if __name__ == "__main__":
                     content="资料",
                 )
                 keys.append(
-                    update("add_evidence", source_id=source.id, statement="资料")["evidence_id"]
+                    (await update("add_evidence", source_id=source.id, statement="资料"))[
+                        "evidence_id"
+                    ]
                 )
             raw = "；".join(f"结论{index}[E:{key}]" for index, key in enumerate(keys))
             raw += f"；重复[E:{keys[1]}]"
-            rendered, frozen = store.render_answer(raw, "layout-answer")
+            rendered, frozen = await store.render_answer(raw, "layout-answer")
             record["messages"] = [
                 ConversationMessage(
                     role="assistant", content=[TextBlock(text=rendered)], research_citations=frozen
@@ -261,45 +265,49 @@ if __name__ == "__main__":
                     phase="final",
                 )
             ]
-            app.state.workspace.store.write(record)
+            (await app.state.workspace.store.write(record))
             return {"session_id": record["session_id"]}
 
         @app.post("/__test/conflict-progress")
-        def conflict_progress(profile_id: str, outcome: str = "unresolved"):
+        async def conflict_progress(profile_id: str, outcome: str = "unresolved"):
             from uuid import uuid4
             from researchx.state.store import ResearchStore
 
-            seeded = citation_layout(profile_id)
+            seeded = await citation_layout(profile_id)
             store = ResearchStore(WORKSPACE, seeded["session_id"])
 
-            def update(action, **fields):
-                return store.apply(
+            async def update(action, **fields):
+                return await store.apply(
                     dict(
                         action=action,
                         operation_id=uuid4().hex,
-                        expected_revision=store.load().revision,
+                        expected_revision=(await store.load()).revision,
                         **fields,
                     )
                 )
 
-            evidence_ids = list(store.load().evidence_pool)[:2]
-            step = update(
-                "add_reasoning",
-                evidence_ids=evidence_ids,
-                method="比较两份原始资料",
-                result="数字口径存在分歧",
-                output="需要澄清口径",
+            evidence_ids = list((await store.load()).evidence_pool)[:2]
+            step = (
+                await update(
+                    "add_reasoning",
+                    evidence_ids=evidence_ids,
+                    method="比较两份原始资料",
+                    result="数字口径存在分歧",
+                    output="需要澄清口径",
+                )
             )["step_id"]
-            cid = update(
-                "add_conflict",
-                question="两份公告的营收数字为何不同？",
-                kind="scope",
-                sides=[
-                    dict(statement=f"公告{index}口径", evidence_ids=[key], step_ids=[step])
-                    for index, key in enumerate(evidence_ids)
-                ],
+            cid = (
+                await update(
+                    "add_conflict",
+                    question="两份公告的营收数字为何不同？",
+                    kind="scope",
+                    sides=[
+                        dict(statement=f"公告{index}口径", evidence_ids=[key], step_ids=[step])
+                        for index, key in enumerate(evidence_ids)
+                    ],
+                )
             )["conflict_id"]
-            arbitration, _ = store.begin_investigation(cid)
+            arbitration, _ = await store.begin_investigation(cid)
             report = dict(
                 outcome=outcome,
                 statement="需按公告统计口径分别判断",
@@ -322,17 +330,26 @@ if __name__ == "__main__":
             )
             from researchx.state.models import ArbitrationDecision
 
-            store.finish_investigation(
-                arbitration.id, report=ArbitrationDecision.model_validate(report)
+            (
+                await store.finish_investigation(
+                    arbitration.id, report=ArbitrationDecision.model_validate(report)
+                )
             )
-            update(
-                "resolve_conflict", conflict_id=cid, arbitration_id=arbitration.id, decision=report
+            (
+                await update(
+                    "resolve_conflict",
+                    conflict_id=cid,
+                    arbitration_id=arbitration.id,
+                    decision=report,
+                )
             )
-            update(
-                "update_task",
-                task_id=store.load().research_state.current_task_id,
-                status="completed",
-                completion_note="核查已完成",
+            (
+                await update(
+                    "update_task",
+                    task_id=(await store.load()).research_state.current_task_id,
+                    status="completed",
+                    completion_note="核查已完成",
+                )
             )
             return seeded
 

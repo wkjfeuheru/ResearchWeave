@@ -29,3 +29,10 @@ EXPORTERS = {kind: module(kind, "export_report").export_result for kind in SKILL
 
 def export_result(result, *args, **kwargs):
     return EXPORTERS[result.kind](result, *args, **kwargs)
+
+
+async def export_registered(result, directory, store, task_id=None):
+    from researchx.workspace.exports import export_registered as registered
+    exporter = module(result.kind, "export_report")
+    return await registered(result, directory, store, task_id=task_id,
+                            render_markdown=exporter.render_markdown, sheets=exporter.SHEETS)

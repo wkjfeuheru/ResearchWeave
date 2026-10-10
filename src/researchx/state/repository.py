@@ -29,8 +29,8 @@ from researchx.state.models import (
     now,
 )
 from researchx.state.tasks import PlanPatchValidator, TaskManager, validate_dag
-from researchx.storage.file_lock import exclusive_file_lock
-from researchx.storage.filesystem import atomic_write_text, private_directory
+from collections.abc import Awaitable
+from researchx.storage.filesystem import atomic_write_text
 
 
 class ResearchRepository:
@@ -38,8 +38,8 @@ class ResearchRepository:
         self.store = store
         self.policy = policy or CompletionPolicy()
 
-    def load_project(self, project_id: str) -> ResearchMemory:
-        memory = self.store.load()
+    async def load_project(self, project_id: str) -> ResearchMemory:
+        memory = await self.store.load()
         self._project(memory, project_id)
         return memory
 
@@ -56,12 +56,14 @@ class ResearchRepository:
             raise ResearchError("No current research plan")
         return plan
 
-    def _mutate(
+    async def _mutate(
         self,
         action: str,
         data: dict[str, object],
         expected_revision: int | None,
-        change: Callable[[ResearchMemory], dict[str, object] | None],
+        change: Callable[
+            [ResearchMemory], dict[str, object] | None | Awaitable[dict[str, object] | None]
+        ],
         operation_id: str | None = None,
     ) -> dict[str, object]:
         fingerprint = hashlib.sha256(
@@ -71,8 +73,8 @@ class ResearchRepository:
                 ensure_ascii=False,
             ).encode()
         ).hexdigest()
-        with exclusive_file_lock(self.store.lock):
-            memory = self.store._load()
+        async with self.store.transaction():
+            memory = await self.store._load()
             if operation_id and operation_id in memory.operations:
                 previous = memory.operations[operation_id]
                 if previous["fingerprint"] != fingerprint:
@@ -82,14 +84,18 @@ class ResearchRepository:
                 raise ResearchError(
                     f"Revision conflict: expected {expected_revision}, current {memory.revision}"
                 )
-            result = change(memory) or {}
+            pending = change(memory)
+            if pending is None or isinstance(pending, dict):
+                result = pending or {}
+            else:
+                result = await pending or {}
             receipt = {"revision": memory.revision + 1, **result}
             if operation_id:
                 memory.operations[operation_id] = {"fingerprint": fingerprint, "receipt": receipt}
-            self.store._save(memory, action, {**data, "result": result})
+            (await self.store._save(memory, action, {**data, "result": result}))
             return receipt
 
-    def start(
+    async def start(
         self,
         objective: ResearchObjective,
         user_source_ids: list[str],
@@ -135,7 +141,7 @@ class ResearchRepository:
                 ),
             }
 
-        return self._mutate(
+        return await self._mutate(
             "project_start",
             {"objective": objective.model_dump(mode="json"), "user_source_ids": user_source_ids},
             expected_revision,
@@ -143,10 +149,10 @@ class ResearchRepository:
             operation_id,
         )
 
-    def reserve_planning(self, kind: str) -> dict[str, int]:
+    async def reserve_planning(self, kind: str) -> dict[str, int]:
         """Called by the loop after ordinary permission/hook checks, never by the child."""
-        with exclusive_file_lock(self.store.lock):
-            memory = self.store._load()
+        async with self.store.transaction():
+            memory = await self.store._load()
             project = self._project(memory)
             if project.status in {"suspended", "completed", "failed", "cancelled"}:
                 raise ResearchError(f"Project is {project.status}; resume or revise it explicitly")
@@ -159,21 +165,22 @@ class ResearchRepository:
                 or project.planning_tokens >= project.max_planning_tokens
             ):
                 self.suspend_memory(memory, "Planning budget exhausted")
-                self.store._save(memory, "planning_budget_exhausted", {})
-                raise ResearchError("Planning budget exhausted; project suspended")
-            project.planning_calls += 1
-            project.status = "planning" if kind == "planner" else "replanning"
-            if kind == "replanner":
-                memory.research_state.replan_required = True
-                self.revoke_executions(memory, "Replanning started")
-            self.store._save(memory, "planning_attempt", {"kind": kind})
-            return {
-                "revision": memory.revision,
-                "epoch": project.execution_epoch,
-                "plan_revision": project.plan_revision,
-                "objective_revision": project.objective_revision,
-                "remaining_tokens": project.max_planning_tokens - project.planning_tokens,
-            }
+                (await self.store._save(memory, "planning_budget_exhausted", {}))
+            else:
+                project.planning_calls += 1
+                project.status = "planning" if kind == "planner" else "replanning"
+                if kind == "replanner":
+                    memory.research_state.replan_required = True
+                    self.revoke_executions(memory, "Replanning started")
+                (await self.store._save(memory, "planning_attempt", {"kind": kind}))
+                return {
+                    "revision": memory.revision,
+                    "epoch": project.execution_epoch,
+                    "plan_revision": project.plan_revision,
+                    "objective_revision": project.objective_revision,
+                    "remaining_tokens": project.max_planning_tokens - project.planning_tokens,
+                }
+        raise ResearchError("Planning budget exhausted; project suspended")
 
     @staticmethod
     def revoke_executions(memory: ResearchMemory, reason: str) -> None:
@@ -194,7 +201,7 @@ class ResearchRepository:
         cls.revoke_executions(memory, reason)
         cls._project(memory).status, cls._project(memory).last_error = "suspended", reason
 
-    def suspend(self, reason: str, *, tokens: int = 0) -> dict[str, object]:
+    async def suspend(self, reason: str, *, tokens: int = 0) -> dict[str, object]:
         def change(memory: ResearchMemory) -> dict[str, object]:
             project = self._project(memory)
             project.planning_tokens += tokens
@@ -202,18 +209,20 @@ class ResearchRepository:
                 self.suspend_memory(memory, reason)
             return {"status": project.status, "reason": reason}
 
-        return self._mutate("project_suspend", {"reason": reason, "tokens": tokens}, None, change)
+        return await self._mutate(
+            "project_suspend", {"reason": reason, "tokens": tokens}, None, change
+        )
 
-    def record_planning_rejection(self, reason: str, tokens: int) -> dict[str, object]:
+    async def record_planning_rejection(self, reason: str, tokens: int) -> dict[str, object]:
         def change(memory: ResearchMemory) -> dict[str, object]:
             self._project(memory).planning_tokens += tokens
             return {"committed": False, "reason": reason}
 
-        return self._mutate(
+        return await self._mutate(
             "planning_result_rejected", {"reason": reason, "tokens": tokens}, None, change
         )
 
-    def set_planning_budget(
+    async def set_planning_budget(
         self, project_id: str, *, max_calls: int, max_tokens: int, expected_revision: int
     ) -> dict[str, object]:
         """Trusted host/admin API; deliberately unavailable to model tools."""
@@ -225,14 +234,14 @@ class ResearchRepository:
             project.max_planning_calls, project.max_planning_tokens = max_calls, max_tokens
             return {"max_calls": max_calls, "max_tokens": max_tokens}
 
-        return self._mutate(
+        return await self._mutate(
             "set_planning_budget",
             {"project_id": project_id, "max_calls": max_calls, "max_tokens": max_tokens},
             expected_revision,
             change,
         )
 
-    def resume(
+    async def resume(
         self,
         project_id: str,
         *,
@@ -270,11 +279,11 @@ class ResearchRepository:
                 TaskManager.refresh(plan)
             return {"status": project.status}
 
-        return self._mutate(
+        return await self._mutate(
             "project_resume", {"project_id": project_id}, expected_revision, change, operation_id
         )
 
-    def commit_plan(
+    async def commit_plan(
         self,
         project_id: str,
         proposal: PlanProposal,
@@ -316,11 +325,11 @@ class ResearchRepository:
             project.plan_revision, project.status = 1, "running"
             return {"plan_id": plan.id, "plan_revision": 1, "committed": True}
 
-        return self._mutate(
+        return await self._mutate(
             "commit_plan", proposal.model_dump(mode="json"), expected_revision, change, operation_id
         )
 
-    def apply_plan_patch(
+    async def apply_plan_patch(
         self,
         project_id: str,
         patch: PlanPatch,
@@ -412,15 +421,17 @@ class ResearchRepository:
                 tasks=tasks,
                 supersedes=old.id,
                 rationale=patch.reason,
-                reused_evidence_ids=list(
-                    dict.fromkeys(
-                        old.reused_evidence_ids
-                        + [
-                            key
-                            for key, item in memory.evidence_pool.items()
-                            if (item.plan_id == old.id or key in old.reused_evidence_ids)
-                            if self.policy.evidence_valid(key, memory)
-                        ]
+                reused_evidence_ids=(
+                    list(
+                        dict.fromkeys(
+                            old.reused_evidence_ids
+                            + [
+                                key
+                                for key, item in memory.evidence_pool.items()
+                                if (item.plan_id == old.id or key in old.reused_evidence_ids)
+                                if self.policy.evidence_valid(key, memory)
+                            ]
+                        )
                     )
                 ),
             )
@@ -441,7 +452,7 @@ class ResearchRepository:
                 "stale_artifact_ids": sorted(stale),
             }
 
-        return self._mutate(
+        return await self._mutate(
             "apply_plan_patch",
             patch.model_dump(mode="json"),
             expected_revision,
@@ -449,7 +460,7 @@ class ResearchRepository:
             operation_id,
         )
 
-    def transition_task(
+    async def transition_task(
         self,
         task_id: str,
         from_status: TaskStatus,
@@ -496,7 +507,7 @@ class ResearchRepository:
                 "lease_id": task.lease_id,
             }
 
-        return self._mutate(
+        return await self._mutate(
             "transition_task",
             {
                 "task_id": task_id,
@@ -510,7 +521,7 @@ class ResearchRepository:
             operation_id,
         )
 
-    def begin_execution(self, tool_name: str, tool_use_id: str) -> ExecutionLease:
+    async def begin_execution(self, tool_name: str, tool_use_id: str) -> ExecutionLease:
         def change(memory: ResearchMemory) -> dict[str, object]:
             project = self._project(memory)
             task = TaskManager.get(self._plan(memory), memory.research_state.current_task_id or "")
@@ -532,11 +543,13 @@ class ResearchRepository:
 
         return cast(
             ExecutionLease,
-            self._mutate(
-                "begin_execution",
-                {"tool_name": tool_name, "tool_use_id": tool_use_id},
-                None,
-                change,
+            (
+                await self._mutate(
+                    "begin_execution",
+                    {"tool_name": tool_name, "tool_use_id": tool_use_id},
+                    None,
+                    change,
+                )
             )["execution"],
         )
 
@@ -562,10 +575,10 @@ class ResearchRepository:
             and task.status == "in_progress"
         )
 
-    def commit_execution(
+    async def commit_execution(
         self, execution_id: str, source_specs: list[SourceSpec], *, is_error: bool = False
     ) -> dict[str, object]:
-        def change(memory: ResearchMemory) -> dict[str, object]:
+        async def change(memory: ResearchMemory) -> dict[str, object]:
             execution = memory.executions[execution_id]
             if execution.status in {"committed", "failed"}:
                 if (
@@ -599,7 +612,7 @@ class ResearchRepository:
                 )
                 if source_id in memory.sources:
                     raise ResearchError("Tool call origin already committed")
-                digest, snapshot = self._snapshot(spec["content"])
+                digest, snapshot = await self._snapshot(spec["content"])
                 source = SourceRecord(
                     id=source_id,
                     plan_id=memory.research_state.current_plan_id,
@@ -635,11 +648,11 @@ class ResearchRepository:
                 "plan_revision": execution.plan_revision,
             }
 
-        return self._mutate(
+        return await self._mutate(
             "commit_execution", {"execution_id": execution_id, "is_error": is_error}, None, change
         )
 
-    def cancel_execution(
+    async def cancel_execution(
         self, execution_id: str, note: str = "Execution interrupted"
     ) -> dict[str, object]:
         def change(memory: ResearchMemory) -> dict[str, object]:
@@ -648,28 +661,19 @@ class ResearchRepository:
                 execution.status, execution.note = "cancelled", note
             return {"execution_id": execution_id, "status": execution.status}
 
-        return self._mutate(
+        return await self._mutate(
             "cancel_execution", {"execution_id": execution_id, "note": note}, None, change
         )
 
-    def _snapshot(self, content: str) -> tuple[str, str]:
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        snapshot = f"content/{digest}.txt"
-        path = self.store.directory / snapshot
-        if path.exists():
-            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                raise ResearchError("Snapshot hash mismatch")
-        else:
-            private_directory(path.parent)
-            atomic_write_text(path, content, mode=0o600)
-        return digest, snapshot
+    async def _snapshot(self, content: str) -> tuple[str, str]:
+        return await self.store.write_snapshot(content)
 
-    def submit_artifact(
+    async def submit_artifact(
         self, data: object, expected_revision: int, operation_id: str | None
     ) -> dict[str, object]:
         submission = ArtifactSubmission.model_validate(data)
 
-        def change(memory: ResearchMemory) -> dict[str, object]:
+        async def change(memory: ResearchMemory) -> dict[str, object]:
             project = self._project(memory)
             plan = self._plan(memory)
             task = TaskManager.get(plan, submission.task_id)
@@ -718,7 +722,7 @@ class ResearchRepository:
             criteria = submission.criteria
             if not criteria or not set(criteria) <= set(task.acceptance_criteria):
                 raise ResearchError("Bind artifact to explicit task acceptance criteria")
-            digest, snapshot = self._snapshot(submission.content)
+            digest, snapshot = await self._snapshot(submission.content)
             fields = submission.model_dump(exclude={"content", "criteria"})
             artifact = ResearchArtifact(
                 **fields,
@@ -738,7 +742,7 @@ class ResearchRepository:
                     root = runtime._workspace_path(project)
                     path = runtime._check_path(root, Path("reports") / f"{artifact.id}.md")
                 atomic_write_text(path, submission.content, mode=0o600)
-                manifest = SessionFiles(self.store.directory).register(
+                manifest = await SessionFiles(self.store).register(
                     path,
                     task_id=task.id,
                     status="draft",
@@ -753,7 +757,7 @@ class ResearchRepository:
                 task.criterion_results.setdefault(criterion, []).append(artifact.id)
             return {"artifact_id": artifact.id, "file_id": artifact.file_id, "committed": True}
 
-        return self._mutate(
+        return await self._mutate(
             "submit_artifact",
             submission.model_dump(mode="json"),
             expected_revision,
@@ -761,7 +765,7 @@ class ResearchRepository:
             operation_id,
         )
 
-    def request_task_completion(
+    async def request_task_completion(
         self,
         project_id: str,
         task_id: str,
@@ -770,7 +774,7 @@ class ResearchRepository:
         *,
         operation_id: str | None = None,
     ) -> object:
-        def change(memory: ResearchMemory) -> dict[str, object]:
+        async def change(memory: ResearchMemory) -> dict[str, object]:
             project = self._project(memory, project_id)
             if project.status != "running" or memory.research_state.replan_required:
                 raise ResearchError("Project cannot validate a task in its current state")
@@ -786,7 +790,7 @@ class ResearchRepository:
             ):
                 raise ResearchError("Wait for active task executions to settle before validating")
             TaskManager.transition(task, "in_progress", "validating")
-            result = self.policy.inspect_task(task, ResearchContext(memory, self.store))
+            result = await self.policy.inspect_task(task, ResearchContext(memory, self.store))
             TaskManager.transition(
                 task, "validating", "completed" if result.passed else "in_progress"
             )
@@ -797,24 +801,26 @@ class ResearchRepository:
                 TaskManager.refresh(plan)
             return {"completion": result.model_dump(mode="json"), "status": task.status}
 
-        return self._mutate(
-            "task_completion_check",
-            {"task_id": task_id, "task_revision": task_revision},
-            expected_revision,
-            change,
-            operation_id,
+        return (
+            await self._mutate(
+                "task_completion_check",
+                {"task_id": task_id, "task_revision": task_revision},
+                expected_revision,
+                change,
+                operation_id,
+            )
         )["completion"]
 
-    def finalize(
+    async def finalize(
         self, project_id: str, expected_revision: int, *, operation_id: str | None = None
     ) -> object:
-        def change(memory: ResearchMemory) -> dict[str, object]:
+        async def change(memory: ResearchMemory) -> dict[str, object]:
             project = self._project(memory, project_id)
             if project.status not in {"running", "completed"}:
                 raise ResearchError("Project cannot finalize in its current state")
             plan = self._plan(memory)
             project.status = "validating"
-            result = self.policy.inspect_project(plan, ResearchContext(memory, self.store))
+            result = await self.policy.inspect_project(plan, ResearchContext(memory, self.store))
             project.status = "completed" if result.passed else "running"
             if result.passed:
                 ids = [
@@ -839,22 +845,26 @@ class ResearchRepository:
                 }
             return {"completion": result.model_dump(mode="json"), "status": project.status}
 
-        return self._mutate(
-            "project_completion_check",
-            {"project_id": project_id},
-            expected_revision,
-            change,
-            operation_id,
+        return (
+            await self._mutate(
+                "project_completion_check",
+                {"project_id": project_id},
+                expected_revision,
+                change,
+                operation_id,
+            )
         )["completion"]
 
-    def recover(self) -> None:
+    async def recover(self) -> None:
         from researchx.state.dispatch_audit import recover_dispatches
 
-        memory = self.store.load()
-        if memory.project and recover_dispatches(
-            self.store.directory,
-            memory.project.id,
-            Path(memory.project.workspace_path) if memory.project.workspace_path else None,
+        memory = await self.store.load()
+        if memory.project and (
+            await recover_dispatches(
+                self.store,
+                memory.project.id,
+                Path(memory.project.workspace_path) if memory.project.workspace_path else None,
+            )
         ):
             return  # Never revoke an execution whose dispatch owner still holds its lock.
         if memory.project and (
@@ -863,7 +873,7 @@ class ResearchRepository:
             or memory.project.status in {"planning", "replanning"}
             and memory.project.planning_calls
         ):
-            self.suspend("Process restarted")
+            (await self.suspend("Process restarted"))
 
     @classmethod
     def feedback_memory(cls, memory: ResearchMemory, text: str) -> None:
@@ -882,7 +892,7 @@ class ResearchRepository:
         memory.research_state.replan_required = bool(project.plan_revision)
         project.delivery_manifest = {}
 
-    def submit_feedback(
+    async def submit_feedback(
         self,
         project_id: str,
         feedback: str,
@@ -895,17 +905,17 @@ class ResearchRepository:
 
         def change(memory: ResearchMemory) -> dict[str, object]:
             self._project(memory, project_id)
-            self.feedback_memory(memory, feedback)
+            (self.feedback_memory(memory, feedback))
             return {
                 "objective_revision": self._project(memory).objective_revision,
                 "status": self._project(memory).status,
             }
 
-        return self._mutate(
+        return await self._mutate(
             "project_feedback", {"feedback": feedback}, expected_revision, change, operation_id
         )
 
-    def cancel(
+    async def cancel(
         self,
         project_id: str,
         reason: str,
@@ -926,7 +936,7 @@ class ResearchRepository:
             project.status, project.last_error = "cancelled", reason
             return {"status": project.status}
 
-        return self._mutate(
+        return await self._mutate(
             "project_cancel",
             {"project_id": project_id, "reason": reason},
             expected_revision,

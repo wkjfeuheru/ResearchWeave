@@ -15,6 +15,32 @@ from uuid import uuid4
 from typing import Any, AsyncIterator, Callable
 
 import httpx
+from pathlib import Path
+from contextlib import contextmanager
+from contextvars import ContextVar
+from collections.abc import Iterator
+
+
+_api_scope: ContextVar[tuple[str, str] | None] = ContextVar("researchx_api_scope", default=None)
+
+
+@contextmanager
+def bind_api_audit(cwd: str, session: str) -> Iterator[None]:
+    token = _api_scope.set((cwd, session))
+    try:
+        yield
+    finally:
+        _api_scope.reset(token)
+
+
+def _audit_scope(request: Any) -> tuple[str, str]:
+    scope = _api_scope.get()
+    cwd = getattr(request, "audit_cwd", None)
+    session = getattr(request, "audit_session_id", "service")
+    return (
+        cwd or (scope[0] if scope else str(Path.cwd())),
+        scope[1] if scope and session == "service" else session,
+    )
 
 
 MAX_BUFFER_BYTES = 16 * 1024 * 1024
@@ -131,19 +157,21 @@ async def stream_with_retry(
     for number in range(1, max_attempts + 1):
         attempt_id = uuid4().hex
         started = time.time()
-        from researchx.config.paths import get_data_dir
         from researchx.services.execution.operations import OperationStore
 
-        OperationStore(get_data_dir() / "executions" / "operations.sqlite3").record_api_attempt(
-            {
-                "request_id": request_id,
-                "attempt_id": attempt_id,
-                "attempt": number,
-                "status": "running",
-                "usage_status": "unknown",
-                "usage": None,
-                "started": started,
-            }
+        (
+            await OperationStore(_audit_scope(request)[0]).record_api_attempt(
+                {
+                    "request_id": request_id,
+                    "attempt_id": attempt_id,
+                    "attempt": number,
+                    "status": "running",
+                    "usage_status": "unknown",
+                    "usage": None,
+                    "started": started,
+                },
+                session=_audit_scope(request)[1],
+            )
         )
         buffered: list[Any] = []
         final = None
@@ -186,13 +214,13 @@ async def stream_with_retry(
             }
             if isinstance(exc, asyncio.CancelledError):
                 try:
-                    _record(request, record)
+                    (await _record(request, record))
                 except Exception:
                     logging.getLogger(__name__).error(
                         "Cancellation audit could not settle; running attempt remains unknown"
                     )
                 raise
-            _record(request, record)
+            (await _record(request, record))
             if not isinstance(exc, Exception):
                 raise
             if not retry:
@@ -210,33 +238,38 @@ async def stream_with_retry(
             )
             await asyncio.sleep(delay)
             continue
-        _record(
-            request,
-            {
-                "request_id": request_id,
-                "attempt_id": attempt_id,
-                "attempt": number,
-                "status": "succeeded",
-                "error_category": None,
-                "wait_seconds": 0.0,
-                "usage_status": _usage_status(final),
-                "usage": final.usage.model_dump()
-                if final is not None and _usage_status(final) != "unknown"
-                else None,
-                "started": started,
-                "finished": time.time(),
-            },
+        (
+            await _record(
+                request,
+                {
+                    "request_id": request_id,
+                    "attempt_id": attempt_id,
+                    "attempt": number,
+                    "status": "succeeded",
+                    "error_category": None,
+                    "wait_seconds": 0.0,
+                    "usage_status": _usage_status(final),
+                    "usage": final.usage.model_dump()
+                    if final is not None and _usage_status(final) != "unknown"
+                    else None,
+                    "started": started,
+                    "finished": time.time(),
+                },
+            )
         )
         for event in buffered:
             yield event
         return
 
 
-def _record(request: Any, record: dict[str, Any]) -> None:
-    from researchx.config.paths import get_data_dir
+async def _record(request: Any, record: dict[str, Any]) -> None:
     from researchx.services.execution.operations import OperationStore
 
-    OperationStore(get_data_dir() / "executions" / "operations.sqlite3").record_api_attempt(record)
+    (
+        await OperationStore(_audit_scope(request)[0]).record_api_attempt(
+            record, session=_audit_scope(request)[1]
+        )
+    )
     callback = getattr(request, "attempt_callback", None)
     if callback:
         callback(record)

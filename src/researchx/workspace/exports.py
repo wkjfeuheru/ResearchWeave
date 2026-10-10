@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 from pydantic import BaseModel
-from typing import Any, Iterator, Callable, Iterable
+from typing import Any, Iterator, Callable, Iterable, TYPE_CHECKING, cast
+from contextvars import ContextVar
+
+if TYPE_CHECKING:
+    from researchx.state.store import ResearchStore
 
 import json
 import re
@@ -12,7 +16,11 @@ from pathlib import Path
 from docx import Document
 from openpyxl import Workbook
 from researchx.storage.filesystem import atomic_write_text
-from researchx.workspace.session_files import SessionFiles
+from researchx.engine.metadata import ExecutionLease
+
+_export_memory: ContextVar[dict[str, Any] | None] = ContextVar(
+    "researchx_export_memory", default=None
+)
 
 
 def collect_references(value: object) -> Iterator[dict[str, Any]]:
@@ -43,9 +51,15 @@ class ReportContext:
         for ref in collect_references(data):
             if ref not in self.references:
                 self.references.append(ref)
-        self.memory: dict[str, Any] = {}
-        if session_directory is not None and (session_directory / "state.json").is_file():
-            self.memory = json.loads((session_directory / "state.json").read_text())
+        self.memory = _export_memory.get() or {}
+        if (
+            session_directory is not None
+            and not self.memory
+            and not os.environ.get("RESEARCHX_ISOLATED_EXPORT")
+        ):
+            raise ValueError(
+                "Registered reports require export_registered() with a PostgreSQL research store"
+            )
         for ref in self.references:
             if os.environ.get("RESEARCHX_ISOLATED_EXPORT"):
                 continue  # Candidate IDs are verified by the main agent on the host.
@@ -177,27 +191,72 @@ def export_result(
         sheet.column_dimensions["B"].width = 80
         sheet.column_dimensions["C"].width = 38
     workbook.save(paths[3])
-    artifacts = []
-    import os
-
-    if session_directory is not None and not os.environ.get("RESEARCHX_ISOLATED_EXPORT"):
-        execution = json.loads(os.environ.get("RESEARCHX_RESEARCH_EXECUTION", "null"))
-        if execution and (
-            execution["task_id"] != task_id
-            or Path(os.environ.get("RESEARCHX_RESEARCH_SESSION_DIR", "")).resolve()
-            != session_directory.resolve()
-        ):
-            raise ValueError("Export execution belongs to another task or session")
-        storage = SessionFiles(session_directory)
-        artifacts = [
-            storage.register(
-                path, task_id=task_id, status=data["status"], kind=data["kind"], execution=execution
-            )
-            for path in paths
-        ]
+    artifacts: list[dict[str, object]] = []
     return {
         "status": data["status"],
         "gaps": data["gaps"],
         "files": [str(path) for path in paths],
         "artifacts": artifacts,
     }
+
+
+async def export_registered(
+    result: BaseModel,
+    directory: Path,
+    store: ResearchStore,
+    *,
+    task_id: str | None,
+    render_markdown: Callable[[dict[str, Any], Path | None], str],
+    sheets: Iterable[str],
+    execution: ExecutionLease | None = None,
+) -> dict[str, object]:
+    """Host-only export: a scoped DB view feeds pure renderers; registration shares its transaction."""
+    from researchx.workspace.session_files import SessionFiles
+
+    async with store.transaction():
+        memory = await store._load()
+        if memory.project is not None:
+            from researchx.state.repository import ResearchRepository
+            from researchx.state.runtime import ResearchAgentRuntime
+
+            active = memory.executions.get(execution["id"]) if execution else None
+            if (
+                active is None
+                or not ResearchRepository(store).execution_valid(memory, active)
+                or active.task_id != task_id
+            ):
+                raise ValueError("Export execution was revoked or belongs to another task")
+            if not memory.project.workspace_path:
+                raise ValueError("Project workspace is not initialized")
+            root = Path(memory.project.workspace_path)
+            ResearchAgentRuntime._check_path(root, directory.resolve())
+            if not any(
+                directory.resolve().is_relative_to(root / group)
+                for group in ("reports", "artifacts")
+            ):
+                raise ValueError("Export must belong to current workspace reports/artifacts")
+        token = _export_memory.set(memory.model_dump(mode="json"))
+        try:
+            output = export_result(
+                result,
+                directory,
+                store.directory,
+                task_id=task_id,
+                render_markdown=render_markdown,
+                sheets=sheets,
+            )
+        finally:
+            _export_memory.reset(token)
+        artifacts = []
+        for path in cast(list[str], output["files"]):
+            artifacts.append(
+                await SessionFiles(store).register(
+                    Path(path),
+                    task_id=task_id,
+                    status=str(output["status"]),
+                    kind=str(result.model_dump()["kind"]),
+                    execution=execution,
+                )
+            )
+        output["artifacts"] = artifacts
+        return output

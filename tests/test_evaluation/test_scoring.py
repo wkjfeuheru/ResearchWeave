@@ -104,6 +104,15 @@ def values(scores):
     return {score.name: score.value for score in scores}
 
 
+def statuses(scores):
+    return {score.name: score.status for score in scores}
+
+
+def missing_data_case():
+    """A task that declares deliberate material gaps, so 缺口声明率 applies."""
+    return next(c for c in load_cases() if c.id == "financial-syn-07")
+
+
 def test_correct_number_with_wrong_citation_cannot_pass():
     case = load_cases()[0]
     artifact = run()
@@ -168,6 +177,36 @@ def test_empty_answer_is_failure_not_zero_hallucinations():
     artifact = run("")
     result = values(score_case(load_cases()[0], artifact))
     assert result["task_success"] == 0 and result["unsupported_statement_rate"] is None
+
+
+def test_gap_declaration_credits_acknowledged_limitations():
+    case = missing_data_case()
+    assert any(r.check == "limitation" for r in case.requirements)
+    assert values(score_case(case, run(), judgment(case)))["gap_declaration"] == 1
+
+
+def test_unacknowledged_limitation_fails_gap_declaration():
+    case = missing_data_case()
+    result = judgment(case)
+    result.requirements = [
+        review.model_copy(update={"score": 1}) if review.id == "limitations" else review
+        for review in result.requirements
+    ]
+    assert values(score_case(case, run(), result))["gap_declaration"] == 0
+
+
+def test_gap_declaration_is_not_applicable_without_limitation_requirement():
+    case = load_cases()[0]
+    assert not any(r.check == "limitation" for r in case.requirements)
+    result = score_case(case, run(), judgment(case))
+    assert statuses(result)["gap_declaration"] == "not_applicable"
+    assert values(result)["gap_declaration"] is None
+
+
+def test_gap_declaration_is_unjudged_without_judge():
+    result = score_case(missing_data_case(), run())
+    assert statuses(result)["gap_declaration"] == "unjudged"
+    assert values(result)["gap_declaration"] is None
 
 
 def test_numeric_quote_unit_and_period_are_checked():

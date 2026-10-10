@@ -15,9 +15,10 @@ from openpyxl import load_workbook
 from pypdf import PdfWriter
 from pydantic import ValidationError
 
-from researchx.research.documents import parse_document
-from tests.research_skill_support import FUNCTIONS, RESULT_TYPES, SKILLS, export_result, module
+from researchx.workspace.documents import parse_document
+from tests.research_skill_support import FUNCTIONS, RESULT_TYPES, SKILLS, export_registered, module
 from researchx.workspace.session_files import SessionFiles
+from researchx.state.store import ResearchStore
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "research_skills"
 
@@ -53,7 +54,7 @@ def test_scan_corrupt_encrypted_and_page_limit(tmp_path, monkeypatch):
     path.write_bytes(b"%PDF-1.7\nbroken")
     with pytest.raises(ValueError):
         parse_document(path)
-    monkeypatch.setattr("researchx.research.documents.MAX_DOCUMENT_PAGES", 1)
+    monkeypatch.setattr("researchx.workspace.documents.MAX_DOCUMENT_PAGES", 1)
     with pytest.raises(ValueError, match="1000"):
         parse_document(FIXTURES / "annual-report.pdf")
 
@@ -225,10 +226,10 @@ def test_unknown_values_and_sector_fail_fast():
 
 
 @pytest.mark.parametrize("kind", RESULT_TYPES)
-def test_exports_values_sources_and_session_artifacts(kind, tmp_path):
+async def test_exports_values_sources_and_session_artifacts(kind, tmp_path):
     result = compute(kind)
-    session = tmp_path / "session"
-    exported = export_result(result, tmp_path / "outputs", session, "task1")
+    session = ResearchStore(tmp_path, "a" * 12)
+    exported = await export_registered(result, tmp_path / "outputs", session, "task1")
     assert {Path(path).suffix for path in exported["files"]} == {".md", ".json", ".docx", ".xlsx"}
     data = json.loads((tmp_path / "outputs" / f"{kind}.json").read_text())
     markdown = (tmp_path / "outputs" / f"{kind}.md").read_text()
@@ -247,35 +248,35 @@ def test_exports_values_sources_and_session_artifacts(kind, tmp_path):
         assert row[1] == 1100000
         assert "formulas" in str(list(wb["forecasts"].values))
     files = SessionFiles(session)
-    assert len(files.list("artifacts")) == 4
+    assert len((await files.list("artifacts"))) == 4
     for artifact in exported["artifacts"]:
-        meta, path = files.artifact(artifact["id"])
+        meta, path = (await files.artifact(artifact["id"]))
         assert path.is_file() and meta["task_id"] == "task1"
     with pytest.raises(FileNotFoundError):
-        SessionFiles(tmp_path / "other-session").artifact(exported["artifacts"][0]["id"])
+        (await SessionFiles(ResearchStore(tmp_path, "b" * 12)).artifact(exported["artifacts"][0]["id"]))
 
 
-def test_cross_session_source_ids_rejected_before_export(tmp_path):
+async def test_cross_session_source_ids_rejected_before_export(tmp_path):
     data = fixture("digest")
     data["inputs"][0]["source_id"] = "previous-session-source"
     with pytest.raises(ValueError, match="重新登记"):
-        export_result(compute("digest", data), tmp_path / "out", tmp_path / "session")
+        await export_registered(compute("digest", data), tmp_path / "out", ResearchStore(tmp_path, "a" * 12))
     assert not (tmp_path / "out").exists()
 
 
-def test_attachment_storage_opaque_paths_and_restart(tmp_path):
-    storage = SessionFiles(tmp_path)
-    upload = storage.upload("../annual.pdf", (FIXTURES / "annual-report.pdf").read_bytes())
+async def test_attachment_storage_opaque_paths_and_restart(tmp_path):
+    storage = SessionFiles(ResearchStore(tmp_path, "a" * 12))
+    upload = (await storage.upload("../annual.pdf", (FIXTURES / "annual-report.pdf").read_bytes()))
     assert upload["name"] == "annual.pdf" and upload["status"] == "ready"
-    restarted = SessionFiles(tmp_path)
-    assert restarted.list("attachments") == [upload]
-    assert "parsed.json" in restarted.describe([upload["id"]])
+    restarted = SessionFiles(ResearchStore(tmp_path, "a" * 12))
+    assert (await restarted.list("attachments")) == [upload]
+    assert "parsed.json" in (await restarted.describe([upload["id"]]))
     with pytest.raises(ValueError):
-        storage.attachment("../../etc/passwd")
+        (await storage.attachment("../../etc/passwd"))
     with pytest.raises(ValueError, match="仅支持"):
-        storage.upload("image.png", b"not supported")
-    storage.delete_attachment(upload["id"])
-    assert not restarted.list("attachments")
+        (await storage.upload("image.png", b"not supported"))
+    (await storage.delete_attachment(upload["id"]))
+    assert not (await restarted.list("attachments"))
 
 
 def test_restated_comparative_takes_priority_and_missing_currency_stays_unknown():
@@ -327,13 +328,14 @@ def test_script_json_round_trip_retains_calculated_values(kind):
 
 
 @pytest.mark.parametrize("kind", SKILLS)
-def test_business_and_export_scripts_from_another_cwd(kind, tmp_path):
+async def test_business_and_export_scripts_from_another_cwd(kind, tmp_path):
     script = Path(module(kind, SKILLS[kind][1]).__file__)
     output = tmp_path / "work" / "computed.json"
     env = {
         **os.environ,
         "RESEARCHX_RESEARCH_SESSION_DIR": str(tmp_path / "session"),
         "RESEARCHX_RESEARCH_TASK_ID": "script-task",
+        "RESEARCHX_ISOLATED_EXPORT": "1",
     }
 
     def run(path, *args):
@@ -355,12 +357,16 @@ def test_business_and_export_scripts_from_another_cwd(kind, tmp_path):
         RESULT_TYPES[kind].model_validate_json(output.read_text()).model_dump()
         == compute(kind).model_dump()
     )
-    # Computation saves an intermediate result; exporting registers the four final files.
-    assert not SessionFiles(tmp_path / "session").list("artifacts")
+    # Isolated scripts produce candidates; only the host registers verified final files.
+    assert not (await SessionFiles(ResearchStore(tmp_path, "a" * 12)).list("artifacts"))
     exported = run(
         script.parent / "export_report.py", "--input", output, "--output-dir", tmp_path / "exports"
     )
+    assert len(exported["files"]) == 4 and exported["artifacts"] == []
+    store = ResearchStore(tmp_path, "a" * 12)
+    exported = await export_registered(compute(kind), tmp_path / "exports", store, "script-task")
     assert len(exported["artifacts"]) == 4
+    assert len(await SessionFiles(store).list("artifacts")) == 4
     assert all(item["task_id"] == "script-task" for item in exported["artifacts"])
     assert json.loads((tmp_path / "exports" / f"{kind}.json").read_text()) == json.loads(
         output.read_text()
@@ -417,3 +423,20 @@ def test_copied_plugin_packages_keep_sibling_models_isolated(tmp_path):
         )
         loaded.append(model.__module__)
     assert loaded[0] != loaded[1]
+
+
+def test_isolated_skill_exports_do_not_import_database_stack(tmp_path):
+    script = """
+import importlib.abc
+import sys
+class NoDatabase(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.split('.')[0] in {'sqlalchemy', 'asyncpg', 'alembic'}:
+            raise AssertionError('Sandbox exporters must not import the database stack')
+sys.meta_path.insert(0, NoDatabase())
+from researchx.workspace.exports import export_result, ReportContext
+assert ReportContext({'title': 'candidate'}).memory == {}
+"""
+    result = subprocess.run([sys.executable, "-c", script], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr

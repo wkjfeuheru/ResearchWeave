@@ -84,7 +84,7 @@ def resolve_profile(name: str) -> Settings:
         .model_copy(deep=True, update={"active_profile": name})
         .materialize_active_profile()
     )
-    settings.resolve_auth()  # Fail before any task starts if credentials are missing.
+    (settings.resolve_auth())  # Fail before any task starts if credentials are missing.
     return settings
 
 
@@ -147,6 +147,14 @@ class ExperimentRunner:
     async def run_case(
         self, case: EvalCase, *, repetition: int = 1, run_name: str | None = None
     ) -> RunArtifact:
+        from researchx.storage.database import database_lifespan
+
+        async with database_lifespan():
+            return await self._run_case(case, repetition=repetition, run_name=run_name)
+
+    async def _run_case(
+        self, case: EvalCase, *, repetition: int = 1, run_name: str | None = None
+    ) -> RunArtifact:
         run_id = run_name or uuid4().hex
         workspace = self.output / "workspaces" / f"{case.id}-r{repetition}-{uuid4().hex[:8]}"
         workspace.mkdir(parents=True)
@@ -175,13 +183,13 @@ class ExperimentRunner:
             )
         )
         settings.max_tokens = min(settings.max_tokens, 8192)
-        secrets = [settings.resolve_auth().value]
+        secrets = [(settings.resolve_auth()).value]
         from researchx.security.redaction import memory_credentials, evaluation_credentials
         from researchx.api.tavily_search import tavily_credentials
 
         secrets.extend(memory_credentials() | tavily_credentials() | evaluation_credentials())
         if self.judge_settings:
-            secrets.append(self.judge_settings.resolve_auth().value)
+            secrets.append((self.judge_settings.resolve_auth()).value)
         observer = self.observer_factory(secrets=secrets, budget=case.budget)
         artifact = RunArtifact(
             run_id=run_id,
@@ -260,13 +268,13 @@ class ExperimentRunner:
 
                     current.hook_executor.update_registry(HookRegistry())
                     artifact.provenance["external_hooks"] = "disabled_fixed_environment"
-                skills = load_skill_registry(workspace, settings=settings).list_skills()
+                skills = (load_skill_registry(workspace, settings=settings)).list_skills()
                 # An evaluation explicitly freezes resource provenance once per
                 # case; this verification is separate from L0 registry discovery.
                 from researchx.skills.metadata import content_hash
 
                 roots[:] = [Path(skill.base_dir) for skill in skills if skill.base_dir]
-                configure_tools(current, case, workspace, roots)
+                (configure_tools(current, case, workspace, roots))
                 artifact.provenance.update(
                     {
                         "prompt_hash": fingerprint(current.engine.system_prompt),
@@ -344,7 +352,7 @@ class ExperimentRunner:
                         }:
                             continue
                         await generator.aclose()
-                        bundle.engine.tool_metadata["research_store"].stopped()
+                        (await bundle.engine.tool_metadata["research_store"].stopped())
                         turn_span.update(
                             status="cancelled",
                             metadata={"scripted_interruption": True, "trigger": interrupt_trigger},
@@ -399,12 +407,14 @@ class ExperimentRunner:
                         if turn.action == "steer":
                             store = bundle.engine.tool_metadata["research_store"]
                             request_id = uuid4().hex
-                            store.interrupt(
-                                request_id=request_id,
-                                target_request_id="evaluation",
-                                text=turn.prompt,
+                            (
+                                await store.interrupt(
+                                    request_id=request_id,
+                                    target_request_id="evaluation",
+                                    text=turn.prompt,
+                                )
                             )
-                            store.require_replan(request_id)
+                            (await store.require_replan(request_id))
                         await execute_turn(
                             turn,
                             interrupt=interrupt,
@@ -455,7 +465,7 @@ class ExperimentRunner:
                 artifact.upload_status = "failed" if observer.export_failed else "pending"
             if bundle:
                 try:
-                    self.capture_result(bundle, workspace, artifact, observer)
+                    (await self.capture_result(bundle, workspace, artifact, observer))
                 except Exception as exc:
                     artifact.provenance["capture_error"] = type(exc).__name__
                     artifact.status = "failed"
@@ -471,12 +481,14 @@ class ExperimentRunner:
             try:
                 judge_client = self.client_factory(self.judge_settings)
                 judgment = await asyncio.wait_for(
-                    judge_case(
-                        case,
-                        artifact,
-                        judge_client,
-                        self.judge_settings.model,
-                        context_window_tokens=self.judge_settings.context_window_tokens,
+                    (
+                        judge_case(
+                            case,
+                            artifact,
+                            judge_client,
+                            self.judge_settings.model,
+                            context_window_tokens=self.judge_settings.context_window_tokens,
+                        )
                     ),
                     timeout=300,
                 )
@@ -500,20 +512,20 @@ class ExperimentRunner:
         return artifact
 
     @staticmethod
-    def capture_result(
+    async def capture_result(
         bundle: RuntimeBundle, workspace: Path, artifact: RunArtifact, observer: RecordingObserver
     ) -> None:
         store = bundle.engine.tool_metadata["research_store"]
-        state = store.load()
+        state = await store.load()
         artifact.research_state = observer.clean(state.model_dump(mode="json"))
         for key, source in state.sources.items():
             try:
-                artifact.sources[key] = observer.clean(store.read_source(source))
+                artifact.sources[key] = observer.clean((await store.read_source(source)))
             except (ValueError, OSError):
                 artifact.provenance.setdefault("missing_sources", []).append(key)
         from researchx.workspace.session_files import SessionFiles
 
-        files = SessionFiles(store.directory)
+        files = SessionFiles(store)
         paths = {}
         for path in workspace.rglob("*"):
             if (
@@ -524,9 +536,9 @@ class ExperimentRunner:
                 and not path.is_relative_to(workspace / ".researchx")
             ):
                 paths[str(path.relative_to(workspace))] = (path, False)
-        for item in files.list("artifacts"):
+        for item in await files.list("artifacts"):
             try:
-                _, path = files.artifact(item["id"])
+                _, path = await files.artifact(item["id"])
                 paths[item["name"]] = (path, True)
             except (ValueError, OSError, KeyError):
                 artifact.provenance.setdefault("invalid_artifacts", []).append(item["id"])

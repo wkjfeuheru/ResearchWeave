@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 from pydantic import Field, field_validator
-from researchx.research.contracts import Claim, Contract, Reference
-from researchx.research.exports import ReportContext, export_result
+from researchx.contracts import Claim, Contract, Reference
+from researchx.workspace.exports import ReportContext, export_result
 
 SECTIONS = {
     "financial-commentary": {

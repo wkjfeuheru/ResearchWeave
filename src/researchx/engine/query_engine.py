@@ -121,9 +121,9 @@ class QueryEngine:
         return self._system_prompt
 
     @property
-    def runtime_context(self) -> str | None:
+    async def runtime_context(self) -> str | None:
         """Return current hidden runtime state for diagnostics."""
-        return self._current_runtime_context()
+        return await self._current_runtime_context()
 
     @property
     def tool_metadata(self) -> ExecutionMetadata:
@@ -172,10 +172,10 @@ class QueryEngine:
         if runtime:
             runtime.permission_checker = checker
 
-    def _current_runtime_context(self) -> str | None:
-        return self._current_runtime_snapshot().text or None
+    async def _current_runtime_context(self) -> str | None:
+        return (await self._current_runtime_snapshot()).text or None
 
-    def _current_runtime_snapshot(self) -> ContextSnapshot:
+    async def _current_runtime_snapshot(self) -> ContextSnapshot:
         """Refresh only mutable loop state; query-specific memory stays snapshotted."""
         from researchx.state.runtime import ResearchAgentRuntime
         from researchx.services.context.sources import (
@@ -249,7 +249,7 @@ class QueryEngine:
                             deferrable=deferrable,
                         )
                     )
-        return compose_research_context(
+        return await compose_research_context(
             ContextSnapshot(text, manifest or []),
             store=self._tool_metadata.get("research_store"),
             runtime=self._tool_metadata.get("research_runtime"),
@@ -266,16 +266,16 @@ class QueryEngine:
     def restore_usage(self, usage: dict[str, object] | UsageSnapshot | None) -> None:
         self._cost_tracker = CostTracker(UsageSnapshot.model_validate(usage or {}))
 
-    def load_messages(
+    async def load_messages(
         self, messages: list[ConversationMessage], *, preserve_runtime_context: bool = False
     ) -> None:
         """Replace the in-memory conversation history."""
-        snapshot = self._current_runtime_snapshot() if preserve_runtime_context else None
+        snapshot = (await self._current_runtime_snapshot()) if preserve_runtime_context else None
         previous = snapshot.text if snapshot else None
         from researchx.services.execution.tool_execution import recover_messages
 
-        self._messages = recover_messages(
-            list(messages), self._tool_metadata, self._cwd, self._execution_session_id
+        self._messages = await recover_messages(
+            (list(messages)), self._tool_metadata, self._cwd, self._execution_session_id
         )
         latest = next((m.runtime_context for m in reversed(messages) if m.runtime_context), None)
         if previous and latest != previous:
@@ -315,6 +315,18 @@ class QueryEngine:
     async def submit_message(
         self, prompt: str | ConversationMessage
     ) -> AsyncGenerator[StreamEvent, None]:
+        from researchx.api.retry import bind_api_audit
+        from contextlib import aclosing
+
+        session = self._tool_metadata.get("session_id") or self._execution_session_id
+        with bind_api_audit(str(self._cwd), session):
+            async with aclosing(self._submit_message(prompt)) as stream:
+                async for event in stream:
+                    yield event
+
+    async def _submit_message(
+        self, prompt: str | ConversationMessage
+    ) -> AsyncGenerator[StreamEvent, None]:
         """Append a user message and execute the query loop."""
         user_message = (
             prompt
@@ -327,7 +339,7 @@ class QueryEngine:
 
             origin = user_message.message_id or new_id("msg")
             user_message = user_message.model_copy(update={"message_id": origin})
-            source = store.capture(
+            source = await store.capture(
                 origin_id=origin,
                 content=user_message.text,
                 kind="user",
@@ -347,7 +359,7 @@ class QueryEngine:
         )
         self._messages.append(user_message)
         try:
-            snapshot = self._current_runtime_snapshot()
+            snapshot = await self._current_runtime_snapshot()
         except ValueError as exc:
             from researchx.engine.stream_events import ErrorEvent
 
@@ -403,7 +415,7 @@ class QueryEngine:
             if self._settings
             else True,
         )
-        stream = self._run_context(context, list(self._messages))
+        stream = self._run_context(context, (list(self._messages)))
         try:
             async for event in stream:
                 yield event
@@ -415,16 +427,16 @@ class QueryEngine:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Apply identical accounting, citations and cancellation to new and resumed loops."""
         store = self._tool_metadata.get("research_store")
-        stream = cast(AsyncGenerator[Any, None], run_query(context, query_messages))
+        stream = cast(AsyncGenerator[Any, None], (run_query(context, query_messages)))
         try:
             async for event, usage in stream:
                 if isinstance(event, AssistantTurnComplete):
                     if store is not None and not event.message.tool_uses:
                         from researchx.state.models import new_id
 
-                        warning = store.completion_warning()
+                        warning = await store.completion_warning()
                         text = event.message.text + (f"\n\n{warning}" if warning else "")
-                        rendered, answer = store.render_answer(text, new_id("answer"))
+                        rendered, answer = await store.render_answer(text, new_id("answer"))
                         updated = event.message.model_copy(
                             update={
                                 "content": [TextBlock(text=rendered)],
@@ -440,7 +452,7 @@ class QueryEngine:
         except asyncio.CancelledError:
             runtime = self._tool_metadata.get("research_runtime")
             if runtime:
-                memory = runtime.store.load()
+                memory = await runtime.store.load()
                 if memory.project and memory.project.status not in {
                     "suspended",
                     "replanning",
@@ -448,27 +460,27 @@ class QueryEngine:
                     "failed",
                     "cancelled",
                 }:
-                    runtime.repository.suspend("Execution interrupted")
+                    (await runtime.repository.suspend("Execution interrupted"))
             raise
         finally:
             await stream.aclose()
             from researchx.services.execution.tool_execution import recover_messages
 
-            query_messages[:] = recover_messages(
+            query_messages[:] = await recover_messages(
                 query_messages, self._tool_metadata, self._cwd, self._execution_session_id
             )
             if store is not None:
-                self._complete_interrupted_research_tools(query_messages, store)
+                (await self._complete_interrupted_research_tools(query_messages, store))
             self._messages = list(query_messages)
 
     @staticmethod
-    def _complete_interrupted_research_tools(
+    async def _complete_interrupted_research_tools(
         messages: list[ConversationMessage], store: ResearchStore
     ) -> None:
         """Preserve pending tool calls with explicit results across a cancellation boundary."""
         if not messages or not messages[-1].tool_uses:
             return
-        memory = store.load()
+        memory = await store.load()
         results = []
         for call in messages[-1].tool_uses:
             sources = [source for source in memory.sources.values() if source.origin_id == call.id]
@@ -493,6 +505,18 @@ class QueryEngine:
         messages.append(ConversationMessage(role="user", content=[block for block in results]))
 
     async def continue_pending(
+        self, *, max_turns: int | None = None
+    ) -> AsyncGenerator[StreamEvent, None]:
+        from researchx.api.retry import bind_api_audit
+        from contextlib import aclosing
+
+        session = self._tool_metadata.get("session_id") or self._execution_session_id
+        with bind_api_audit(str(self._cwd), session):
+            async with aclosing(self._continue_pending(max_turns=max_turns)) as stream:
+                async for event in stream:
+                    yield event
+
+    async def _continue_pending(
         self, *, max_turns: int | None = None
     ) -> AsyncGenerator[StreamEvent, None]:
         """Continue an interrupted tool loop without appending a new user message."""
@@ -539,7 +563,7 @@ class QueryEngine:
             if self._settings
             else True,
         )
-        stream = self._run_context(context, list(self._messages))
+        stream = self._run_context(context, (list(self._messages)))
         try:
             async for event in stream:
                 yield event

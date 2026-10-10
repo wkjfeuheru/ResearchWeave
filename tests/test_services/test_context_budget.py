@@ -219,10 +219,10 @@ def tool_history():
     return messages
 
 
-def test_microcompact_preserves_original_metadata_and_readable_artifacts():
+async def test_microcompact_preserves_original_metadata_and_readable_artifacts():
     messages = tool_history()
     original = [m.model_dump() for m in messages]
-    candidate, saved = microcompact_messages(messages)
+    candidate, saved = (await microcompact_messages(messages))
     assert saved > 0
     block = candidate[1].content[0]
     assert block.is_error and block.tool_use_id == "t0"
@@ -548,7 +548,7 @@ async def test_runtime_growth_during_summary_rejects_candidate():
     assert [m.model_dump() for m in messages] == original
 
 
-def test_research_prompt_uses_requested_model_counter(tmp_path, monkeypatch):
+async def test_research_prompt_uses_requested_model_counter(tmp_path, monkeypatch):
     from researchx.state.store import ResearchStore
     from researchx.state.errors import ResearchError
 
@@ -561,7 +561,7 @@ def test_research_prompt_uses_requested_model_counter(tmp_path, monkeypatch):
 
     monkeypatch.setattr("researchx.state.store.estimate_tokens", count)
     with pytest.raises(ResearchError, match="预算"):
-        store.prompt(6000, model="requested-model")
+        (await store.prompt(6000, model="requested-model"))
     assert seen == ["requested-model"]
 
 
@@ -1009,7 +1009,7 @@ def test_invalid_or_overlapping_manifests_fall_back_without_double_counting(span
     assert sum(result.component_tokens.values()) == result.input_tokens
 
 
-def test_new_snapshot_manifest_round_trip_does_not_change_provider_input():
+async def test_new_snapshot_manifest_round_trip_does_not_change_provider_input():
     from researchx.services.context.snapshots import save_context_snapshot
 
     snapshot = ContextSnapshot.join(
@@ -1021,7 +1021,7 @@ def test_new_snapshot_manifest_round_trip_does_not_change_provider_input():
     message = Message.from_user_text("actual user").model_copy(
         update={"runtime_context": snapshot.text, "runtime_context_manifest": snapshot.manifest}
     )
-    path = save_context_snapshot([message])
+    path = (await save_context_snapshot([message]))
     restored = Message.model_validate(json.loads(path.read_text())["messages"][0])
     assert restored.runtime_context_manifest == message.runtime_context_manifest
     assert restored.to_api_param() == message.to_api_param()
@@ -1071,7 +1071,7 @@ def test_current_user_id_selects_latest_matching_submission():
     )
 
 
-def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
+async def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
     from researchx.prompts.context import build_runtime_prompt
     from researchx.engine.query_engine import QueryEngine
 
@@ -1087,7 +1087,7 @@ def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
         settings=settings,
         tool_metadata={"permission_mode": "plan"},
     )
-    snapshot = engine._current_runtime_snapshot()
+    snapshot = (await engine._current_runtime_snapshot())
     s = "".join(
         snapshot.text[span.start : span.end]
         for span in snapshot.manifest

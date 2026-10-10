@@ -8,7 +8,7 @@ import json
 import logging
 import time
 import math
-import sqlite3
+from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeoutError
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
@@ -22,7 +22,8 @@ from researchx.tools.base import ToolExecutionContext, ToolResult
 from researchx.tools.contracts import resolve_contract
 from researchx.state.source_specs import SourceSpec
 from researchx.services.execution.operations import OperationStore
-from researchx.storage.filesystem import atomic_write_text, private_directory
+from researchx.storage.content import persist_object, read_object
+from researchx.storage.database import current_database
 from researchx.config.paths import get_data_dir
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ async def _execute_impl(
 
     store = (context.tool_metadata or {}).get("research_store")
     runtime = (context.tool_metadata or {}).get("research_runtime")
-    project_mode = store is not None and store.load().project is not None
+    project_mode = store is not None and (await store.load()).project is not None
     if project_mode:
         assert store is not None
         if runtime is None:
@@ -98,7 +99,7 @@ async def _execute_impl(
     tool_cwd = context.cwd
     if project_mode:
         assert runtime is not None and store is not None
-        tool_cwd = runtime._workspace_path(runtime.repository._project(store.load()))
+        tool_cwd = runtime._workspace_path(runtime.repository._project((await store.load())))
     _file_path = _resolve_permission_file_path(tool_cwd, tool_input, parsed_input)
     if _file_path and (project_mode or (context.tool_metadata or {}).get("subagent_child")):
         boundary = ToolExecutionContext(
@@ -118,7 +119,7 @@ async def _execute_impl(
                 ),
                 _file_path,
             )
-            boundary.resolve_path(raw_path, write=not tool.is_read_only(parsed_input))
+            (await boundary.resolve_path(raw_path, write=not tool.is_read_only(parsed_input)))
         except (ValueError, OSError, RuntimeError) as exc:
             return ToolResultBlock(
                 tool_use_id=tool_use_id,
@@ -187,7 +188,7 @@ async def _execute_impl(
             from researchx.sandbox.policy import ExecutionOwner, report_settings
 
             assert runtime is not None and store is not None
-            project = runtime.repository._project(store.load())
+            project = runtime.repository._project((await store.load()))
             settings = report_settings(settings or Settings(), tool_cwd)
             owner = ExecutionOwner(
                 runtime_id=(context.tool_metadata or {}).get("runtime_id")
@@ -212,13 +213,13 @@ async def _execute_impl(
         return replay
     if project_mode:
         assert runtime is not None
-        defect = runtime.guard_tool(tool_name, tool_input)
+        defect = await runtime.guard_tool(tool_name, tool_input)
         if defect:
             return ToolResultBlock(tool_use_id=tool_use_id, content=defect, is_error=True)
     if (
         store is not None
         and not project_mode
-        and store.load().research_state.replan_required
+        and (await store.load()).research_state.replan_required
         and tool_name not in {"research_memory", "ask_user_question", "skill"}
     ):
         return ToolResultBlock(
@@ -231,7 +232,7 @@ async def _execute_impl(
         and not project_mode
         and tool_name not in {"research_memory", "ask_user_question", "skill"}
     ):
-        memory = store.load()
+        memory = await store.load()
         plan = memory.plans.get(memory.research_state.current_plan_id or "")
         if plan and not memory.research_state.current_task_id:
             return ToolResultBlock(
@@ -271,11 +272,14 @@ async def _execute_impl(
         from researchx.state.errors import ResearchError
 
         try:
-            runtime.resolve_workspace(runtime.repository._project(store.load()).id)
+            (await runtime.resolve_workspace(runtime.repository._project((await store.load())).id))
             if tool_name in PLANNING_TOOLS:
-                baseline = runtime.repository.reserve_planning(tool_name)
-            elif tool_name not in CONTROL_TOOLS and store.load().research_state.current_task_id:
-                execution = runtime.repository.begin_execution(tool_name, tool_use_id)
+                baseline = await runtime.repository.reserve_planning(tool_name)
+            elif (
+                tool_name not in CONTROL_TOOLS
+                and (await store.load()).research_state.current_task_id
+            ):
+                execution = await runtime.repository.begin_execution(tool_name, tool_use_id)
         except ResearchError as exc:
             return ToolResultBlock(tool_use_id=tool_use_id, content=str(exc), is_error=True)
     try:
@@ -304,10 +308,10 @@ async def _execute_impl(
     except BaseException:
         if execution:
             assert runtime is not None
-            runtime.repository.cancel_execution(execution["id"])
+            (await runtime.repository.cancel_execution(execution["id"]))
         if baseline:
             assert runtime is not None
-            runtime.repository.suspend("Planning execution interrupted")
+            (await runtime.repository.suspend("Planning execution interrupted"))
         raise
     if baseline:
         assert runtime is not None
@@ -345,14 +349,18 @@ async def _execute_impl(
 
             rejection = "Late tool result discarded: execution/plan/task revision was revoked"
             try:
-                receipt = runtime.repository.commit_execution(
+                receipt = await runtime.repository.commit_execution(
                     execution["id"], source_specs, is_error=result.is_error
                 )
             except (ResearchError, ValueError, KeyError, TypeError) as exc:
                 rejection = (
                     f"Tool result rejected: invalid provenance or schema ({type(exc).__name__})"
                 )
-                runtime.repository.cancel_execution(execution["id"], f"Invalid tool result: {exc}")
+                (
+                    await runtime.repository.cancel_execution(
+                        execution["id"], f"Invalid tool result: {exc}"
+                    )
+                )
                 receipt = {
                     "accepted": False,
                     "execution_id": execution["id"],
@@ -368,16 +376,18 @@ async def _execute_impl(
         else:
             for index, spec in enumerate(source_specs):
                 sources.append(
-                    store.capture(
-                        origin_id=tool_use_id,
-                        index=index,
-                        content=spec["content"],
-                        kind=spec.get("kind", "tool"),
-                        title=spec.get("title", tool_name),
-                        locator=spec.get("locator", f"tool:{tool_name}:{tool_use_id}"),
-                        fragment=spec.get("fragment", False),
-                        published_at=spec.get("published_at"),
-                        is_error=result.is_error,
+                    (
+                        await store.capture(
+                            origin_id=tool_use_id,
+                            index=index,
+                            content=spec["content"],
+                            kind=spec.get("kind", "tool"),
+                            title=spec.get("title", tool_name),
+                            locator=spec.get("locator", f"tool:{tool_name}:{tool_use_id}"),
+                            fragment=spec.get("fragment", False),
+                            published_at=spec.get("published_at"),
+                            is_error=result.is_error,
+                        )
                     ).id
                 )
 
@@ -392,7 +402,7 @@ async def _execute_impl(
                 "research_sources": sources,
             },
         )
-    result = service.bound_output(result)
+    result = await service.bound_output(result)
     log.debug(
         "executed %s in %.2fs err=%s output_len=%d",
         tool_name,
@@ -400,10 +410,11 @@ async def _execute_impl(
         result.is_error,
         len(result.output or ""),
     )
-    inline_output, artifact_path = _offload_tool_output_if_needed(
+    inline_output, artifact_path = await _offload_tool_output_if_needed(
         tool_name=tool_name,
         tool_use_id=tool_use_id,
         output=result.output,
+        workspace=service.ledger.workspace,
     )
     tool_result = ToolResultBlock(
         tool_use_id=tool_use_id,
@@ -421,14 +432,14 @@ async def _execute_impl(
         tool_result.content += "\n\nresearch_sources: " + json.dumps(
             result.metadata["research_sources"]
         )
-        tool_result.content += f"\nresearch_revision: {store.load().revision}"
+        tool_result.content += f"\nresearch_revision: {(await store.load()).revision}"
     if tool_name == "skill" and not tool_result.is_error:
         skill_name = str(tool_input.get("name", "")).strip()
         if skill_name and context.tool_metadata is not None:
             skills = context.tool_metadata.setdefault("invoked_skills", [])
             if skill_name not in skills:
                 skills.append(skill_name)
-    service.finish(tool_result)
+    (await service.finish(tool_result))
     if context.hook_executor is not None:
         post = await context.hook_executor.execute(
             HookEvent.POST_TOOL_USE,
@@ -468,7 +479,11 @@ class ToolExecutionService:
         try:
             result = await _execute_impl(self, context, name, call, arguments)
             if self.claimed and not self.settled:
-                self.finish(result, blocked=not self.started_body and not self.started_hooks)
+                (
+                    await self.finish(
+                        result, blocked=not self.started_body and not self.started_hooks
+                    )
+                )
             result.result_metadata.setdefault("status", "failed" if result.is_error else "success")
             if result.is_error:
                 result.result_metadata.setdefault("error_code", "admission_rejected")
@@ -484,11 +499,15 @@ class ToolExecutionService:
                     else "cancelled"
                 )
                 try:
-                    self.ledger.settle(
-                        self.operation["operation_id"],
-                        status,
-                        owner=self.owner,
-                        error_code="cancelled_after_start" if self.started_body else "cancelled",
+                    (
+                        await self.ledger.settle(
+                            self.operation["operation_id"],
+                            status,
+                            owner=self.owner,
+                            error_code="cancelled_after_start"
+                            if self.started_body
+                            else "cancelled",
+                        )
                     )
                 except Exception:
                     log.error(
@@ -496,18 +515,21 @@ class ToolExecutionService:
                     )
             raise
         except Exception as exc:
-            if (
-                not self.claimed
-                and isinstance(exc, sqlite3.OperationalError)
-                and "locked" in str(exc).lower()
-            ):
+            if not self.claimed and isinstance(exc, (DBAPIError, PoolTimeoutError)):
+                sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+                busy = isinstance(exc, PoolTimeoutError) or sqlstate in {
+                    "55P03",
+                    "40001",
+                    "40P01",
+                    "57014",
+                }
                 return ToolResultBlock(
                     tool_use_id=call,
-                    content="Operation database is busy; no tool was executed.",
+                    content="Operation database unavailable; no tool was executed.",
                     is_error=True,
                     result_metadata={
                         "status": "blocked",
-                        "error_code": "resource_conflict",
+                        "error_code": "resource_conflict" if busy else "database_unavailable",
                         "no_effect": True,
                     },
                 )
@@ -521,12 +543,12 @@ class ToolExecutionService:
             )
             if self.settled:
                 # A post-processing exception cannot erase an already durable success.
-                result = self.load_result(call)
+                result = await self.load_result(call)
                 result.result_metadata["post_hook_failures"] = [type(exc).__name__]
                 return result
             result = ToolResultBlock(
                 tool_use_id=call,
-                content=f"Tool execution {status}: {type(exc).__name__}: {redact(str(exc))}",
+                content=f"Tool execution {status}: {type(exc).__name__}: {(redact(str(exc)))}",
                 is_error=True,
                 result_metadata={
                     "status": status,
@@ -536,7 +558,11 @@ class ToolExecutionService:
                 },
             )
             if self.claimed:
-                self.finish(result, blocked=not self.started_body and not self.started_hooks)
+                (
+                    await self.finish(
+                        result, blocked=not self.started_body and not self.started_hooks
+                    )
+                )
             return result
 
     async def begin(
@@ -551,7 +577,9 @@ class ToolExecutionService:
         )
         scope = str(Path(cwd).resolve())
         root = store.directory if store else get_data_dir() / "executions"
-        self.ledger = OperationStore(root / "operations.sqlite3")
+        self.ledger = OperationStore(
+            store.cwd if store else (context.execution_workspace or cwd), directory=root
+        )
 
         # Unknown resources serialize. Explicit file resources participate in read/write conflicts.
         def resources(items: tuple[str, ...]) -> list[str]:
@@ -571,14 +599,14 @@ class ToolExecutionService:
         # Orchestration must not hold its children's resource lock while awaiting them.
         if metadata.get("subagent_child"):
             scope += ":child:" + str(metadata.get("subagent_output_dir", ""))
-        self.ledger.recover(session=session, scope=scope)
+        (await self.ledger.recover(session=session, scope=scope))
         digest = hashlib.sha256(
             json.dumps(arguments.model_dump(mode="json"), sort_keys=True).encode()
         ).hexdigest()
         run = hashlib.sha256(
             f"{session}:{context.current_user_message_id or context.execution_session_id}".encode()
         ).hexdigest()
-        self.operation = self.ledger.prepare(
+        self.operation = await self.ledger.prepare(
             session=session,
             scope=scope,
             run=run,
@@ -596,11 +624,11 @@ class ToolExecutionService:
         deadline = time.monotonic() + self.claim_wait_seconds
         delay = 0.02
         while True:
-            current = self.ledger.get(operation_id, session=session, scope=scope)
+            current = await self.ledger.get(operation_id, session=session, scope=scope)
             if current["status"] == "succeeded":
                 self.operation = current
                 self.settled = True
-                return self.load_result(call)
+                return await self.load_result(call)
             if current["status"] not in {"prepared", "running"}:
                 self.settled = True
                 return ToolResultBlock(
@@ -613,11 +641,13 @@ class ToolExecutionService:
                         "operation_id": operation_id,
                     },
                 )
-            conflicts = self.ledger.unresolved_conflicts(operation_id)
+            conflicts = await self.ledger.unresolved_conflicts(operation_id)
             if conflicts:
                 if current["status"] == "prepared":
-                    self.ledger.settle(
-                        operation_id, "blocked", error_code="reconciliation_required"
+                    (
+                        await self.ledger.settle(
+                            operation_id, "blocked", error_code="reconciliation_required"
+                        )
                     )
                 self.settled = True
                 return ToolResultBlock(
@@ -626,10 +656,10 @@ class ToolExecutionService:
                     content="Unresolved side effects block this resource: " + ", ".join(conflicts),
                     result_metadata={"status": "blocked", "error_code": "reconciliation_required"},
                 )
-            attempt = self.ledger.claim(operation_id, self.owner)
+            attempt = await self.ledger.claim(operation_id, self.owner)
             if attempt:
                 self.claimed = True
-                self.operation = self.ledger.get(operation_id, session=session, scope=scope)
+                self.operation = await self.ledger.get(operation_id, session=session, scope=scope)
                 return None
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -660,8 +690,10 @@ class ToolExecutionService:
         remaining = self.contract.max_attempts - self.operation["attempts"] + 1
         for attempt in range(1, remaining + 1):
             execution = (
-                tool.execute_with_idempotency_key(
-                    arguments, context, idempotency_key=context.idempotency_key
+                (
+                    tool.execute_with_idempotency_key(
+                        arguments, context, idempotency_key=context.idempotency_key
+                    )
                 )
                 if self.contract.retry_mode == "idempotency_key"
                 else tool.execute(arguments, context)
@@ -710,12 +742,12 @@ class ToolExecutionService:
             )
             if self.contract.retry_mode == "reconcile_before_retry":
                 no_effect = await asyncio.wait_for(
-                    tool.reconcile_no_effect(arguments, context), self.contract.timeout_seconds
+                    (tool.reconcile_no_effect(arguments, context)), self.contract.timeout_seconds
                 )
                 result = replace(result, metadata={**result.metadata, "no_effect": bool(no_effect)})
             if not no_effect:
                 break
-            self.ledger.next_attempt(context.operation_id, owner=self.owner)
+            (await self.ledger.next_attempt(context.operation_id, owner=self.owner))
             await asyncio.sleep(min(0.1 * 2 ** (attempt - 1), 1.0))
         if self.contract.output_model is not None and not result.is_error:
             self.contract.output_model.model_validate_json(result.output)
@@ -736,24 +768,21 @@ class ToolExecutionService:
         }
         return replace(result, is_error=status != "success", metadata=metadata)
 
-    def bound_output(self, result: ToolResult) -> ToolResult:
+    async def bound_output(self, result: ToolResult) -> ToolResult:
         """Bound model-visible output only after ResearchStore captured the full source."""
         if len(result.output) <= self.contract.max_output_chars:
             return result
-        path = (
-            self.ledger.path.parent
-            / "operation_artifacts"
-            / f"{self.operation['operation_id']}.txt"
+        reference = await persist_object(
+            self.ledger.database, self.ledger.workspace, result.output.encode()
         )
-        private_directory(path.parent)
-        atomic_write_text(path, result.output, mode=0o600)
         return replace(
             result,
-            output=result.output[: self.contract.max_output_chars] + f"\n[Full output: {path}]",
-            metadata={**result.metadata, "tool_output_artifact": str(path)},
+            output=result.output[: self.contract.max_output_chars]
+            + f"\n[Full output object: {reference}]",
+            metadata={**result.metadata, "tool_output_artifact": reference},
         )
 
-    def finish(self, result: ToolResultBlock, *, blocked: bool = False) -> None:
+    async def finish(self, result: ToolResultBlock, *, blocked: bool = False) -> None:
         if not self.operation or self.settled:
             return
         operation_id = self.operation["operation_id"]
@@ -766,43 +795,44 @@ class ToolExecutionService:
         if state == "denied":
             state = "blocked"
         result.result_metadata.update(operation_id=operation_id, status=status)
-        path = self.ledger.path.parent / "operation_artifacts" / f"{operation_id}.json"
-        private_directory(path.parent)
-        atomic_write_text(path, result.model_dump_json(), mode=0o600)
-        self.ledger.settle(
-            operation_id,
-            state,
-            owner=self.owner,
-            result_ref=str(path),
-            error_code=result.result_metadata.get("error_code"),
-            external_request_id=result.result_metadata.get("external_request_id"),
+        reference = await persist_object(
+            self.ledger.database, self.ledger.workspace, result.model_dump_json().encode()
         )
-        self.operation["result_ref"] = str(path)
+        (
+            await self.ledger.settle(
+                operation_id,
+                state,
+                owner=self.owner,
+                result_ref=reference,
+                error_code=result.result_metadata.get("error_code"),
+                external_request_id=result.result_metadata.get("external_request_id"),
+            )
+        )
+        self.operation["result_ref"] = reference
         self.settled = True
 
-    def load_result(self, call: str) -> ToolResultBlock:
-        result = _receipt_result(self.operation, call)
+    async def load_result(self, call: str) -> ToolResultBlock:
+        result = await _receipt_result(self.operation, call)
         result.tool_use_id = call
         result.result_metadata["replayed_receipt"] = True
         return result
 
 
-def recover_messages(messages: list[Any], metadata: Any, cwd: Path, session_id: str) -> list[Any]:
+async def recover_messages(
+    messages: list[Any], metadata: Any, cwd: Path, session_id: str
+) -> list[Any]:
     """Attach durable outcomes to unmatched calls without replaying a write."""
     from researchx.engine.messages import ConversationMessage
 
     store = metadata.get("research_store")
     runtime = metadata.get("research_runtime")
-    session = metadata.get("session_id") or (store.session_id if store else session_id)
+    session = (metadata.get("session_id")) or (store.session_id if store else session_id)
     root = store.directory if store else get_data_dir() / "executions"
-    if store and runtime and store.load().project:
-        cwd = runtime._workspace_path(runtime.repository._project(store.load()))
+    if store and runtime and (await store.load()).project:
+        cwd = runtime._workspace_path(runtime.repository._project((await store.load())))
     scope = str(cwd.resolve())
-    path = root / "operations.sqlite3"
-    if not path.exists():
-        return messages
-    ledger = OperationStore(path)
-    ledger.recover(session=session, scope=scope)
+    ledger = OperationStore(store.cwd if store else cwd, directory=root)
+    (await ledger.recover(session=session, scope=scope))
     if not messages or not messages[-1].tool_uses:
         return messages
     results = []
@@ -810,7 +840,7 @@ def recover_messages(messages: list[Any], metadata: Any, cwd: Path, session_id: 
     for call in messages[-1].tool_uses:
         identity = hashlib.sha256(json.dumps([session, scope, call.id]).encode()).hexdigest()
         try:
-            receipt = ledger.get(identity, session=session, scope=scope)
+            receipt = await ledger.get(identity, session=session, scope=scope)
         except ValueError:
             results.append(
                 ToolResultBlock(
@@ -822,7 +852,7 @@ def recover_messages(messages: list[Any], metadata: Any, cwd: Path, session_id: 
             continue
         found_receipt = True
         if receipt["status"] == "succeeded" and receipt["result_ref"]:
-            result = _receipt_result(receipt, call.id)
+            result = await _receipt_result(receipt, call.id)
             result.result_metadata["replayed_receipt"] = True
         else:
             result = ToolResultBlock(
@@ -837,7 +867,9 @@ def recover_messages(messages: list[Any], metadata: Any, cwd: Path, session_id: 
             )
         if store is not None:
             sources = [
-                source for source in store.load().sources.values() if source.origin_id == call.id
+                source
+                for source in (await store.load()).sources.values()
+                if source.origin_id == call.id
             ]
             if sources:
                 source_ids = [source.id for source in sources]
@@ -855,10 +887,10 @@ def recover_messages(messages: list[Any], metadata: Any, cwd: Path, session_id: 
     )
 
 
-def _receipt_result(receipt: dict[str, Any], call: str) -> ToolResultBlock:
+async def _receipt_result(receipt: dict[str, Any], call: str) -> ToolResultBlock:
     try:
         result = ToolResultBlock.model_validate_json(
-            Path(receipt["result_ref"]).read_text()
+            await read_object(current_database(), receipt["workspace_id"], receipt["result_ref"])
         ).model_copy(update={"tool_use_id": call})
         if (
             result.is_error

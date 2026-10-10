@@ -76,7 +76,9 @@ class SkillTool(BaseTool[SkillToolInput]):
         store = context.metadata.get("research_store")
         if store is not None:
             output = (
-                context.cwd / "reports" if context.workspace_runtime() else store.directory / "work"
+                context.cwd / "reports"
+                if (await context.workspace_runtime())
+                else store.directory / "work"
             )
             paths.append(f"当前会话输出目录：{output}")
         if skill.path:

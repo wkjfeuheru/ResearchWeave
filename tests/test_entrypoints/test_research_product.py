@@ -21,7 +21,6 @@ RETIRED = {
     "memory",
     "output_styles",
     "personalization",
-    "state",
     "swarm",
     "tasks",
     "themes",
@@ -46,6 +45,9 @@ def test_package_has_no_retired_imports_or_dynamic_loads():
         "researchx.config.schema",
         "ohmo",
     }
+    # The retired UI state.py is distinct from the retained research domain package.
+    assert not (package / "state.py").exists()
+    assert (package / "state" / "models.py").is_file()
     for name in RETIRED:
         assert not (package / name).exists()
     for path in package.rglob("*.py"):

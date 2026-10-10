@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 from pydantic import BaseModel
-from researchx.tools.base import ToolExecutionContext
+
+if TYPE_CHECKING:
+    # ToolExecutionContext is only needed for annotations; importing it lazily avoids
+    # a cycle with researchx.tools.__init__ (which eagerly imports the planner tool).
+    from researchx.tools.base import ToolExecutionContext
 import asyncio
 import hashlib
 import json
@@ -45,7 +49,7 @@ async def generate_plan(
             "Planning requires the main query context; child recursion is forbidden"
         )
     store = context.metadata.get("research_store")
-    if store is None or store.load().project is None:
+    if store is None or (await store.load()).project is None:
         raise ResearchError("Start a research_project before calling planning tools")
     max_calls = max(1, min(4, int(context.metadata.get("planning_max_calls", 2))))
     max_tokens = max(1, int(context.metadata.get("planning_token_budget", 16000)))
@@ -72,7 +76,7 @@ async def generate_plan(
         for _ in range(max_calls):
             request = ApiMessageRequest(
                 model=query.model,
-                messages=list(messages),
+                messages=(list(messages)),
                 system_prompt=PLANNING_PROMPT,
                 max_tokens=min(query.max_tokens, 4096, max_tokens - consumed),
                 tools=[tool_schema],
@@ -173,7 +177,7 @@ async def generate_plan(
         raise ResearchError("Planning model call budget exhausted")
 
     try:
-        proposal = await asyncio.wait_for(infer(), timeout=timeout)
+        proposal = await asyncio.wait_for((infer()), timeout=timeout)
     except asyncio.TimeoutError as exc:
         error = ResearchError("Planning timeout; no proposal was committed")
         setattr(error, "planning_tokens", consumed)
@@ -194,11 +198,11 @@ async def generate_plan(
     }
 
 
-def planning_packet(context: ToolExecutionContext) -> dict[str, object]:
+async def planning_packet(context: ToolExecutionContext) -> dict[str, object]:
     store = context.metadata.get("research_store")
     if store is None:
         raise ResearchError("Research memory is disabled")
-    memory = store.load()
+    memory = await store.load()
     if memory.project is None:
         raise ResearchError("Start research_project before planning")
     project = memory.project
@@ -215,10 +219,12 @@ def planning_packet(context: ToolExecutionContext) -> dict[str, object]:
         "sources": view["sources"],
         "feedback": project.feedback,
         "permission_constraints": {
-            "denied_tools": list(
-                getattr(
-                    context.metadata["query_context"].permission_checker, "_settings"
-                ).denied_tools
+            "denied_tools": (
+                list(
+                    getattr(
+                        context.metadata["query_context"].permission_checker, "_settings"
+                    ).denied_tools
+                )
             ),
             "available_tools": [
                 tool.name for tool in context.metadata["query_context"].tool_registry.list_tools()

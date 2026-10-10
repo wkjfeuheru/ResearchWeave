@@ -1,12 +1,9 @@
 """Atomic file-write helpers for persistent state.
 
-Every file under ``~/.researchx/`` that is rewritten during normal use —
-credentials, settings, session snapshots, research state — must
-be written atomically. A crash, SIGKILL, power loss, or out-of-disk error
-during a naive :meth:`pathlib.Path.write_text` leaves a truncated file on
-disk, and the next read silently returns ``{}`` (for credentials) or raises
-:class:`json.JSONDecodeError` (for sessions). Both outcomes are recoverable
-only by manual intervention.
+Reserved files such as credentials, settings, workspace content and explicit
+exports use atomic writes so a crash never exposes a truncated payload.
+Structured sessions, research state and execution receipts are authoritative
+in PostgreSQL; these helpers do not provide a JSON storage fallback.
 
 The pattern implemented here is the standard temp-file-plus-rename dance:
 
@@ -21,7 +18,7 @@ The pattern implemented here is the standard temp-file-plus-rename dance:
 
 For read-modify-write sequences on shared files (credentials, settings, cron
 registry), pair atomic writes with :func:`exclusive_file_lock` from
-the local file lock so two concurrent ``oh`` processes cannot
+the local file lock so two concurrent ``rx`` processes cannot
 clobber each other's updates.
 """
 
@@ -119,9 +116,12 @@ def private_directory(path: Path) -> Path:
     if os.name == "posix":
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            os.fchmod(fd, 0o700)
+            # Reads revalidate privacy without dirtying directory metadata on
+            # every access; only an actual permission repair needs chmod.
             if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
-                raise PermissionError("Private directory mode cannot be enforced")
+                os.fchmod(fd, 0o700)
+                if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
+                    raise PermissionError("Private directory mode cannot be enforced")
         finally:
             os.close(fd)
     else:
@@ -139,7 +139,7 @@ def private_file(path: Path) -> None:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
-        return  # SQLite checkpoint/removal may remove a sidecar after the existence check.
+        return  # A concurrent removal may win after the existence check.
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("Private storage file must be regular")

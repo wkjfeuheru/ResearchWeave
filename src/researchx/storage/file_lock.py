@@ -1,7 +1,7 @@
 """Cross-platform exclusive file-lock helpers.
 
-Used to serialise read-modify-write sequences on shared JSON registries
-(credentials, settings, research state). Pair with
+Used for credentials/settings, workspace file resources and local process coordination.
+Research state and execution receipts use PostgreSQL transactions instead. Pair file writes with
 :func:`researchx.storage.filesystem.atomic_write_text` to make each critical section
 both race-free and crash-safe.
 """
@@ -9,6 +9,10 @@ both race-free and crash-safe.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+import asyncio
+import time
 from pathlib import Path
 import os
 from researchx.storage.filesystem import private_file
@@ -23,6 +27,44 @@ class SwarmLockError(RuntimeError):
 
 class SwarmLockUnavailableError(SwarmLockError):
     """Raised when file locking is unavailable on the current platform."""
+
+
+@asynccontextmanager
+async def async_exclusive_file_lock(lock_path: Path, timeout: float = 30.0) -> AsyncIterator[None]:
+    """Nonblocking polling; cancellation closes the descriptor without orphaning a waiter."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    acquired = False
+    deadline = time.monotonic() + timeout
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+        else:
+            import fcntl
+        while not acquired:
+            try:
+                if os.name == "nt":
+                    getattr(msvcrt, "locking")(descriptor, getattr(msvcrt, "LK_NBLCK"), 1)
+                else:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except (BlockingIOError, PermissionError):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Workspace file is busy") from None
+                await asyncio.sleep(0.02)
+        yield
+    finally:
+        if acquired:
+            if os.name == "nt":
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                getattr(msvcrt, "locking")(descriptor, getattr(msvcrt, "LK_UNLCK"), 1)
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 @contextmanager

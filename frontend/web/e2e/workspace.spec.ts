@@ -277,7 +277,9 @@ test('responsive navigation and empty skill search', async ({ page }) => {
 
 test('research progress, source footnotes and interrupt to replan', async ({ page }) => {
   const progressFrames: any[] = [];
+  let researchStarts = 0;
   await observeSSE(page, data => {
+    if (data.type === 'started') researchStarts += 1;
     if (data.type === 'research_progress') progressFrames.push(data.progress);
   });
   const created = await page.request.post('/api/models', { data: {
@@ -289,6 +291,8 @@ test('research progress, source footnotes and interrupt to replan', async ({ pag
   await page.getByLabel('当前对话模型').selectOption(id);
   await page.getByLabel('对话输入').fill('开展测试研究');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  // Wait for cold Runtime/database initialization before asserting progress transitions.
+  await expect.poll(() => researchStarts, { timeout: 15_000 }).toBe(1);
   const progress = page.getByLabel('研究任务进度');
   const progressToggle = progress.getByRole('button');
   await expect(progressToggle).toHaveAttribute('aria-expanded', 'true');
@@ -319,13 +323,16 @@ test('research progress, source footnotes and interrupt to replan', async ({ pag
   await expect(page.getByLabel('研究任务进度').getByRole('button')).toHaveAttribute('aria-expanded', 'false');
   await page.getByLabel('对话输入').fill('慢速研究公司 A');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await expect.poll(() => researchStarts, { timeout: 15_000 }).toBe(2);
   await expect(page.locator('.message.assistant').last()).toContainText('旧研究执行中');
   await expect(page.getByLabel('研究任务进度').getByRole('button')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByLabel('对话输入')).toBeEnabled();
   await page.getByLabel('对话输入').fill('改为研究公司 B');
   await page.getByRole('button', { name: '打断并修改', exact: true }).click();
   await expect(page.getByLabel('研究任务进度')).toContainText('公司 B 简要研究');
-  await expect(page.getByLabel('研究任务进度')).toContainText('2/2 项任务完成');
+  // This waits for the complete replanned research (12 transactional tool calls),
+  // not just rendering the accepted steer. Keep the overall 60-second test bound.
+  await expect(page.getByLabel('研究任务进度')).toContainText('2/2 项任务完成', { timeout: 15_000 });
   await expect(page.getByRole('button', { name: '停止生成' })).toHaveCount(0);
   await expect(page.locator('.message.user').filter({ hasText: '改为研究公司 B' })).toHaveCount(1);
   await page.reload();
@@ -345,6 +352,7 @@ test('blocked research task stays expanded with its blocker', async ({ page }) =
   await page.getByLabel('当前对话模型').selectOption(id);
   await page.getByLabel('对话输入').fill('慢速研究公司 A');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await expect.poll(() => researchStarts, { timeout: 15_000 }).toBe(2);
   await expect(page.locator('.message.assistant').last()).toContainText('旧研究执行中');
   await page.getByRole('button', { name: '停止生成' }).click();
   const progress = page.getByLabel('研究任务进度');
@@ -520,6 +528,10 @@ test('disconnect marks pending activity interrupted and restores the saved proce
 });
 
 test('new stream content follows the bottom without interrupting reading above', async ({ page }) => {
+  let startedRequestId = '';
+  await observeSSE(page, event => {
+    if (event.type === 'started') startedRequestId = event.request_id;
+  });
   const created = await page.request.post('/api/models', { data: {
     label: '滚动测试模型', api_format: 'openai', model: 'scroll-test', api_key: 'scroll-test-secret', context_window_tokens: 200000,
   } });
@@ -538,6 +550,8 @@ test('new stream content follows the bottom without interrupting reading above',
   await page.getByLabel('对话输入').fill('长篇研究');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect.poll(() => requestId).not.toBe('');
+  // HTTP acceptance precedes Runtime startup and its persisted initial state.
+  await expect.poll(() => startedRequestId, { timeout: 15_000 }).toBe(requestId);
   const send = async (text: string) => {
     const response = await page.request.post(`/__test/stream-delta/${session.session_id}`, { data: {
       request_id: requestId, turn_id: requestId, id: 'long-reply', text,

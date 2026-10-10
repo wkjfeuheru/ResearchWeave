@@ -1,19 +1,26 @@
-"""Transactional local execution receipts, independent of chat snapshots."""
+"""PostgreSQL execution ledger, with workspace locks around resource claims."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import sqlite3
+import socket
 import time
-import threading
-from collections import OrderedDict
-from contextlib import contextmanager
-from pathlib import Path
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 from uuid import uuid4
-from typing import Any, Iterator
-from researchx.storage.filesystem import private_directory, private_file
+
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from researchx.storage import schema as s
+from researchx.storage.database import Database, current_database, workspace_id
+from pathlib import Path
+from researchx.config.paths import get_data_dir
+
 
 STATES = {
     "prepared",
@@ -37,136 +44,56 @@ EDGES = {
 }
 
 
-_SCHEMA_LOCK = threading.RLock()
-_INITIALIZED: OrderedDict[tuple[int, str], tuple[int, int]] = OrderedDict()
-_SCHEMA_VERSION = 2
-
-
-def _after_fork() -> None:
-    global _SCHEMA_LOCK
-    _SCHEMA_LOCK = threading.RLock()
-    _INITIALIZED.clear()
-
-
-if hasattr(os, "register_at_fork"):
-    os.register_at_fork(after_in_child=_after_fork)
-
-
-@contextmanager
-def _schema_initialization_lock() -> Iterator[None]:
-    if not _SCHEMA_LOCK.acquire(timeout=5.0):
-        raise TimeoutError("Operation schema initialization is busy")
-    try:
-        yield
-    finally:
-        _SCHEMA_LOCK.release()
-
-
 class OperationStore:
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path).absolute()
-        private_directory(self.path.parent)
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        os.close(fd)
-        self._private_files()
-        self._initialize()
+    def __init__(
+        self, cwd: str | Path, *, database: Database | None = None, directory: Path | None = None
+    ) -> None:
+        from pathlib import Path
 
-    def _initialize(self) -> None:
-        key = (os.getpid(), str(self.path))
-        with _schema_initialization_lock():
-            st = self.path.stat()
-            identity = (st.st_dev, st.st_ino)
-            if _INITIALIZED.get(key) == identity and st.st_size > 0:
-                _INITIALIZED.move_to_end(key)
-                return
-            with self.connect(timeout=5.0) as db:
-                db.execute("PRAGMA journal_mode=WAL")
-                db.execute("BEGIN IMMEDIATE")
-                try:
-                    version = db.execute("PRAGMA user_version").fetchone()[0]
-                    if version > _SCHEMA_VERSION:
-                        raise ValueError("Operation database has a newer unsupported schema")
-                    if version < _SCHEMA_VERSION:
-                        schema = """
-                CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
-                INSERT OR IGNORE INTO schema_version VALUES(1);
-                CREATE TABLE IF NOT EXISTS api_attempts(
-                    attempt_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, record TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS runs(
-                    run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, scope TEXT NOT NULL,
-                    status TEXT NOT NULL, predecessor TEXT, updated REAL NOT NULL);
-                CREATE TABLE IF NOT EXISTS steps(
-                    run_id TEXT NOT NULL, step_id TEXT NOT NULL, status TEXT NOT NULL,
-                    updated REAL NOT NULL, PRIMARY KEY(run_id,step_id));
-                CREATE TABLE IF NOT EXISTS operations(
-                    operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, session_id TEXT NOT NULL,
-                    scope TEXT NOT NULL, step_id TEXT NOT NULL, call_id TEXT NOT NULL,
-                    tool TEXT NOT NULL, contract_version TEXT NOT NULL, input_digest TEXT NOT NULL,
-                    effect TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-                    owner TEXT, pid INTEGER, lease_until REAL, created REAL NOT NULL, updated REAL NOT NULL,
-                    error_code TEXT, result_ref TEXT, external_request_id TEXT, idempotency_key TEXT NOT NULL,
-                    reconciliation TEXT, resources TEXT NOT NULL,
-                    UNIQUE(session_id,scope,call_id));
-                CREATE TABLE IF NOT EXISTS attempts(
-                    attempt_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, number INTEGER NOT NULL,
-                    status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
-                    UNIQUE(operation_id,number));
-            """
-                        for statement in schema.split(";"):
-                            if statement.strip():
-                                db.execute(statement)
-                        columns = {row[1] for row in db.execute("PRAGMA table_info(api_attempts)")}
-                        for column, kind in (("status", "TEXT"), ("updated", "REAL")):
-                            if column not in columns:
-                                db.execute(f"ALTER TABLE api_attempts ADD COLUMN {column} {kind}")
-                        for statement in (
-                            "CREATE INDEX IF NOT EXISTS operation_scope_status ON operations(scope,status)",
-                            "CREATE INDEX IF NOT EXISTS operation_session_status ON operations(session_id,status,scope)",
-                            "CREATE INDEX IF NOT EXISTS operation_run_status ON operations(run_id,status)",
-                            "CREATE INDEX IF NOT EXISTS attempt_operation_status ON attempts(operation_id,status)",
-                            "CREATE INDEX IF NOT EXISTS api_status_updated ON api_attempts(status,updated)",
-                        ):
-                            db.execute(statement)
-                        db.execute(
-                            "INSERT OR IGNORE INTO schema_version VALUES(?)", (_SCHEMA_VERSION,)
-                        )
-                        db.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-                    db.commit()
-                except BaseException:
-                    db.rollback()
-                    raise
-            _INITIALIZED[key] = identity
-            while len(_INITIALIZED) > 256:
-                _INITIALIZED.popitem(last=False)
+        self.database = database or current_database()
+        self.directory = directory or get_data_dir() / "executions"
+        self.cwd = str(Path(cwd).resolve())
+        self.workspace = workspace_id(self.cwd)
+        # A PID only has meaning on the originating host; never probe a remote PID locally.
+        self.host = socket.gethostname()
 
-    def _private_files(self) -> None:
-        for path in (self.path, Path(str(self.path) + "-wal"), Path(str(self.path) + "-shm")):
-            private_file(path)
-
-    @contextmanager
-    def connect(self, *, timeout: float = 0.25) -> Iterator[sqlite3.Connection]:
-        self._private_files()
-        db = sqlite3.connect(self.path, timeout=timeout, isolation_level=None)
-        self._private_files()
-        db.row_factory = sqlite3.Row
-        try:
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[AsyncSession]:
+        async with self.database.transaction() as db:
+            await db.execute(
+                insert(s.workspaces)
+                .values(
+                    workspace_id=self.workspace, canonical_path=self.cwd, updated_at=time.time()
+                )
+                .on_conflict_do_nothing()
+            )
+            await db.execute(
+                select(s.workspaces.c.workspace_id)
+                .where(s.workspaces.c.workspace_id == self.workspace)
+                .with_for_update()
+            )
             yield db
-        finally:
-            db.close()
 
-    @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            try:
-                yield db
-            except BaseException:
-                db.rollback()
-                raise
-            else:
-                db.commit()
+    def _where(self, operation: str) -> Any:
+        return (s.tool_operations.c.workspace_id == self.workspace) & (
+            s.tool_operations.c.operation_id == operation
+        )
 
-    def prepare(
+    async def _row(self, db: AsyncSession, operation: str) -> dict[str, Any]:
+        row = (
+            (
+                await db.execute(
+                    select(s.tool_operations).where(self._where(operation)).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise ValueError("Unknown operation in this workspace")
+        return dict(row)
+
+    async def prepare(
         self,
         *,
         session: str,
@@ -179,201 +106,220 @@ class OperationStore:
         effect: str,
         resources: dict[str, list[str]],
     ) -> dict[str, Any]:
-        identity = json.dumps([session, scope, call])
-        operation = hashlib.sha256(identity.encode()).hexdigest()
-        now = time.time()
-        with self.transaction() as db:
-            previous = db.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation,)
-            ).fetchone()
-            if previous is not None:
-                if (
-                    previous["input_digest"] != digest
-                    or previous["tool"] != tool
-                    or previous["contract_version"] != version
-                ):
-                    raise ValueError("Operation ID already bound to different input/tool/contract")
-                return dict(previous)
-            db.execute(
-                "INSERT OR IGNORE INTO runs VALUES(?,?,?,?,?,?)",
-                (run, session, scope, "running", None, now),
-            )
-            db.execute("INSERT OR IGNORE INTO steps VALUES(?,?,?,?)", (run, call, "prepared", now))
-            db.execute(
-                """INSERT OR IGNORE INTO operations
-                (operation_id,run_id,session_id,scope,step_id,call_id,tool,contract_version,input_digest,
-                 effect,status,created,updated,idempotency_key,resources)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    operation,
-                    run,
-                    session,
-                    scope,
-                    call,
-                    call,
+        operation = hashlib.sha256(
+            json.dumps([self.workspace, session, scope, call]).encode()
+        ).hexdigest()
+        run = f"{self.workspace}:{run}"
+        stamp = time.time()
+        async with self.transaction() as db:
+            prior = await db.execute(select(s.tool_operations).where(self._where(operation)))
+            row = prior.mappings().one_or_none()
+            if row is not None:
+                if (row["input_digest"], row["tool"], row["contract_version"]) != (
+                    digest,
                     tool,
                     version,
-                    digest,
-                    effect,
-                    "prepared",
-                    now,
-                    now,
-                    operation,
-                    json.dumps(resources),
-                ),
+                ):
+                    raise ValueError("Operation ID already bound to different input/tool/contract")
+                return dict(row)
+            await db.execute(
+                insert(s.tool_runs)
+                .values(
+                    workspace_id=self.workspace,
+                    run_id=run,
+                    session_id=session,
+                    scope=scope,
+                    status="running",
+                    predecessor=None,
+                    updated=stamp,
+                )
+                .on_conflict_do_nothing()
             )
-            row = dict(
-                db.execute("SELECT * FROM operations WHERE operation_id=?", (operation,)).fetchone()
+            bound = (
+                (await db.execute(select(s.tool_runs).where(s.tool_runs.c.run_id == run)))
+                .mappings()
+                .one()
             )
-            if (
-                row["input_digest"] != digest
-                or row["tool"] != tool
-                or row["contract_version"] != version
-            ):
-                raise ValueError("Operation ID already bound to different input/tool/contract")
-            return row
+            if (bound["workspace_id"], bound["session_id"]) != (self.workspace, session):
+                raise ValueError("Run belongs to another session/workspace")
+            await db.execute(
+                update(s.tool_runs)
+                .where(s.tool_runs.c.run_id == run)
+                .values(status="running", updated=stamp)
+            )
+            await db.execute(
+                insert(s.tool_steps)
+                .values(
+                    run_id=run,
+                    step_id=call,
+                    status="prepared",
+                    updated=stamp,
+                )
+                .on_conflict_do_nothing()
+            )
+            await db.execute(
+                insert(s.tool_operations).values(
+                    operation_id=operation,
+                    workspace_id=self.workspace,
+                    run_id=run,
+                    session_id=session,
+                    scope=scope,
+                    step_id=call,
+                    call_id=call,
+                    tool=tool,
+                    contract_version=version,
+                    input_digest=digest,
+                    effect=effect,
+                    status="prepared",
+                    attempts=0,
+                    created=stamp,
+                    updated=stamp,
+                    idempotency_key=operation,
+                    resources=resources,
+                )
+            )
+            return await self._row(db, operation)
 
-    def record_api_attempt(self, record: dict[str, Any]) -> None:
-        with self.transaction() as db:
-            existing = db.execute(
-                "SELECT record,request_id FROM api_attempts WHERE attempt_id=?",
-                (record["attempt_id"],),
-            ).fetchone()
-            if existing and existing["request_id"] != record["request_id"]:
-                raise ValueError("API attempt ID is bound to another request")
-            if existing and json.loads(existing["record"])["status"] != "running":
-                if json.loads(existing["record"]) == record:
-                    return
-                raise ValueError("API attempt already settled")
-            db.execute(
-                "INSERT INTO api_attempts(attempt_id,request_id,record,status,updated) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(attempt_id) DO UPDATE SET record=excluded.record,status=excluded.status,updated=excluded.updated",
+    async def get(self, operation: str, *, session: str, scope: str) -> dict[str, Any]:
+        async with self.database.transaction() as db:
+            row = (
                 (
-                    record["attempt_id"],
-                    record["request_id"],
-                    json.dumps(record),
-                    record["status"],
-                    record.get("finished", record.get("started")),
-                ),
-            )
-
-    def prune_audit(self, *, before: float, limit: int = 1000) -> dict[str, int]:
-        """Bounded host maintenance; preserve receipts, artifacts and unresolved/unknown usage."""
-        if not 1 <= limit <= 10000:
-            raise ValueError("Audit prune limit must be 1..10000")
-        with self.transaction() as db:
-            api = [
-                row[0]
-                for row in db.execute(
-                    "SELECT attempt_id FROM api_attempts WHERE status IN ('succeeded','failed','cancelled') "
-                    "AND updated<? AND CASE WHEN json_valid(record) THEN json_extract(record,'$.usage_status') END='reported' "
-                    "ORDER BY updated LIMIT ?",
-                    (before, limit),
+                    await db.execute(
+                        select(s.tool_operations).where(
+                            self._where(operation),
+                            s.tool_operations.c.session_id == session,
+                            s.tool_operations.c.scope == scope,
+                        )
+                    )
                 )
-            ]
-            db.executemany(
-                "DELETE FROM api_attempts WHERE attempt_id=?", [(value,) for value in api]
+                .mappings()
+                .one_or_none()
             )
-            remaining = limit - len(api)
-            attempts = [
-                row[0]
-                for row in db.execute(
-                    "SELECT a.attempt_id FROM attempts a JOIN operations o ON o.operation_id=a.operation_id "
-                    "WHERE o.status IN ('succeeded','failed','cancelled') AND o.updated<? AND a.updated<? "
-                    "AND a.status!='running' ORDER BY a.updated LIMIT ?",
-                    (before, before, remaining),
-                )
-            ]
-            db.executemany(
-                "DELETE FROM attempts WHERE attempt_id=?", [(value,) for value in attempts]
-            )
-        return {"api_attempts": len(api), "tool_attempts": len(attempts)}
-
-    def get(self, operation: str, *, session: str, scope: str) -> dict[str, Any]:
-        with self.connect() as db:
-            row = db.execute(
-                "SELECT * FROM operations WHERE operation_id=? AND session_id=? AND scope=?",
-                (operation, session, scope),
-            ).fetchone()
             if row is None:
                 raise ValueError("Unknown operation in this session/workspace")
             return dict(row)
 
-    def unresolved_conflicts(self, operation: str) -> list[str]:
-        with self.connect() as db:
-            row = db.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation,)
-            ).fetchone()
-            requested = json.loads(row["resources"])
-            return [
-                other["operation_id"]
-                for other in db.execute(
-                    "SELECT operation_id,resources FROM operations WHERE scope=? AND status IN ('uncertain','partial')",
-                    (row["scope"],),
+    async def unresolved_conflicts(self, operation: str) -> list[str]:
+        async with self.transaction() as db:
+            row = await self._row(db, operation)
+            others = (
+                await db.execute(
+                    select(s.tool_operations).where(
+                        s.tool_operations.c.workspace_id == self.workspace,
+                        s.tool_operations.c.scope == row["scope"],
+                        s.tool_operations.c.status.in_(["uncertain", "partial"]),
+                    )
                 )
-                if _conflicts(requested, json.loads(other["resources"]))
+            ).mappings()
+            return [
+                other["operation_id"] for other in others if _operation_conflicts(row, dict(other))
             ]
 
-    def claim(self, operation: str, owner: str) -> str | None:
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation,)
-            ).fetchone()
-            if row is None or row["status"] != "prepared":
+    async def _attempt(self, db: AsyncSession, row: dict[str, Any]) -> str:
+        attempt, stamp = uuid4().hex, time.time()
+        await db.execute(
+            insert(s.tool_attempts).values(
+                attempt_id=attempt,
+                operation_id=row["operation_id"],
+                number=row["attempts"] + 1,
+                status="running",
+                created=stamp,
+                updated=stamp,
+            )
+        )
+        await db.execute(
+            update(s.tool_operations)
+            .where(self._where(row["operation_id"]))
+            .values(
+                attempts=row["attempts"] + 1,
+                updated=stamp,
+            )
+        )
+        return attempt
+
+    async def claim(self, operation: str, owner: str) -> str | None:
+        async with self.transaction() as db:
+            row = await self._row(db, operation)
+            if row["status"] != "prepared":
                 return None
-            requested = json.loads(row["resources"])
-            running = db.execute(
-                "SELECT resources FROM operations WHERE scope=? AND status IN ('running','uncertain','partial')",
-                (row["scope"],),
+            conflicts = await db.execute(
+                select(s.tool_operations).where(
+                    s.tool_operations.c.workspace_id == self.workspace,
+                    s.tool_operations.c.scope == row["scope"],
+                    s.tool_operations.c.status.in_(["running", "uncertain", "partial"]),
+                )
             )
-            for other in running:
-                if _conflicts(requested, json.loads(other["resources"])):
-                    return None
-            now = time.time()
-            number = row["attempts"] + 1
-            attempt = uuid4().hex
-            db.execute(
-                "UPDATE steps SET status='running',updated=? WHERE run_id=? AND step_id=?",
-                (now, row["run_id"], row["step_id"]),
+            if any(_operation_conflicts(row, dict(other)) for other in conflicts.mappings()):
+                return None
+            await db.execute(
+                update(s.tool_operations)
+                .where(self._where(operation))
+                .values(
+                    status="running",
+                    owner=owner,
+                    pid=os.getpid(),
+                    host_id=self.host,
+                    lease_until=time.time() + 3600,
+                )
             )
-            db.execute(
-                "UPDATE runs SET status='running',updated=? WHERE run_id=?", (now, row["run_id"])
-            )
-            db.execute(
-                "UPDATE operations SET status='running',owner=?,pid=?,lease_until=?,attempts=?,updated=? WHERE operation_id=?",
-                (owner, os.getpid(), now + 3600, number, now, operation),
-            )
-            db.execute(
-                "INSERT INTO attempts VALUES(?,?,?,?,?,?)",
-                (attempt, operation, number, "running", now, now),
-            )
-            return attempt
+            await self._step(db, row, "running")
+            return await self._attempt(db, row)
 
-    def next_attempt(self, operation: str, *, owner: str) -> str:
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation,)
-            ).fetchone()
-            if row is None or row["owner"] != owner or row["status"] != "running":
+    async def next_attempt(self, operation: str, *, owner: str) -> str:
+        async with self.transaction() as db:
+            row = await self._row(db, operation)
+            if row["owner"] != owner or row["status"] != "running":
                 raise ValueError("Only the active owner may retry")
-            now = time.time()
-            db.execute(
-                "UPDATE attempts SET status='failed',updated=? WHERE operation_id=? AND status='running'",
-                (now, operation),
+            await db.execute(
+                update(s.tool_attempts)
+                .where(
+                    s.tool_attempts.c.operation_id == operation,
+                    s.tool_attempts.c.status == "running",
+                )
+                .values(status="failed", updated=time.time())
             )
-            number = row["attempts"] + 1
-            attempt = uuid4().hex
-            db.execute(
-                "INSERT INTO attempts VALUES(?,?,?,?,?,?)",
-                (attempt, operation, number, "running", now, now),
-            )
-            db.execute(
-                "UPDATE operations SET attempts=?,updated=? WHERE operation_id=?",
-                (number, now, operation),
-            )
-            return attempt
+            return await self._attempt(db, row)
 
-    def settle(
+    async def _step(self, db: AsyncSession, row: dict[str, Any], status: str) -> None:
+        await db.execute(
+            update(s.tool_steps)
+            .where(
+                s.tool_steps.c.run_id == row["run_id"],
+                s.tool_steps.c.step_id == row["step_id"],
+            )
+            .values(status=status, updated=time.time())
+        )
+        states = set(
+            (
+                await db.scalars(
+                    select(s.tool_operations.c.status).where(
+                        s.tool_operations.c.workspace_id == self.workspace,
+                        s.tool_operations.c.run_id == row["run_id"],
+                    )
+                )
+            ).all()
+        )
+        run_status = (
+            "running"
+            if states & {"running", "prepared"}
+            else "blocked"
+            if states & {"uncertain", "partial", "blocked"}
+            else "failed"
+            if "failed" in states
+            else "cancelled"
+            if "cancelled" in states
+            else "succeeded"
+        )
+        await db.execute(
+            update(s.tool_runs)
+            .where(
+                s.tool_runs.c.run_id == row["run_id"],
+                s.tool_runs.c.workspace_id == self.workspace,
+            )
+            .values(status=run_status, updated=time.time())
+        )
+
+    async def settle(
         self,
         operation: str,
         status: str,
@@ -386,122 +332,203 @@ class OperationStore:
     ) -> None:
         if status not in STATES:
             raise ValueError("Invalid operation status")
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation,)
-            ).fetchone()
-            if row is None:
-                raise ValueError("Unknown operation")
+        async with self.transaction() as db:
+            row = await self._row(db, operation)
             if row["status"] == status:
+                if result_ref is not None and row["result_ref"] != result_ref:
+                    raise ValueError("Settled operation has a different result")
                 return
             if status not in EDGES[row["status"]]:
                 raise ValueError(f"Illegal operation transition {row['status']} -> {status}")
             if row["status"] in {"uncertain", "partial"} and not evidence:
                 raise ValueError("Reconciliation evidence is required")
-            if row["owner"] and owner != row["owner"] and not evidence:
+            if row["owner"] and row["owner"] != owner and not evidence:
                 raise ValueError("Operation is owned by another executor")
-            now = time.time()
-            db.execute(
-                """UPDATE operations SET status=?,error_code=?,result_ref=COALESCE(?,result_ref),
-                       external_request_id=COALESCE(?,external_request_id),reconciliation=?,updated=?,lease_until=NULL
-                       WHERE operation_id=?""",
-                (status, error_code, result_ref, external_request_id, evidence, now, operation),
-            )
-            db.execute(
-                "UPDATE attempts SET status=?,updated=? WHERE operation_id=? AND status='running'",
-                (status, now, operation),
-            )
-            db.execute(
-                "UPDATE steps SET status=?,updated=? WHERE run_id=? AND step_id=?",
-                (status, now, row["run_id"], row["step_id"]),
-            )
-            pending = db.execute(
-                "SELECT 1 FROM operations WHERE run_id=? AND status IN ('running','prepared')",
-                (row["run_id"],),
-            ).fetchone()
-            if not pending:
-                states = {
-                    item[0]
-                    for item in db.execute(
-                        "SELECT status FROM operations WHERE run_id=?", (row["run_id"],)
-                    )
-                }
-                run_state = (
-                    "blocked"
-                    if states & {"uncertain", "partial", "blocked"}
-                    else "failed"
-                    if "failed" in states
-                    else "cancelled"
-                    if "cancelled" in states
-                    else "succeeded"
+            await db.execute(
+                update(s.tool_operations)
+                .where(self._where(operation))
+                .values(
+                    status=status,
+                    error_code=error_code,
+                    result_ref=result_ref or row["result_ref"],
+                    external_request_id=external_request_id or row["external_request_id"],
+                    reconciliation=evidence,
+                    updated=time.time(),
+                    lease_until=None,
                 )
-                db.execute(
-                    "UPDATE runs SET status=?,updated=? WHERE run_id=?",
-                    (run_state, now, row["run_id"]),
+            )
+            await db.execute(
+                update(s.tool_attempts)
+                .where(
+                    s.tool_attempts.c.operation_id == operation,
+                    s.tool_attempts.c.status == "running",
                 )
+                .values(status=status, updated=time.time())
+            )
+            await self._step(db, row, status)
 
-    def retry_failed(self, operation: str, contract: Any, *, verified_no_effect: str) -> None:
-        """Host recovery only, after explicit evidence; never called by continue_pending."""
+    async def retry_failed(self, operation: str, contract: Any, *, verified_no_effect: str) -> None:
         if not verified_no_effect or contract.retry_mode == "never":
             raise ValueError("Recovery requires evidence and a retryable contract")
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT * FROM operations WHERE operation_id=?", (operation,)
-            ).fetchone()
-            if row is None or row["status"] != "failed" or row["attempts"] >= contract.max_attempts:
+        async with self.transaction() as db:
+            row = await self._row(db, operation)
+            if row["status"] != "failed" or row["attempts"] >= contract.max_attempts:
                 raise ValueError("Operation is not eligible for another attempt")
-            if row["tool"] != contract.name or row["contract_version"] != contract.version:
+            if (row["tool"], row["contract_version"]) != (contract.name, contract.version):
                 raise ValueError("Recovery contract mismatch")
-            now = time.time()
-            db.execute(
-                "UPDATE operations SET status='prepared',owner=NULL,pid=NULL,reconciliation=?,updated=? WHERE operation_id=?",
-                (verified_no_effect, now, operation),
+            await db.execute(
+                update(s.tool_operations)
+                .where(self._where(operation))
+                .values(
+                    status="prepared",
+                    owner=None,
+                    pid=None,
+                    host_id=None,
+                    reconciliation=verified_no_effect,
+                    updated=time.time(),
+                )
             )
-            db.execute(
-                "UPDATE steps SET status='prepared',updated=? WHERE run_id=? AND step_id=?",
-                (now, row["run_id"], row["step_id"]),
-            )
+            await self._step(db, row, "prepared")
 
-    def recover(self, *, session: str, scope: str) -> list[dict[str, Any]]:
-        """Only dead owners are reclaimed. Expired leases never steal from a live process."""
-        with self.transaction() as db:
-            rows = db.execute(
-                "SELECT * FROM operations WHERE session_id=? AND (scope=? OR substr(scope,1,length(?))=?) AND status='running'",
-                (session, scope, scope + ":child:", scope + ":child:"),
-            ).fetchall()
-            for row in rows:
-                if _alive(row["pid"]):
+    async def recover(self, *, session: str, scope: str) -> list[dict[str, Any]]:
+        async with self.transaction() as db:
+            rows = (
+                (
+                    await db.execute(
+                        select(s.tool_operations).where(
+                            s.tool_operations.c.workspace_id == self.workspace,
+                            s.tool_operations.c.session_id == session,
+                            (s.tool_operations.c.scope == scope)
+                            | s.tool_operations.c.scope.startswith(
+                                scope + ":child:", autoescape=True
+                            ),
+                            s.tool_operations.c.status == "running",
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            for item in rows:
+                row = dict(item)
+                # Unknown/remote host owners require explicit reconciliation. Lease expiration
+                # alone cannot prove a remote process stopped or a write did not happen.
+                if row["host_id"] != self.host or _alive(row["pid"]):
                     continue
-                state = "failed" if row["effect"] == "read_only" else "uncertain"
-                db.execute(
-                    "UPDATE operations SET status=?,error_code=?,reconciliation=?,updated=? WHERE operation_id=?",
-                    (
-                        state,
-                        "owner_lost",
-                        "required" if state == "uncertain" else "no_write_effect",
-                        time.time(),
-                        row["operation_id"],
-                    ),
+                status = "failed" if row["effect"] == "read_only" else "uncertain"
+                await db.execute(
+                    update(s.tool_operations)
+                    .where(self._where(row["operation_id"]))
+                    .values(
+                        status=status,
+                        error_code="owner_lost",
+                        updated=time.time(),
+                        reconciliation="no_write_effect" if status == "failed" else "required",
+                    )
                 )
-                db.execute(
-                    "UPDATE attempts SET status=?,updated=? WHERE operation_id=? AND status='running'",
-                    (state, time.time(), row["operation_id"]),
+                await db.execute(
+                    update(s.tool_attempts)
+                    .where(
+                        s.tool_attempts.c.operation_id == row["operation_id"],
+                        s.tool_attempts.c.status == "running",
+                    )
+                    .values(status=status, updated=time.time())
                 )
-                db.execute(
-                    "UPDATE steps SET status=?,updated=? WHERE run_id=? AND step_id=?",
-                    (state, time.time(), row["run_id"], row["step_id"]),
-                )
-                db.execute(
-                    "UPDATE runs SET status='blocked',updated=? WHERE run_id=?",
-                    (time.time(), row["run_id"]),
-                )
+                await self._step(db, row, status)
             return [
                 dict(row)
-                for row in db.execute(
-                    "SELECT * FROM operations WHERE session_id=? AND scope=? AND status IN ('uncertain','partial')",
-                    (session, scope),
-                )
+                for row in (
+                    await db.execute(
+                        select(s.tool_operations).where(
+                            s.tool_operations.c.workspace_id == self.workspace,
+                            s.tool_operations.c.session_id == session,
+                            s.tool_operations.c.scope == scope,
+                            s.tool_operations.c.status.in_(["uncertain", "partial"]),
+                        )
+                    )
+                ).mappings()
             ]
+
+    async def record_api_attempt(self, record: dict[str, Any], *, session: str) -> None:
+        async with self.transaction() as db:
+            existing = (
+                (
+                    await db.execute(
+                        select(s.api_attempts)
+                        .where(s.api_attempts.c.attempt_id == record["attempt_id"])
+                        .with_for_update()
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if existing:
+                if (existing["workspace_id"], existing["session_id"], existing["request_id"]) != (
+                    self.workspace,
+                    session,
+                    record["request_id"],
+                ):
+                    raise ValueError("API attempt ID is bound to another request")
+                if existing["status"] != "running":
+                    if existing["record"] == record:
+                        return
+                    raise ValueError("API attempt already settled")
+            values = dict(
+                workspace_id=self.workspace,
+                session_id=session,
+                attempt_id=record["attempt_id"],
+                request_id=record["request_id"],
+                record=record,
+                status=record["status"],
+                updated=record.get("finished", record.get("started", time.time())),
+            )
+            stmt = insert(s.api_attempts).values(**values)
+            await db.execute(stmt.on_conflict_do_update(index_elements=["attempt_id"], set_=values))
+
+    async def prune_audit(self, *, before: float, limit: int = 1000) -> dict[str, int]:
+        if not 1 <= limit <= 10000:
+            raise ValueError("Audit prune limit must be 1..10000")
+        async with self.transaction() as db:
+            api = list(
+                (
+                    await db.scalars(
+                        select(s.api_attempts.c.attempt_id)
+                        .where(
+                            s.api_attempts.c.workspace_id == self.workspace,
+                            s.api_attempts.c.status.in_(["succeeded", "failed", "cancelled"]),
+                            s.api_attempts.c.updated < before,
+                            s.api_attempts.c.record["usage_status"].astext == "reported",
+                        )
+                        .order_by(s.api_attempts.c.updated)
+                        .limit(limit)
+                    )
+                ).all()
+            )
+            await db.execute(delete(s.api_attempts).where(s.api_attempts.c.attempt_id.in_(api)))
+            attempts = list(
+                (
+                    await db.scalars(
+                        select(s.tool_attempts.c.attempt_id)
+                        .join(
+                            s.tool_operations,
+                            s.tool_operations.c.operation_id == s.tool_attempts.c.operation_id,
+                        )
+                        .where(
+                            s.tool_operations.c.workspace_id == self.workspace,
+                            s.tool_operations.c.status.in_(["succeeded", "failed", "cancelled"]),
+                            s.tool_operations.c.updated < before,
+                            s.tool_attempts.c.updated < before,
+                            s.tool_attempts.c.status != "running",
+                        )
+                        .order_by(s.tool_attempts.c.updated)
+                        .limit(limit - len(api))
+                    )
+                ).all()
+            )
+            await db.execute(
+                delete(s.tool_attempts).where(s.tool_attempts.c.attempt_id.in_(attempts))
+            )
+            return {"api_attempts": len(api), "tool_attempts": len(attempts)}
 
 
 def _alive(pid: int | None) -> bool:
@@ -531,3 +558,19 @@ def _conflicts(a: dict[str, list[str]], b: dict[str, list[str]]) -> bool:
     return intersects(a["write"], b["read"] + b["write"]) or intersects(
         b["write"], a["read"] + a["write"]
     )
+
+
+def _operation_conflicts(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    # Research control mutates a session's relational records, not another session's
+    # files. Previously each ResearchStore had its own ledger; sharing a database
+    # must not turn one interrupted research session into a workspace-wide outage.
+    def session_control(row: dict[str, Any]) -> bool:
+        return (
+            row["tool"] in {"research_memory", "research_project", "planner", "replanner"}
+            and row["effect"] != "mixed"
+            and row["resources"] == {"read": [], "write": ["research.control"]}
+        )
+
+    if a["session_id"] != b["session_id"] and (session_control(a) or session_control(b)):
+        return False
+    return _conflicts(a["resources"], b["resources"])

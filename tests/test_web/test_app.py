@@ -463,7 +463,7 @@ def test_unconfigured_model_and_api_failures_are_recoverable(workspace):
         assert not collect(socket)[-1]["failed"]
 
 
-def test_question_response_and_stale_request_id(workspace):
+async def test_question_response_and_stale_request_id(workspace):
     client, _, _, _, _ = workspace
     sid = add_session(client, add_model(client))
     with sse_connect(client, sid, headers=ORIGIN) as socket:
@@ -489,7 +489,7 @@ def test_question_response_and_stale_request_id(workspace):
             }
         )
         events = collect(socket)
-        record = client.app.state.workspace.store.load_by_id(client.app.state.workspace.cwd, sid)
+        record = (await client.app.state.workspace.store.load_by_id(client.app.state.workspace.cwd, sid))
         assert "最近一年" in json.dumps(record["messages"], ensure_ascii=False)
         operations = [
             e["message"]
@@ -559,7 +559,7 @@ def test_cli_auth_exit_does_not_terminate_web_server(workspace, monkeypatch):
     assert client.get("/api/health").status_code == 200
 
 
-def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
+async def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
     client, _, requests, _, _ = workspace
     sample = "financial-statement-analysis"
     client.patch(f"/api/skills/{sample}", json={"enabled": True})
@@ -578,7 +578,7 @@ def test_skill_switch_does_not_change_an_in_flight_turn(workspace):
             }
         )
         events = collect(socket)
-        record = client.app.state.workspace.store.load_by_id(client.app.state.workspace.cwd, sid)
+        record = (await client.app.state.workspace.store.load_by_id(client.app.state.workspace.cwd, sid))
         output = json.dumps(record["messages"], ensure_ascii=False)
         assert "简化ROE不是加权平均ROE" in output
         operations = [
@@ -634,7 +634,7 @@ def test_subscription_profiles_selectable_without_api_key_conversion(
     assert profile_settings(profile_id).resolve_profile()[1].auth_source == before
 
 
-def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
+async def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
     from researchx.state.store import ResearchStore
     from researchx.workspace.session_files import SessionFiles
 
@@ -678,12 +678,12 @@ def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
             }
         )
         assert rejected.status_code == 404 and "不属于" in rejected.json()["detail"]
-    directory = ResearchStore(cwd, sid).directory
+    directory = ResearchStore(cwd, sid)
     output = cwd / "report.md"
     output.write_text("Report")
-    artifact = SessionFiles(directory).register(
+    artifact = (await SessionFiles(directory).register(
         output, task_id="task1", status="partial", kind="financial"
-    )
+    ))
     endpoint = f"/api/sessions/{sid}/artifacts/{artifact['id']}/download"
     assert client.get(endpoint).content == b"Report"
     assert (
@@ -694,7 +694,8 @@ def test_attachment_upload_submit_isolation_restart_and_cleanup(workspace):
         assert reclient.get(endpoint).content == b"Report"
         assert reclient.get(f"/api/sessions/{sid}/attachments").json()["items"] == [attachment]
     assert client.delete(f"/api/sessions/{sid}").status_code == 200
-    assert not directory.exists() and client.get(endpoint).status_code == 404
+    assert await app.state.workspace.store.records.load(sid) is None
+    assert client.get(endpoint).status_code == 404
 
 
 def test_attachment_failures_limits_and_server_id_validation(workspace, monkeypatch):

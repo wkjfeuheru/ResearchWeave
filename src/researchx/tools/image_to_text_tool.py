@@ -151,7 +151,7 @@ class ImageToTextTool(BaseTool[ImageToTextToolInput]):
             return arguments.image_data, arguments.media_type
 
         if arguments.image_path:
-            path = context.resolve_path(arguments.image_path)
+            path = await context.resolve_path(arguments.image_path)
 
             if not path.exists():
                 log.warning("image_to_text: image not found at %s", path)

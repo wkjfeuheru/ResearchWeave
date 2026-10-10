@@ -51,7 +51,7 @@ async def test_disconnected_mcp_proves_request_not_sent(tmp_path, monkeypatch):
     result = await _execute_tool_call_impl(context, tool.name, "not-sent", {})
     assert result.is_error and result.result_metadata["no_effect"] is True
     assert result.result_metadata["status"] == "failed"
-    row = ledger(tmp_path).get(
+    row = await ledger(tmp_path).get(
         result.result_metadata["operation_id"], session="session", scope=str(tmp_path)
     )
     assert row["status"] == "failed" and row["attempts"] == 1
@@ -93,7 +93,7 @@ async def test_mcp_after_dispatch_uncertain_survives_restart_without_replay(
     assert replay.is_error and other_call.is_error
     assert session.call_tool.await_count == 1
     assert (tmp_path / "remote_effect").read_text() == "posted\n"
-    row = ledger(tmp_path).get(
+    row = await ledger(tmp_path).get(
         first.result_metadata["operation_id"], session="session", scope=str(tmp_path)
     )
     assert row["status"] == "uncertain" and row["attempts"] == 1
@@ -103,7 +103,9 @@ async def test_reconciliation_requires_matching_success_artifact_before_reuse(
     tmp_path, monkeypatch
 ):
     from researchx.engine.messages import ToolResultBlock
-    from pathlib import Path
+    from sqlalchemy import update
+    from researchx.storage import schema as s
+    from researchx.storage.content import persist_object
 
     manager = McpClientManager({"demo": McpStdioServerConfig(command="unused")})
     session = AsyncMock()
@@ -114,21 +116,25 @@ async def test_reconciliation_requires_matching_success_artifact_before_reuse(
     operation = uncertain.result_metadata["operation_id"]
     store = ledger(tmp_path)
     # A host has verified the remote success, but the old artifact is still an error.
-    store.settle(operation, "succeeded", evidence="Remote audit confirmed commit")
+    await store.settle(operation, "succeeded", evidence="Remote audit confirmed commit")
     blocked = await _execute_tool_call_impl(context, tool.name, "manual-review", {})
     assert blocked.is_error and blocked.result_metadata["error_code"] == "artifact_unavailable"
-    row = store.get(operation, session="session", scope=str(tmp_path))
-    path = Path(row["result_ref"])
+    async def publish_verified_receipt(receipt):
+        key = await persist_object(store.database, store.workspace, receipt.model_dump_json().encode())
+        async with store.database.transaction() as db:
+            await db.execute(update(s.tool_operations).where(
+                s.tool_operations.c.workspace_id == store.workspace,
+                s.tool_operations.c.operation_id == operation).values(result_ref=key))
     restored = ToolResultBlock(
         tool_use_id="manual-review",
         content="Remote audit: committed",
         result_metadata={"status": "success", "operation_id": "wrong-operation"},
     )
-    path.write_text(restored.model_dump_json())
+    await publish_verified_receipt(restored)
     wrong = await _execute_tool_call_impl(context, tool.name, "manual-review", {})
     assert wrong.is_error and wrong.result_metadata["status"] == "blocked"
     restored.result_metadata["operation_id"] = operation
-    path.write_text(restored.model_dump_json())
+    await publish_verified_receipt(restored)
     reused = await _execute_tool_call_impl(context, tool.name, "manual-review", {})
     assert not reused.is_error and reused.content == "Remote audit: committed"
     assert reused.result_metadata["replayed_receipt"]

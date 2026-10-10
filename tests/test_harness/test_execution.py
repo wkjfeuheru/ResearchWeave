@@ -1,10 +1,13 @@
-"""Execution boundaries tested with real SQLite, hooks and side-effect files."""
+"""Execution boundaries tested with real PostgreSQL, hooks and side-effect files."""
 
 import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel
+from sqlalchemy import update
+from researchx.storage import schema as s
+from tests.postgres_helpers import ledger_rows
 
 from researchx.config import Settings
 from researchx.config.settings import PermissionSettings
@@ -70,7 +73,7 @@ def setup(tmp_path, monkeypatch, tool=None, mode=PermissionMode.FULL_AUTO, hooks
 
 
 def ledger(tmp_path):
-    return OperationStore(tmp_path / "data/executions/operations.sqlite3")
+    return OperationStore(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -94,9 +97,8 @@ async def test_side_effect_receipt_restart_reuses_success_and_post_hook_failure(
     replay = await _execute_tool_call_impl(restarted, tool.name, "call", {"value": 42})
     assert not replay.is_error and replay.result_metadata["replayed_receipt"]
     assert restarted_tool.calls == 0 and tool.calls == 1
-    with ledger(tmp_path).connect() as db:
-        assert db.execute("SELECT status FROM operations").fetchone()[0] == "succeeded"
-        assert db.execute("SELECT count(*) FROM attempts").fetchone()[0] == 1
+    assert (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]["status"] == "succeeded"
+    assert len(await ledger_rows(ledger(tmp_path), s.tool_attempts)) == 1
 
 
 @pytest.mark.asyncio
@@ -137,8 +139,8 @@ async def test_cancelled_write_retains_uncertain_receipt(tmp_path, monkeypatch):
     pending.cancel()
     with pytest.raises(asyncio.CancelledError):
         await pending
-    with ledger(tmp_path).connect() as db:
-        assert db.execute("SELECT status,error_code FROM operations").fetchone()[:] == (
+    row = (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]
+    assert (row["status"], row["error_code"]) == (
             "uncertain",
             "cancelled_after_start",
         )
@@ -175,8 +177,8 @@ async def test_cancel_waiter_does_not_settle_other_owner(tmp_path, monkeypatch):
         await first
 
 
-def prepared(store, **kwargs):
-    return store.prepare(
+async def prepared(store, **kwargs):
+    return await store.prepare(
         session="s",
         scope="workspace",
         run="r",
@@ -190,24 +192,24 @@ def prepared(store, **kwargs):
     )
 
 
-def test_crash_recovery_requires_reconciliation(tmp_path):
+async def test_crash_recovery_requires_reconciliation(tmp_path):
     store = OperationStore(tmp_path / "operations.db")
-    row = prepared(store)
+    row = await prepared(store)
     op = row["operation_id"]
-    assert store.claim(op, "dead-owner")
-    with store.transaction() as db:
-        db.execute("UPDATE operations SET pid=?", (2147483647,))
-    restart = OperationStore(store.path)
-    recovered = restart.recover(session="s", scope="workspace")
+    assert await store.claim(op, "dead-owner")
+    async with store.transaction() as db:
+        await db.execute(update(s.tool_operations).where(s.tool_operations.c.operation_id == op).values(pid=2147483647))
+    restart = OperationStore(store.cwd)
+    recovered = (await restart.recover(session="s", scope="workspace"))
     assert recovered[0]["status"] == "uncertain"
-    assert restart.claim(op, "new-owner") is None
+    assert (await restart.claim(op, "new-owner")) is None
     with pytest.raises(ValueError, match="evidence"):
-        restart.settle(op, "succeeded")
-    restart.settle(op, "succeeded", evidence="external system confirmed request ID 123")
+        (await restart.settle(op, "succeeded"))
+    (await restart.settle(op, "succeeded", evidence="external system confirmed request ID 123"))
     with pytest.raises(ValueError, match="Illegal"):
-        restart.settle(op, "running")
+        (await restart.settle(op, "running"))
     with pytest.raises(ValueError, match="Unknown"):
-        restart.get(op, session="other", scope="workspace")
+        (await restart.get(op, session="other", scope="workspace"))
 
 
 def test_registry_conflicts_and_model_schema_compatibility():
@@ -289,8 +291,8 @@ async def test_contract_retries_only_verified_no_effect_and_preserves_key(
     assert not result.is_error and tool.calls == 1
     assert len(tool.keys) == 2 and len(set(tool.keys)) == 1
     assert tool.reconciled is (mode == "reconcile_before_retry")
-    with ledger(tmp_path).connect() as db:
-        assert db.execute("SELECT attempts,status FROM operations").fetchone()[:] == (
+    row = (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]
+    assert (row["attempts"], row["status"]) == (
             2,
             "succeeded",
         )
@@ -353,8 +355,8 @@ async def test_pre_hook_effect_failure_is_partial_not_safe_to_retry(tmp_path, mo
     result = await _execute_tool_call_impl(context, tool.name, "call", {"value": 1})
     assert result.result_metadata["status"] == "partial"
     assert tool.calls == 0 and (tmp_path / "hook_committed").exists()
-    with ledger(tmp_path).connect() as db:
-        assert db.execute("SELECT status,effect FROM operations").fetchone()[:] == (
+    row = (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]
+    assert (row["status"], row["effect"]) == (
             "partial",
             "mixed",
         )
@@ -362,13 +364,15 @@ async def test_pre_hook_effect_failure_is_partial_not_safe_to_retry(tmp_path, mo
 
 @pytest.mark.asyncio
 async def test_missing_success_artifact_never_reexecutes(tmp_path, monkeypatch):
-    from pathlib import Path
+    from researchx.storage.content import LocalContentStore, ContentReference
+    from researchx.config.paths import get_data_dir
 
     tool, context = setup(tmp_path, monkeypatch)
     first = await _execute_tool_call_impl(context, tool.name, "call", {"value": 1})
-    with ledger(tmp_path).connect() as db:
-        saved = db.execute("SELECT result_ref FROM operations").fetchone()[0]
-    Path(saved).unlink()
+    saved = (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]["result_ref"]
+    objects = await ledger_rows(ledger(tmp_path), s.content_objects)
+    reference = ContentReference(**next(row for row in objects if row["content_hash"] == saved.removeprefix("sha256:")))
+    (LocalContentStore(get_data_dir() / "objects").root / reference.object_key).unlink()
     result = await _execute_tool_call_impl(context, tool.name, "call", {"value": 1})
     assert not first.is_error and result.result_metadata["error_code"] == "artifact_unavailable"
     assert result.result_metadata["operation_status"] == "succeeded" and tool.calls == 1
@@ -382,7 +386,7 @@ async def test_workspace_escape_rejected_before_pre_hook(tmp_path, monkeypatch):
     from researchx.tools.file_read_tool import FileReadTool
 
     store = ResearchStore(tmp_path, "b" * 12, root=tmp_path / "state")
-    store.capture(origin_id="user", kind="user", content="research")
+    (await store.capture(origin_id="user", kind="user", content="research"))
     runtime = ResearchAgentRuntime(store, workspace_root=tmp_path / "workspaces")
     await runtime.start(
         ResearchObjective(
@@ -433,16 +437,15 @@ async def test_recovery_cannot_reset_total_tool_attempt_limit(tmp_path, monkeypa
     service.contract = resolve_contract(tool, Input(value=1))
     await service.begin(context, tool, Input(value=1), "retry-limit", tmp_path)
     op = service.operation["operation_id"]
-    service.ledger.settle(op, "failed", owner=service.owner)
-    service.ledger.retry_failed(
+    await service.ledger.settle(op, "failed", owner=service.owner)
+    await service.ledger.retry_failed(
         op, service.contract, verified_no_effect="read-only request, no writes"
     )
     result = await _execute_tool_call_impl(context, tool.name, "retry-limit", {"value": 1})
     assert result.is_error and tool.calls == 1
-    with service.ledger.connect() as db:
-        assert db.execute("SELECT attempts FROM operations").fetchone()[0] == 2
+    assert (await ledger_rows(service.ledger, s.tool_operations))[0]["attempts"] == 2
     with pytest.raises(ValueError):
-        service.ledger.retry_failed(op, service.contract, verified_no_effect="read only")
+        await service.ledger.retry_failed(op, service.contract, verified_no_effect="read only")
 
 
 @pytest.mark.asyncio

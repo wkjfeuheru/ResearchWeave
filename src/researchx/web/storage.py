@@ -6,9 +6,7 @@ from researchx.api.usage import UsageSnapshot
 from researchx.engine.metadata import ExecutionMetadata
 from researchx.web.types import WebSessionRecord
 
-import json
 import re
-import shutil
 import time
 from hashlib import sha256
 from pathlib import Path
@@ -18,8 +16,10 @@ from researchx.config.paths import get_data_dir
 from researchx.engine.messages import ConversationMessage, sanitize_conversation_messages
 from researchx.state.store import ResearchStore
 from researchx.services.sessions.storage import _persistable_tool_metadata
-from researchx.storage.filesystem import atomic_write_text, private_directory, private_file
+from researchx.storage.filesystem import atomic_write_text, private_directory
 from researchx.web.citations import project_answer_rows
+from researchx.storage.conversations import ConversationRecords
+from researchx.storage.database import current_database
 
 
 class WebSessionBackend:
@@ -28,8 +28,6 @@ class WebSessionBackend:
         digest = sha256(self.cwd.encode()).hexdigest()[:16]
         self.directory = get_data_dir() / "web" / "sessions" / digest
         private_directory(self.directory)
-        for snapshot in self.directory.glob("*.json"):
-            private_file(snapshot)
 
     def get_session_dir(self, cwd: str | Path) -> Path:
         return self.directory
@@ -37,9 +35,9 @@ class WebSessionBackend:
     def _path(self, session_id: str) -> Path:
         if not re.fullmatch(r"[a-f0-9]{12}", session_id):
             raise ValueError("无效的会话 ID")
-        return self.directory / f"{session_id}.json"
+        return self.directory / session_id
 
-    def create(self, profile_id: str) -> WebSessionRecord:
+    async def create(self, profile_id: str) -> WebSessionRecord:
         now = time.time()
         record: WebSessionRecord = {
             "session_id": uuid4().hex[:12],
@@ -55,26 +53,22 @@ class WebSessionBackend:
             "usage": {},
             "message_count": 0,
         }
-        self.write(record)
+        (await self.write(record))
         return record
 
-    def write(self, record: WebSessionRecord) -> None:
-        atomic_write_text(
-            self._path(record["session_id"]),
-            json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-            mode=0o600,
-        )
+    @property
+    def records(self) -> ConversationRecords:
+        return ConversationRecords(current_database(), self.cwd)
 
-    def delete(self, session_id: str) -> None:
-        path = self._path(session_id)
-        if not path.is_file():
-            raise FileNotFoundError(session_id)
-        research = ResearchStore(self.cwd, session_id).directory
-        if research.exists():
-            shutil.rmtree(research)
-        path.unlink()
+    async def write(self, record: WebSessionRecord) -> None:
+        self._path(record["session_id"])
+        await self.records.write(dict(record), channel="web")
 
-    def save_snapshot(
+    async def delete(self, session_id: str) -> None:
+        self._path(session_id)
+        await self.records.delete(session_id)
+
+    async def save_snapshot(
         self,
         *,
         cwd: str | Path,
@@ -85,7 +79,7 @@ class WebSessionBackend:
         session_id: str | None = None,
         tool_metadata: ExecutionMetadata | None = None,
     ) -> Path:
-        record = self.load_by_id(cwd, session_id) if session_id else None
+        record = (await self.load_by_id(cwd, session_id)) if session_id else None
         if record is None:
             raise ValueError("会话不存在")
         messages = sanitize_conversation_messages(messages)
@@ -96,22 +90,22 @@ class WebSessionBackend:
                 "system_prompt": system_prompt,
                 "messages": [m.model_dump(mode="json") for m in messages],
                 "usage": usage.model_dump(mode="json"),
-                "tool_metadata": _persistable_tool_metadata(tool_metadata),
+                "tool_metadata": (_persistable_tool_metadata(tool_metadata)),
                 "summary": first_user[:60] or record["summary"],
                 "message_count": len(messages),
                 "updated_at": time.time(),
             }
         )
-        self.write(record)
+        (await self.write(record))
         return self._path(record["session_id"])
 
-    def load_by_id(
+    async def load_by_id(
         self, cwd: str | Path, session_id: str, *, include_research_progress: bool = True
     ) -> WebSessionRecord | None:
-        path = self._path(session_id)
-        if not path.exists():
+        self._path(session_id)
+        record = await self.records.load(session_id)
+        if record is None:
             return None
-        record = json.loads(path.read_text(encoding="utf-8"))
         messages = sanitize_conversation_messages(
             [ConversationMessage.model_validate(m) for m in record["messages"]]
         )
@@ -119,28 +113,21 @@ class WebSessionBackend:
         record["tool_metadata"] = _persistable_tool_metadata(record.get("tool_metadata"))
         if include_research_progress or record.get("display_messages"):
             research = ResearchStore(self.cwd, session_id)
-            memory = research.load()
+            memory = await research.load()
             if record.get("display_messages"):
                 record["display_messages"] = project_answer_rows(
                     record["display_messages"], memory.answers
                 )
             if include_research_progress:
-                record["research_progress"] = research.progress(memory)
+                record["research_progress"] = await research.progress(memory)
         return cast(WebSessionRecord, record)
 
-    def list_snapshots(self, cwd: str | Path, limit: int = 100) -> list[WebSessionRecord]:
-        records = []
-        for path in self.directory.glob("*.json"):
-            try:
-                record = self.load_by_id(cwd, path.stem, include_research_progress=False)
-                if record is not None:
-                    records.append(record)
-            except (ValueError, OSError):
-                continue
-        return sorted(records, key=lambda r: r["updated_at"], reverse=True)[:limit]
+    async def list_snapshots(self, cwd: str | Path, limit: int = 100) -> list[WebSessionRecord]:
+        records = await self.records.list(channel="web", limit=limit)
+        return [cast(WebSessionRecord, record) for record in records]
 
-    def load_latest(self, cwd: str | Path) -> WebSessionRecord | None:
-        return next(iter(self.list_snapshots(cwd, limit=1)), None)
+    async def load_latest(self, cwd: str | Path) -> WebSessionRecord | None:
+        return next(iter((await self.list_snapshots(cwd, limit=1))), None)
 
     def export_markdown(self, *, cwd: str | Path, messages: list[ConversationMessage]) -> Path:
         path = self.directory / "conversation.md"

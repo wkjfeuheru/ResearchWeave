@@ -52,7 +52,7 @@ class FinancialFixtureTool(BaseTool):
             assert result["net_profit_margin_pct"] == DATA["expected"]["net_profit_margin_pct"]
             output, kind = json.dumps(result, ensure_ascii=False), "calculation"
         elif arguments.stage == "draft":
-            memory = context.metadata["research_store"].load()
+            memory = await context.metadata["research_store"].load()
             ev = next(
                 item.id
                 for item in reversed(list(memory.evidence_pool.values()))
@@ -92,11 +92,11 @@ class EarningsModel:
         self.queue, self.active = [], None
         self.requests = []
 
-    def mutation(self, action, **values):
+    async def mutation(self, action, **values):
         return {
             "action": action,
             "operation_id": new_id("op"),
-            "expected_revision": self.store.load().revision,
+            "expected_revision": (await self.store.load()).revision,
             **values,
         }
 
@@ -140,13 +140,13 @@ class EarningsModel:
             if item.status == "verified"
         )
 
-    def work_operation(self, step, memory, plan):
+    async def work_operation(self, step, memory, plan):
         execution = self.active_execution(memory) if step != "execute" else None
         if step == "execute":
             return "financial_fixture", {"stage": self.active}
         if step == "add_source":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "add_evidence",
                     source_id=execution.source_ids[0],
                     statement="FY2025营收120、净利润12，CNY million",
@@ -155,7 +155,7 @@ class EarningsModel:
         if step in {"source_check", "calc_check"}:
             ev = next(reversed(memory.evidence_pool))
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "add_reasoning",
                     evidence_ids=[ev],
                     method="逐项核对完整离线 fixture 和数值运算结果",
@@ -166,7 +166,7 @@ class EarningsModel:
             }
         if step == "verify_source":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "verify_evidence",
                     evidence_id=next(reversed(memory.evidence_pool)),
                     level="source_checked",
@@ -177,7 +177,7 @@ class EarningsModel:
             }
         if step == "calculation_step":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "add_reasoning",
                     evidence_ids=[self.source_evidence(memory)],
                     method="FinancialFixtureTool: (120/100-1)*100; 12/120*100, Decimal",
@@ -187,7 +187,7 @@ class EarningsModel:
             }
         if step == "add_calculation":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "add_evidence",
                     source_id=execution.source_ids[0],
                     statement="营收同比20%，净利润率10%",
@@ -197,7 +197,7 @@ class EarningsModel:
             }
         if step == "verify_calculation":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "verify_evidence",
                     evidence_id=next(reversed(memory.evidence_pool)),
                     level="verified",
@@ -208,7 +208,7 @@ class EarningsModel:
             }
         if step == "finding":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "add_conclusion",
                     statement="离线样本营收同比20%，净利润率10%",
                     status="verified",
@@ -218,7 +218,7 @@ class EarningsModel:
             }
         if step == "finding_step":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": await self.mutation(
                     "add_reasoning",
                     evidence_ids=[self.calc_evidence(memory)],
                     verification=True,
@@ -242,7 +242,7 @@ class EarningsModel:
                 "kind": KINDS[KEYS.index(self.active)],
                 "criteria": [self.active],
                 "evidence_ids": [ev],
-                "content": self.store.read_source(memory.sources[execution.source_ids[0]]),
+                "content": (await self.store.read_source(memory.sources[execution.source_ids[0]])),
             }
             if self.active in {"normalize", "analysis"}:
                 fields.update(unit=DATA["unit"], currency=DATA["currency"], period=DATA["period"])
@@ -264,11 +264,11 @@ class EarningsModel:
                     finding_ids=[next(reversed(memory.conclusions))],
                 )
             return "research_project", {
-                "operation": self.mutation("submit_artifact", artifact=fields)
+                "operation": await self.mutation("submit_artifact", artifact=fields)
             }
         if step == "complete":
             return "research_project", {
-                "operation": self.mutation("complete_task", task_id=self.active, task_revision=1)
+                "operation": await self.mutation("complete_task", task_id=self.active, task_revision=1)
             }
         raise AssertionError(step)
 
@@ -278,7 +278,7 @@ class EarningsModel:
             self.child_calls += 1
             name, values = "submit_plan_proposal", self.proposal().model_dump(mode="json")
         else:
-            memory = self.store.load()
+            memory = (await self.store.load())
             plan = memory.plans.get(memory.research_state.current_plan_id or "")
             if memory.project is None:
                 user = next(
@@ -287,7 +287,7 @@ class EarningsModel:
                 name, values = (
                     "research_project",
                     {
-                        "operation": self.mutation(
+                        "operation": await self.mutation(
                             "start",
                             objective=self.objective().model_dump(mode="json"),
                             user_source_ids=[user],
@@ -297,7 +297,7 @@ class EarningsModel:
             elif plan is None:
                 name, values = "planner", {"objective": DATA["subject"]}
             elif self.queue:
-                name, values = self.work_operation(self.queue.pop(0), memory, plan)
+                name, values = await self.work_operation(self.queue.pop(0), memory, plan)
             elif any(item.status == "ready" for item in plan.tasks):
                 item = next(item for item in plan.tasks if item.status == "ready")
                 self.active = item.id
@@ -316,10 +316,10 @@ class EarningsModel:
                 self.queue += ["artifact", "complete"]
                 name, values = (
                     "research_project",
-                    {"operation": self.mutation("claim_task", task_id=item.id, task_revision=1)},
+                    {"operation": await self.mutation("claim_task", task_id=item.id, task_revision=1)},
                 )
             elif memory.project.status != "completed":
-                name, values = "research_project", {"operation": self.mutation("finalize")}
+                name, values = "research_project", {"operation": await self.mutation("finalize")}
             else:
                 yield ApiMessageCompleteEvent(
                     message=ConversationMessage(
@@ -364,7 +364,7 @@ async def test_earnings_report_end_to_end_and_restart(tmp_path):
     assert not errors, [
         (getattr(event, "tool_name", ""), getattr(event, "output", "")) for event in errors
     ]
-    memory = store.load()
+    memory = (await store.load())
     assert memory.project.status == "completed" and model.child_calls == 1
     plan = memory.plans[memory.research_state.current_plan_id]
     assert all(item.status == "completed" for item in plan.tasks)
@@ -377,12 +377,12 @@ async def test_earnings_report_end_to_end_and_restart(tmp_path):
         for item in memory.artifacts.values()
     )
     draft = next(item for item in memory.artifacts.values() if item.kind == "report_draft")
-    manifest, path = SessionFiles(store.directory).artifact(draft.file_id)
+    manifest, path = (await SessionFiles(store).artifact(draft.file_id))
     assert "营收同比增长20%" in path.read_text() and "CNY million" in path.read_text()
     assert manifest["status"] == "draft" and draft.sections == DATA["required_sections"]
     assert memory.project.delivery_manifest["plan_revision"] == 1
     assert draft.id in memory.project.delivery_manifest["artifacts"]
-    assert not store.completion_warning()
-    restored = ResearchStore(tmp_path, store.session_id, root=tmp_path / "memory").load()
+    assert not (await store.completion_warning())
+    restored = (await ResearchStore(tmp_path, store.session_id, root=tmp_path / "memory").load())
     assert restored.project.delivery_manifest == memory.project.delivery_manifest
     assert agent.messages[-1].research_citations["citations"]

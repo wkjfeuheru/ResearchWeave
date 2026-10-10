@@ -25,16 +25,16 @@ from tests.test_research.test_conflicts import apply, conflict, decision, make_r
 
 
 @pytest.fixture
-def research(tmp_path):
-    return make_research(tmp_path)
+async def research(tmp_path):
+    return (await make_research(tmp_path))
 
 
-def report_operation(research, cid, **fields):
+async def report_operation(research, cid, **fields):
     store, evs, steps, _ = research
     return {
         "action": "submit_conflict_report",
         "operation_id": "main-report",
-        "expected_revision": store.load().revision,
+        "expected_revision": (await store.load()).revision,
         "conflict_id": cid,
         "report": decision(evs, steps).model_dump(mode="json"),
         **fields,
@@ -43,27 +43,27 @@ def report_operation(research, cid, **fields):
 
 async def test_main_reports_and_separately_commits_after_review(research, tmp_path):
     store, _, _, claims = research
-    cid = conflict(research)
-    operation = report_operation(research, cid)
+    cid = (await conflict(research))
+    operation = (await report_operation(research, cid))
     tool = ResearchMemoryTool()
     context = ToolExecutionContext(cwd=tmp_path, metadata={"research_store": store})
     result = await tool.execute(ResearchMemoryInput(operation=operation), context)
     saved = json.loads(result.output)
     assert not result.is_error
-    arbitration = store.load().arbitrations[saved["arbitration_id"]]
+    arbitration = (await store.load()).arbitrations[saved["arbitration_id"]]
     assert arbitration.status == "completed" and arbitration.report and not arbitration.decision
-    assert store.load().conflicts[cid].status == "awaiting_review"
-    assert set(store.load().conclusions) == set(claims)
+    assert (await store.load()).conflicts[cid].status == "awaiting_review"
+    assert set((await store.load()).conclusions) == set(claims)
     assert not arbitration.imported_ids
-    apply(
+    (await apply(
         store,
         "resolve_conflict",
         conflict_id=cid,
         arbitration_id=arbitration.id,
         decision=arbitration.report.model_dump(mode="json"),
-    )
-    assert store.load().conflicts[cid].status == "resolved"
-    assert len(store.load().conclusions) == len(claims) + 1
+    ))
+    assert (await store.load()).conflicts[cid].status == "resolved"
+    assert len((await store.load()).conclusions) == len(claims) + 1
 
 
 @pytest.mark.parametrize(
@@ -71,8 +71,8 @@ async def test_main_reports_and_separately_commits_after_review(research, tmp_pa
 )
 async def test_invalid_reports_are_atomic_and_do_not_clear_review(research, tmp_path, invalid):
     store, evs, steps, _ = research
-    cid = conflict(research)
-    operation = report_operation(research, cid)
+    cid = (await conflict(research))
+    operation = (await report_operation(research, cid))
     report = operation["report"]
     if invalid == "missing_side":
         report["assessments"] = report["assessments"][:1]
@@ -82,73 +82,73 @@ async def test_invalid_reports_are_atomic_and_do_not_clear_review(research, tmp_
         report["step_ids"] = steps[:1]
     else:
         report["preferred_side"] = 4
-    before = store.load().model_dump()
+    before = (await store.load()).model_dump()
     result = await ResearchMemoryTool().execute(
         ResearchMemoryInput(operation=operation),
         ToolExecutionContext(cwd=tmp_path, metadata={"research_store": store}),
     )
     assert result.is_error
-    assert store.load().model_dump() == before
-    assert all(item.needs_review for item in store.load().conclusions.values())
+    assert (await store.load()).model_dump() == before
+    assert all(item.needs_review for item in (await store.load()).conclusions.values())
 
 
-def test_report_idempotency_and_no_automatic_repeat(research):
+async def test_report_idempotency_and_no_automatic_repeat(research):
     store, _, _, _ = research
-    cid = conflict(research)
-    op = report_operation(research, cid)
-    first = store.apply(op)
-    revision = store.load().revision
-    replay = store.apply(op)
+    cid = (await conflict(research))
+    op = (await report_operation(research, cid))
+    first = (await store.apply(op))
+    revision = (await store.load()).revision
+    replay = (await store.apply(op))
     assert first["arbitration_id"] == replay["arbitration_id"]
-    assert store.load().revision == revision and len(store.load().arbitrations) == 1
+    assert (await store.load()).revision == revision and len((await store.load()).arbitrations) == 1
     with pytest.raises(ResearchError, match="Review the existing report"):
-        store.apply(report_operation(research, cid, operation_id="duplicate-report"))
-    apply(store, "reopen_conflict", conflict_id=cid, reason="用户要求按新口径复核")
-    second = store.apply(report_operation(research, cid, operation_id="review-again"))
+        (await store.apply((await report_operation(research, cid, operation_id="duplicate-report"))))
+    (await apply(store, "reopen_conflict", conflict_id=cid, reason="用户要求按新口径复核"))
+    second = (await store.apply((await report_operation(research, cid, operation_id="review-again"))))
     assert second["arbitration_id"] != first["arbitration_id"]
-    assert len(store.load().arbitrations) == 2
+    assert len((await store.load()).arbitrations) == 2
 
 
-def test_revision_or_scope_change_rejects_old_report(research):
+async def test_revision_or_scope_change_rejects_old_report(research):
     store, evs, _, _ = research
-    cid = conflict(research)
-    op = report_operation(research, cid)
-    apply(store, "reopen_conflict", conflict_id=cid, reason="补充核查")
+    cid = (await conflict(research))
+    op = (await report_operation(research, cid))
+    (await apply(store, "reopen_conflict", conflict_id=cid, reason="补充核查"))
     with pytest.raises(ResearchError, match="Revision conflict"):
-        store.apply(op)
-    apply(store, "create_plan", title="新的范围", tasks=["新研究"], reused_evidence_ids=evs)
+        (await store.apply(op))
+    (await apply(store, "create_plan", title="新的范围", tasks=["新研究"], reused_evidence_ids=evs))
     with pytest.raises(ResearchError, match="current research scope"):
-        store.apply(report_operation(research, cid))
-    assert not store.load().arbitrations
+        (await store.apply((await report_operation(research, cid))))
+    assert not (await store.load()).arbitrations
 
 
-def test_running_legacy_investigation_blocks_new_report_until_host_recovery(research):
+async def test_running_legacy_investigation_blocks_new_report_until_host_recovery(research):
     store, _, _, _ = research
-    cid = conflict(research)
-    arb, _ = store.begin_investigation(cid)
+    cid = (await conflict(research))
+    arb, _ = (await store.begin_investigation(cid))
     with pytest.raises(ResearchError, match="still running"):
-        store.apply(report_operation(research, cid))
-    store.recover_investigations()
-    assert store.load().arbitrations[arb.id].status == "interrupted"
-    store.apply(report_operation(research, cid))
-    assert store.load().conflicts[cid].status == "awaiting_review"
+        (await store.apply((await report_operation(research, cid))))
+    (await store.recover_investigations())
+    assert (await store.load()).arbitrations[arb.id].status == "interrupted"
+    (await store.apply((await report_operation(research, cid))))
+    assert (await store.load()).conflicts[cid].status == "awaiting_review"
 
 
-def test_reopened_report_cannot_resolve_stale_decision(research):
+async def test_reopened_report_cannot_resolve_stale_decision(research):
     store, _, _, _ = research
-    cid = conflict(research)
-    receipt = store.apply(report_operation(research, cid))
-    apply(store, "reopen_conflict", conflict_id=cid, reason="新的反证需要复核")
-    before = store.load().model_dump()
+    cid = (await conflict(research))
+    receipt = (await store.apply((await report_operation(research, cid))))
+    (await apply(store, "reopen_conflict", conflict_id=cid, reason="新的反证需要复核"))
+    before = (await store.load()).model_dump()
     with pytest.raises(ResearchError, match="latest completed"):
-        apply(
+        (await apply(
             store,
             "resolve_conflict",
             conflict_id=cid,
             arbitration_id=receipt["arbitration_id"],
-            decision=report_operation(research, cid)["report"],
-        )
-    assert store.load().model_dump() == before
+            decision=(await report_operation(research, cid))["report"],
+        ))
+    assert (await store.load()).model_dump() == before
 
 
 async def test_readonly_child_cannot_submit_report_or_parent_mutations(research, tmp_path):
@@ -156,12 +156,12 @@ async def test_readonly_child_cannot_submit_report_or_parent_mutations(research,
     from pydantic import ValidationError
 
     store, _, _, _ = research
-    cid = conflict(research)
+    cid = (await conflict(research))
     tool = ReadOnlyResearchMemoryTool(store)
-    before = store.load().model_dump()
+    before = (await store.load()).model_dump()
     with pytest.raises(ValidationError):
-        tool.input_model.model_validate({"operation": report_operation(research, cid)})
-    assert store.load().model_dump() == before
+        tool.input_model.model_validate({"operation": (await report_operation(research, cid))})
+    assert (await store.load()).model_dump() == before
     result = await tool.execute(
         tool.input_model(operation={"action": "read"}), ToolExecutionContext(cwd=tmp_path)
     )
@@ -241,7 +241,7 @@ class MainReviewModel:
         self.calls += 1
         self.requests.append(request)
         store, evs, _, _ = self.research
-        cid = next(iter(store.load().conflicts))
+        cid = next(iter((await store.load()).conflicts))
         if self.calls == 1:
             blocks = [TextBlock(text="营收确定为12亿元")]
         elif self.calls == 2:
@@ -249,11 +249,11 @@ class MainReviewModel:
                 ToolUseBlock(
                     id="main-report",
                     name="research_memory",
-                    input={"operation": report_operation(self.research, cid)},
+                    input={"operation": (await report_operation(self.research, cid))},
                 )
             ]
         elif self.calls == 3:
-            arb = next(iter(store.load().arbitrations.values()))
+            arb = next(iter((await store.load()).arbitrations.values()))
             blocks = [
                 ToolUseBlock(
                     id="main-resolve",
@@ -262,7 +262,7 @@ class MainReviewModel:
                         "operation": {
                             "action": "resolve_conflict",
                             "operation_id": "main-resolve",
-                            "expected_revision": store.load().revision,
+                            "expected_revision": (await store.load()).revision,
                             "conflict_id": cid,
                             "arbitration_id": arb.id,
                             "decision": arb.report.model_dump(mode="json"),
@@ -303,9 +303,9 @@ async def run_main_review(research, tmp_path, runtime=None):
 
 async def test_parent_engine_repairs_draft_and_counts_usage(research, tmp_path):
     store, _, _, _ = research
-    cid = conflict(research)
+    cid = (await conflict(research))
     engine, model, events = await run_main_review(research, tmp_path)
-    assert store.load().conflicts[cid].status == "resolved"
+    assert (await store.load()).conflicts[cid].status == "resolved"
     assert engine.total_usage.input_tokens == 40 and engine.total_usage.output_tokens == 20
     assert model.calls == 4
     assert any(isinstance(event, StatusEvent) and "核心结论" in event.message for event in events)
@@ -316,20 +316,20 @@ async def test_parent_engine_repairs_draft_and_counts_usage(research, tmp_path):
     )
 
 
-def test_unresolved_decision_requires_explicit_reopen_before_another_report(research):
+async def test_unresolved_decision_requires_explicit_reopen_before_another_report(research):
     store, evs, steps, _ = research
-    cid = conflict(research)
+    cid = (await conflict(research))
     report = decision(evs, steps, "unresolved").model_dump(mode="json")
-    saved = store.apply(report_operation(research, cid, report=report))
-    apply(
+    saved = (await store.apply((await report_operation(research, cid, report=report))))
+    (await apply(
         store,
         "resolve_conflict",
         conflict_id=cid,
         arbitration_id=saved["arbitration_id"],
         decision=report,
-    )
-    before = store.load().model_dump()
-    assert store.load().conflicts[cid].status == "unresolved"
+    ))
+    before = (await store.load()).model_dump()
+    assert (await store.load()).conflicts[cid].status == "unresolved"
     with pytest.raises(ResearchError, match="reopen"):
-        store.apply(report_operation(research, cid, operation_id="no-new-material"))
-    assert store.load().model_dump() == before
+        (await store.apply((await report_operation(research, cid, operation_id="no-new-material"))))
+    assert (await store.load()).model_dump() == before

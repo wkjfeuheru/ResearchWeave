@@ -42,11 +42,11 @@ class GrepTool(BaseTool[GrepToolInput]):
     async def execute(self, arguments: GrepToolInput, context: ToolExecutionContext) -> ToolResult:
         context = ToolExecutionContext.from_context(context)
         try:
-            context.validate_search_pattern(arguments.file_glob)
-            if context.workspace_runtime() and Path(arguments.file_glob).is_absolute():
-                context.resolve_path(arguments.file_glob)
+            (await context.validate_search_pattern(arguments.file_glob))
+            if (await context.workspace_runtime()) and Path(arguments.file_glob).is_absolute():
+                (await context.resolve_path(arguments.file_glob))
                 raise ResearchError("Research grep file_glob must be relative to its root")
-            root = context.resolve_path(arguments.root)
+            root = await context.resolve_path(arguments.root)
         except (ResearchError, OSError) as exc:
             return ToolResult(output=str(exc), is_error=True)
         if not root.exists():
@@ -71,12 +71,14 @@ class GrepTool(BaseTool[GrepToolInput]):
                 return _format_rg_result(matches, arguments.timeout_seconds)
 
             return ToolResult(
-                output=_python_grep_files(
-                    paths=[root],
-                    pattern=arguments.pattern,
-                    case_sensitive=arguments.case_sensitive,
-                    limit=arguments.limit,
-                    display_base=display_base,
+                output=(
+                    _python_grep_files(
+                        paths=[root],
+                        pattern=arguments.pattern,
+                        case_sensitive=arguments.case_sensitive,
+                        limit=arguments.limit,
+                        display_base=display_base,
+                    )
                 )
             )
 
@@ -98,12 +100,14 @@ class GrepTool(BaseTool[GrepToolInput]):
 
         # Python fallback (kept for portability).
         return ToolResult(
-            output=_python_grep_files(
-                paths=context.safe_search_paths(root.glob(arguments.file_glob)),
-                pattern=arguments.pattern,
-                case_sensitive=arguments.case_sensitive,
-                limit=arguments.limit,
-                display_base=root,
+            output=(
+                _python_grep_files(
+                    paths=(await context.safe_search_paths(root.glob(arguments.file_glob))),
+                    pattern=arguments.pattern,
+                    case_sensitive=arguments.case_sensitive,
+                    limit=arguments.limit,
+                    display_base=root,
+                )
             )
         )
 
@@ -228,7 +232,7 @@ async def _rg_grep(
     matches: list[str] = []
     try:
         await asyncio.wait_for(
-            _collect_rg_matches(process, matches, limit=limit),
+            (_collect_rg_matches(process, matches, limit=limit)),
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
@@ -296,12 +300,14 @@ async def _rg_grep_file(
     matches: list[str] = []
     try:
         await asyncio.wait_for(
-            _collect_rg_file_matches(
-                process,
-                matches,
-                limit=limit,
-                path=path,
-                display_base=display_base,
+            (
+                _collect_rg_file_matches(
+                    process,
+                    matches,
+                    limit=limit,
+                    path=path,
+                    display_base=display_base,
+                )
             ),
             timeout=timeout_seconds,
         )

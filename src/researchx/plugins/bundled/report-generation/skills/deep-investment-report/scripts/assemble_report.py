@@ -14,7 +14,7 @@ from pathlib import Path
 from .models import DeepResult
 from .forecast import SECTION_KEYS
 from researchx.storage.filesystem import atomic_write_text
-from researchx.research.exports import collect_references
+from researchx.workspace.exports import collect_references
 from researchx.plugins.research_script_support import guarded
 
 

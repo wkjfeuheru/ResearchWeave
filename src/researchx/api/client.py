@@ -55,6 +55,8 @@ class ApiMessageRequest:
         default=None, repr=False, compare=False
     )
     current_user_message_id: str | None = None
+    audit_cwd: str | None = field(default=None, repr=False, compare=False)
+    audit_session_id: str = field(default="service", repr=False, compare=False)
     attempt_callback: Callable[[dict[str, Any]], None] | None = field(
         default=None, repr=False, compare=False
     )
@@ -139,7 +141,7 @@ class AnthropicApiClient:
         if self._auth_token:
             kwargs["auth_token"] = self._auth_token
             kwargs["default_headers"] = (
-                claude_oauth_headers()
+                (claude_oauth_headers())
                 if self._claude_oauth
                 else {"anthropic-beta": OAUTH_BETA_HEADER}
             )
@@ -181,7 +183,7 @@ class AnthropicApiClient:
         """Build once for both budgeting and transmission."""
         params: dict[str, Any] = {
             "model": request.model,
-            "messages": [message.to_api_param() for message in request.messages],
+            "messages": [(message.to_api_param()) for message in request.messages],
             "max_tokens": request.max_tokens,
         }
         if request.system_prompt:
@@ -211,7 +213,7 @@ class AnthropicApiClient:
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         params = (
-            request if request.prepared_payload is not None else self.prepare_request(request)
+            request if request.prepared_payload is not None else (self.prepare_request(request))
         ).prepared_payload
         assert params is not None
         try:

@@ -25,10 +25,14 @@ InputT = TypeVar("InputT", bound=BaseModel)
 
 
 def denied(message: str) -> ToolResult:
+    # 评测边界拒绝：未执行任何副作用，必须声明 no_effect=True。
+    # 否则 bash 等 effect=unknown 的契约会被 tool_execution 记为 uncertain 副作用操作，
+    # 其 write=["*"] 资源会与该会话后续所有操作冲突，导致整个任务被锁死。
     return ToolResult(
         output=message,
         is_error=True,
-        metadata={"research_source_specs": [], "outcome": "evaluation_boundary"},
+        no_effect=True,
+        metadata={"research_source_specs": [], "outcome": "evaluation_boundary", "no_effect": True},
     )
 
 
@@ -72,7 +76,7 @@ class FrozenExternalTool(BaseTool[InputT]):
         asset = matches[0]
         path = self.workspace / "materials" / Path(asset.path).name
         if path.suffix.lower() == ".pdf":
-            from researchx.research.documents import document_text, parse_document
+            from researchx.workspace.documents import document_text, parse_document
 
             text = document_text(parse_document(path))
         else:
@@ -254,10 +258,10 @@ class RestrictedPythonTool(WorkspaceTool[BashToolInput]):
             if not cwd.is_relative_to(self.workspace):
                 return denied("脚本工作目录不属于任务。")
             if args[:1] == ["-c"]:
-                if len(args) != 2 or not self._inline_allowed(args[1]):
+                if len(args) != 2 or not (self._inline_allowed(args[1])):
                     return denied("Python 代码超出固定评测允许的确定性计算范围。")
             elif args[:1] == ["-m"]:
-                if len(args) < 2 or args[1] != "researchx.research.documents":
+                if len(args) < 2 or args[1] != "researchx.workspace.documents":
                     return denied("只允许内置本地文档解析模块。")
             else:
                 script = (
@@ -270,7 +274,7 @@ class RestrictedPythonTool(WorkspaceTool[BashToolInput]):
                     and script.is_relative_to(self.workspace)
                     and script.suffix == ".py"
                     and script.is_file()
-                    and self._inline_allowed(script.read_text())
+                    and (self._inline_allowed(script.read_text()))
                 )
                 if (
                     script is None
@@ -294,7 +298,7 @@ class RestrictedPythonTool(WorkspaceTool[BashToolInput]):
             code = bootstrap(
                 self.workspace, self.resource_roots, args, allow_network=self.allow_network
             )
-            if context.workspace_runtime() is not None:
+            if (await context.workspace_runtime()) is not None:
                 # Report runs must use the real owned OS sandbox, including fixed evaluations.
                 return await self.original.execute(arguments, context)
             # Legacy evaluations retain the deterministic Python audit guard.
@@ -314,7 +318,9 @@ class RestrictedPythonTool(WorkspaceTool[BashToolInput]):
                     ),
                     "RESEARCHX_RESEARCH_TASK_ID": str(
                         (
-                            context.metadata["research_store"].load().research_state.current_task_id
+                            (
+                                await context.metadata["research_store"].load()
+                            ).research_state.current_task_id
                             or ""
                         )
                         if context.metadata.get("research_store")
@@ -391,7 +397,7 @@ def configure_tools(
                     raise McpToolReturnedError("固定MCP未登记此资料")
                 path = workspace / "materials" / Path(selected.path).name
                 if path.suffix == ".pdf":
-                    from researchx.research.documents import document_text, parse_document
+                    from researchx.workspace.documents import document_text, parse_document
 
                     return document_text(parse_document(path))
                 return path.read_text(encoding="utf-8")

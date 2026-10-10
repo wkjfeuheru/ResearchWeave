@@ -2,6 +2,10 @@
 
 import asyncio
 import json
+from researchx.state.dispatch_audit import dispatch_summaries
+from tests.postgres_helpers import source_path
+from researchx.storage.conversations import ConversationRecords, subagent_session_id
+from researchx.storage.database import current_database
 from pathlib import Path
 
 import pytest
@@ -35,7 +39,7 @@ from tests.test_research.test_report_runtime import checked_evidence, task
 @pytest.fixture
 async def project(tmp_path):
     store = ResearchStore(tmp_path, "e" * 12, root=tmp_path / "memory")
-    store.capture(origin_id="user", kind="user", content="独立研究")
+    (await store.capture(origin_id="user", kind="user", content="独立研究"))
     runtime = ResearchAgentRuntime(store, workspace_root=tmp_path / "workspaces")
     await runtime.start(
         ResearchObjective(
@@ -46,14 +50,14 @@ async def project(tmp_path):
             deliverables=["note"],
         )
     )
-    runtime.repository.commit_plan(
+    (await runtime.repository.commit_plan(
         "P",
         PlanProposal(objective_revision=1, tasks=[task("parent")], rationale="研究"),
-        store.load().revision,
-    )
-    runtime.repository.transition_task(
-        "parent", "ready", "in_progress", store.load().revision, task_revision=1
-    )
+        (await store.load()).revision,
+    ))
+    (await runtime.repository.transition_task(
+        "parent", "ready", "in_progress", (await store.load()).revision, task_revision=1
+    ))
     return runtime
 
 
@@ -75,6 +79,8 @@ class ChildModel:
         self.delay = delay
         self.calls, self.requests = {}, []
         self.active, self.peak = 0, 0
+        self.concurrency_target = 0
+        self.concurrency_gate = asyncio.Event()
         self.waiting, self.completed, self.cancelled = asyncio.Event(), asyncio.Event(), []
 
     async def stream_message(self, request):
@@ -86,6 +92,10 @@ class ChildModel:
         self.active += 1
         self.peak = max(self.peak, self.active)
         try:
+            if self.concurrency_target and call == 1:
+                if self.active >= self.concurrency_target:
+                    self.concurrency_gate.set()
+                await asyncio.wait_for(self.concurrency_gate.wait(), 10)
             await asyncio.sleep(self.delay)
             if key in self.fail:
                 raise RuntimeError(f"fixture failure: {key}")
@@ -125,7 +135,7 @@ class ChildModel:
             self.active -= 1
 
 
-def context(runtime, model, *, checker=None, **metadata):
+async def context(runtime, model, *, checker=None, **metadata):
     registry = create_research_tool_registry()
     checker = checker or PermissionChecker(
         PermissionSettings(allowed_tools=["write_file", "edit_file"])
@@ -149,7 +159,7 @@ def context(runtime, model, *, checker=None, **metadata):
         tool_metadata=values,
     )
     return ToolExecutionContext(
-        cwd=runtime.resolve_workspace("P"), metadata={**values, "query_context": query}
+        cwd=(await runtime.resolve_workspace("P")), metadata={**values, "query_context": query}
     ), usage
 
 
@@ -162,22 +172,22 @@ def assignments(*keys):
 
 async def test_single_child_returns_real_paths_and_does_not_mutate_parent(project):
     model = ChildModel()
-    ctx, usage = context(project, model)
-    before = project.store.load().model_dump()
-    memory = project.load_workspace_memory("P")
+    ctx, usage = (await context(project, model))
+    before = (await project.store.load()).model_dump()
+    memory = (await project.load_workspace_memory("P"))
     result = await dispatch_subagents(assignments("one"), ctx)
     child = result.results[0]
     assert child.status == "completed" and child.summary.startswith("summary_one")
     assert len(child.output_paths) == 1
-    path = project.resolve_workspace("P") / child.output_paths[0]
+    path = (await project.resolve_workspace("P")) / child.output_paths[0]
     assert path.read_text() == "candidate_one" and not Path(child.output_paths[0]).is_absolute()
     assert (
-        project.store.load().model_dump() == before and project.load_workspace_memory("P") == memory
+        (await project.store.load()).model_dump() == before and (await project.load_workspace_memory("P")) == memory
     )
     assert len(usage) == 2
-    transcript = (
-        project.store.directory / "dispatches" / result.dispatch_id / "one/messages.json"
-    ).read_text()
+    transcript = json.dumps((await ConversationRecords(current_database(), project.store.cwd).load(
+        subagent_session_id(project.store.session_id, Path("dispatches") / result.dispatch_id / "one/messages.json")
+    ))["messages"])
     assert "private-replay" not in transcript and "reasoning_content" not in transcript
     child_tools = {tool["name"] for tool in model.requests[0].tools}
     assert {
@@ -199,7 +209,8 @@ async def test_single_child_returns_real_paths_and_does_not_mutate_parent(projec
 @pytest.mark.parametrize("limit", [1, 2, 3])
 async def test_three_children_obey_config_and_have_independent_histories(project, limit):
     model = ChildModel(delay=0.04)
-    ctx, _ = context(project, model, subagent_max_concurrency=limit)
+    model.concurrency_target = limit  # Verify overlap with a barrier, not database timing.
+    ctx, _ = (await context(project, model, subagent_max_concurrency=limit))
     result = await dispatch_subagents(assignments("industry", "financial", "storage"), ctx)
     assert [child.task_id for child in result.results] == ["industry", "financial", "storage"]
     assert all(child.status == "completed" for child in result.results)
@@ -214,7 +225,8 @@ async def test_three_children_obey_config_and_have_independent_histories(project
 
 async def test_concurrency_limit_is_shared_across_dispatch_calls(project):
     model = ChildModel(delay=0.04)
-    ctx, _ = context(project, model, subagent_max_concurrency=2)
+    model.concurrency_target = 2  # Verify overlap with a barrier, not database timing.
+    ctx, _ = (await context(project, model, subagent_max_concurrency=2))
     first, second = await asyncio.gather(
         dispatch_subagents(assignments("a", "b"), ctx),
         dispatch_subagents(assignments("c", "d"), ctx),
@@ -225,7 +237,7 @@ async def test_concurrency_limit_is_shared_across_dispatch_calls(project):
 
 async def test_failure_isolated_and_results_keep_input_order(project):
     model = ChildModel(fail=["bad"])
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     result = await dispatch_subagents(assignments("good", "bad", "also_good"), ctx)
     assert [child.status for child in result.results] == ["completed", "failed", "completed"]
     assert "fixture failure" in result.results[1].errors[0]
@@ -234,53 +246,68 @@ async def test_failure_isolated_and_results_keep_input_order(project):
 
 async def test_parent_cancellation_settles_active_and_queued_children(project):
     model = ChildModel(wait=["active"])
-    ctx, _ = context(project, model, subagent_max_concurrency=1)
+    ctx, _ = (await context(project, model, subagent_max_concurrency=1))
     pending = asyncio.create_task(dispatch_subagents(assignments("active", "queued"), ctx))
     await asyncio.wait_for(model.waiting.wait(), timeout=3)
     pending.cancel()
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert model.cancelled == ["active"] and model.active == 0 and "queued" not in model.calls
-    audit = json.loads(
-        next((project.store.directory / "dispatches").glob("*/batch.json")).read_text()
-    )
+    audit = (await dispatch_summaries(project.store, "P"))[0]
     assert audit["status"] == "cancelled" and [item["status"] for item in audit["results"]] == [
         "cancelled",
         "cancelled",
     ]
-    path = project.resolve_workspace("P") / audit["results"][0]["output_paths"][0]
+    path = (await project.resolve_workspace("P")) / audit["results"][0]["output_paths"][0]
     assert path.read_text() == "candidate_active"
 
 
 async def test_completed_sibling_is_preserved_when_parent_is_cancelled(project):
     model = ChildModel(wait=["slow"])
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     pending = asyncio.create_task(dispatch_subagents(assignments("fast", "slow"), ctx))
     await asyncio.wait_for(model.waiting.wait(), timeout=3)
-    await asyncio.sleep(0.05)
+    async def completed_sibling():
+        while True:
+            batches = await dispatch_summaries(project.store, "P")
+            if batches and any(item["task_id"] == "fast" and item["status"] == "completed"
+                               for item in (batches[0]["results"] or [])):
+                return
+            await asyncio.sleep(0.01)
+    await asyncio.wait_for(completed_sibling(), timeout=3)
     pending.cancel()
     with pytest.raises(asyncio.CancelledError):
         await pending
-    audit = json.loads(
-        next((project.store.directory / "dispatches").glob("*/batch.json")).read_text()
-    )
+    audit = (await dispatch_summaries(project.store, "P"))[0]
     assert [item["status"] for item in audit["results"]] == ["completed", "cancelled"]
-    assert (project.resolve_workspace("P") / audit["results"][0]["output_paths"][0]).is_file()
+    assert ((await project.resolve_workspace("P")) / audit["results"][0]["output_paths"][0]).is_file()
 
 
 @pytest.mark.parametrize(
     "settings,error",
     [
-        ({"subagent_timeout_seconds": 0.08}, "TimeoutError"),
+        # Allow the real PostgreSQL write/receipt to finish before testing
+        # timeout preservation; the strict early deadline is tested separately.
+        ({"subagent_timeout_seconds": 1.0}, "TimeoutError"),
         ({"subagent_max_calls": 1}, "MaxTurnsExceeded"),
     ],
 )
 async def test_limits_fail_only_the_child_and_preserve_files(project, settings, error):
     model = ChildModel(wait=["one"])
-    ctx, _ = context(project, model, **settings)
+    ctx, _ = (await context(project, model, **settings))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "failed" and error in result.results[0].errors[0]
     assert result.results[0].output_paths and model.active == 0
+
+
+async def test_early_deadline_cancels_child_before_side_effects(project):
+    model = ChildModel(delay=1)
+    ctx, _ = await context(project, model, subagent_timeout_seconds=0.001)
+    result = await asyncio.wait_for(dispatch_subagents(assignments("one"), ctx), timeout=3)
+    assert result.results[0].status == "failed"
+    assert "TimeoutError" in result.results[0].errors[0]
+    assert result.results[0].output_paths == []
+    assert model.active == 0
 
 
 @pytest.mark.parametrize("key", ["../escape", "/tmp/absolute", "x/y", "x.y", "", "a" * 65])
@@ -300,13 +327,13 @@ def test_batch_size_and_duplicate_ids_are_rejected():
 )
 async def test_child_cannot_invoke_authoritative_or_recursive_tools(project, tool):
     model = ChildModel(initial={"one": (tool, {})})
-    ctx, _ = context(project, model)
-    before = project.store.load().model_dump()
+    ctx, _ = (await context(project, model))
+    before = (await project.store.load()).model_dump()
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "completed"
     call = latest_result(model.requests[1])
     assert call.is_error and "Unknown tool" in call.content
-    assert project.store.load().model_dump() == before
+    assert (await project.store.load()).model_dump() == before
 
 
 @pytest.mark.parametrize(
@@ -314,19 +341,19 @@ async def test_child_cannot_invoke_authoritative_or_recursive_tools(project, too
 )
 async def test_child_memory_schema_exposes_only_read(project, action):
     model = ChildModel(initial={"one": ("research_memory", {"operation": {"action": action}})})
-    ctx, _ = context(project, model)
-    before = project.store.load().revision
+    ctx, _ = (await context(project, model))
+    before = (await project.store.load()).revision
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "completed" and latest_result(model.requests[1]).is_error
-    assert project.store.load().revision == before
+    assert (await project.store.load()).revision == before
 
 
 @pytest.mark.parametrize(
     "kind", ["main_memory", "parent_artifact", "outside", "traversal", "symlink"]
 )
 async def test_child_file_writes_are_confined_to_own_directory(project, tmp_path, kind):
-    workspace = project.resolve_workspace("P")
-    before = project.load_workspace_memory("P")
+    workspace = (await project.resolve_workspace("P"))
+    before = (await project.load_workspace_memory("P"))
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
     (workspace / "artifacts/link.txt").symlink_to(outside)
@@ -338,24 +365,24 @@ async def test_child_file_writes_are_confined_to_own_directory(project, tmp_path
         "symlink": str(workspace / "artifacts/link.txt"),
     }[kind]
     model = ChildModel(initial={"one": ("write_file", {"path": candidate, "content": "overwrite"})})
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "completed" and latest_result(model.requests[1]).is_error
-    assert project.load_workspace_memory("P") == before and outside.read_text() == "outside"
+    assert (await project.load_workspace_memory("P")) == before and outside.read_text() == "outside"
     assert not (workspace / "artifacts/main.txt").exists()
 
 
 async def test_child_can_read_main_memory_and_read_only_evidence(project):
-    _, evidence = checked_evidence(project.repository, "parent")
+    _, evidence = (await checked_evidence(project.repository, "parent"))
     for name, values in [
-        ("read_file", {"path": str(project.resolve_workspace("P") / "MEMORY.md")}),
+        ("read_file", {"path": str((await project.resolve_workspace("P")) / "MEMORY.md")}),
         (
             "research_memory",
             {"operation": {"action": "read", "ids": [evidence], "include_content": True}},
         ),
     ]:
         model = ChildModel(initial={"one": (name, values)}, evidence_refs=[evidence])
-        ctx, _ = context(project, model)
+        ctx, _ = (await context(project, model))
         result = await dispatch_subagents(assignments("one"), ctx)
         assert result.results[0].status == "completed" and result.results[0].evidence_refs == [
             evidence
@@ -376,30 +403,30 @@ async def test_fabricated_paths_and_evidence_are_not_returned_as_success(
     project, outputs, refs, error
 ):
     model = ChildModel(evidence_refs=refs, outputs=outputs)
-    ctx, _ = context(project, model, subagent_max_calls=2)
+    ctx, _ = (await context(project, model, subagent_max_calls=2))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "failed" and not result.results[0].evidence_refs
-    audit = (
-        project.store.directory / "dispatches" / result.dispatch_id / "one/messages.json"
-    ).read_text()
+    audit = json.dumps((await ConversationRecords(current_database(), project.store.cwd).load(
+        subagent_session_id(project.store.session_id, Path("dispatches") / result.dispatch_id / "one/messages.json")
+    ))["messages"])
     # Failed submission is present in the public transcript even when the turn cap stops repair.
     assert error in audit
 
 
 async def test_repeated_dispatches_never_overwrite_previous_outputs(project):
-    ctx, _ = context(project, ChildModel())
+    ctx, _ = (await context(project, ChildModel()))
     first = await dispatch_subagents(assignments("one"), ctx)
     ctx.metadata["query_context"].api_client = ChildModel()
     second = await dispatch_subagents(assignments("one"), ctx)
     assert first.dispatch_id != second.dispatch_id
     assert first.results[0].output_paths != second.results[0].output_paths
     assert (
-        project.resolve_workspace("P") / first.results[0].output_paths[0]
+        (await project.resolve_workspace("P")) / first.results[0].output_paths[0]
     ).read_text() == "candidate_one"
 
 
 async def test_recursion_is_rejected_even_with_direct_function_call(project):
-    ctx, _ = context(project, ChildModel(), subagent_child=True)
+    ctx, _ = (await context(project, ChildModel(), subagent_child=True))
     with pytest.raises(ResearchError, match="Recursive"):
         await dispatch_subagents(assignments("one"), ctx)
 
@@ -407,17 +434,17 @@ async def test_recursion_is_rejected_even_with_direct_function_call(project):
 async def test_parent_permission_remains_effective(project):
     model = ChildModel()
     checker = PermissionChecker(PermissionSettings(denied_tools=["write_file"]))
-    ctx, _ = context(project, model, checker=checker)
+    ctx, _ = (await context(project, model, checker=checker))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert (
         result.results[0].status == "failed" and "禁止" in latest_result(model.requests[1]).content
     )
-    assert not list(project.resolve_workspace("P").glob("subagents/*/one/note.md"))
+    assert not list((await project.resolve_workspace("P")).glob("subagents/*/one/note.md"))
 
 
 async def test_real_tool_loop_binds_dispatch_to_parent_execution(project):
     model = ChildModel()
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     query = ctx.metadata["query_context"]
     result = await _execute_tool_call(
         query,
@@ -426,13 +453,13 @@ async def test_real_tool_loop_binds_dispatch_to_parent_execution(project):
         {"tasks": [task.model_dump(mode="json") for task in assignments("one")]},
     )
     assert not result.is_error
-    execution = project.store.load().executions[result.result_metadata["execution_id"]]
+    execution = (await project.store.load()).executions[result.result_metadata["execution_id"]]
     assert execution.status == "committed" and execution.task_id == "parent"
-    assert project.repository._plan(project.store.load()).tasks[0].status == "in_progress"
+    assert project.repository._plan((await project.store.load())).tasks[0].status == "in_progress"
 
 
 async def test_removed_tools_are_uncallable_and_undiscoverable_in_research_mode(project):
-    ctx, _ = context(project, ChildModel())
+    ctx, _ = (await context(project, ChildModel()))
     registry = ctx.metadata["query_context"].tool_registry
     search = registry.get("tool_search")
     for name in RESEARCH_EXCLUDED_TOOLS:
@@ -467,7 +494,7 @@ def test_subagent_config_is_small_and_bounded():
 
 @pytest.mark.parametrize("kind", ["sibling", "other_project", "symlink", "traversal"])
 async def test_child_cannot_read_unauthorized_files(project, tmp_path, kind):
-    workspace = project.resolve_workspace("P")
+    workspace = (await project.resolve_workspace("P"))
     sibling = workspace / "subagents/old-dispatch/sibling/private.md"
     sibling.parent.mkdir(parents=True)
     sibling.write_text("SIBLING_PRIVATE", encoding="utf-8")
@@ -483,7 +510,7 @@ async def test_child_cannot_read_unauthorized_files(project, tmp_path, kind):
         "traversal": "../private.md",
     }[kind]
     model = ChildModel(initial={"one": ("read_file", {"path": path})})
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     result = await dispatch_subagents(assignments("one"), ctx)
     receipt = latest_result(model.requests[1])
     assert result.results[0].status == "completed" and receipt.is_error
@@ -494,7 +521,7 @@ async def test_child_cannot_read_unauthorized_files(project, tmp_path, kind):
 
 @pytest.mark.parametrize("name", ["glob", "grep"])
 async def test_child_search_filters_sibling_and_symlink_content(project, tmp_path, name):
-    workspace = project.resolve_workspace("P")
+    workspace = (await project.resolve_workspace("P"))
     visible = workspace / "artifacts/shared.md"
     visible.write_text("SEARCH_VISIBLE", encoding="utf-8")
     sibling = workspace / "subagents/old-dispatch/sibling/private.md"
@@ -505,7 +532,7 @@ async def test_child_search_filters_sibling_and_symlink_content(project, tmp_pat
     (workspace / "artifacts/link.md").symlink_to(private)
     arguments = {"root": str(workspace), "pattern": "**/*.md" if name == "glob" else "SEARCH_"}
     model = ChildModel(initial={"one": (name, arguments)})
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     result = await dispatch_subagents(assignments("one"), ctx)
     receipt = latest_result(model.requests[1])
     assert result.results[0].status == "completed" and not receipt.is_error
@@ -524,21 +551,21 @@ async def test_child_search_filters_sibling_and_symlink_content(project, tmp_pat
 async def test_candidate_evidence_checks_hash_and_current_version(project, change):
     from tests.test_research.test_conflicts import apply
 
-    _, evidence_id = checked_evidence(project.repository, "parent")
-    evidence = project.store.load().evidence_pool[evidence_id]
+    _, evidence_id = (await checked_evidence(project.repository, "parent"))
+    evidence = (await project.store.load()).evidence_pool[evidence_id]
     if change == "corrupt":
-        source = project.store.load().sources[evidence.source_id]
-        (project.store.directory / source.snapshot).write_text("tampered", encoding="utf-8")
+        source = (await project.store.load()).sources[evidence.source_id]
+        (await source_path(project.store, source)).write_text("tampered", encoding="utf-8")
     else:
-        apply(
+        (await apply(
             project.store,
             "add_evidence",
             source_id=evidence.source_id,
             statement="新版待核实",
             supersedes=evidence_id,
-        )
+        ))
     model = ChildModel(evidence_refs=[evidence_id])
-    ctx, _ = context(project, model, subagent_max_calls=2)
+    ctx, _ = (await context(project, model, subagent_max_calls=2))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "failed" and not result.results[0].evidence_refs
 
@@ -551,7 +578,7 @@ async def test_plain_answer_is_not_accepted_as_structured_success(project):
                 usage=UsageSnapshot(input_tokens=2, output_tokens=1),
             )
 
-    ctx, _ = context(project, PlainModel())
+    ctx, _ = (await context(project, PlainModel()))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert (
         result.results[0].status == "failed"
@@ -576,7 +603,7 @@ async def test_child_prompt_hooks_share_budget_and_keep_parent_context(project):
                     yield event
 
     model = HookModel()
-    ctx, usage = context(project, model, subagent_max_calls=2)
+    ctx, usage = (await context(project, model, subagent_max_calls=2))
     registry = HookRegistry()
     registry.register(
         HookEvent.PRE_TOOL_USE, PromptHookDefinition(prompt="check", matcher="write_file")
@@ -599,21 +626,21 @@ async def test_scope_change_during_edit_approval_revokes_child_write(project):
         return "accept"
 
     model = ChildModel()
-    ctx, _ = context(project, model, edit_approval_prompt=approve, subagent_max_calls=2)
+    ctx, _ = (await context(project, model, edit_approval_prompt=approve, subagent_max_calls=2))
     result = await dispatch_subagents(assignments("one"), ctx)
     assert result.results[0].status == "failed" and not result.results[0].output_paths
     assert (
         latest_result(model.requests[1]).is_error
         and "revoked parent scope" in latest_result(model.requests[1]).content
     )
-    assert project.store.load().project.objective_revision == 2
-    assert not list(project.resolve_workspace("P").glob("subagents/*/one/note.md"))
+    assert (await project.store.load()).project.objective_revision == 2
+    assert not list((await project.resolve_workspace("P")).glob("subagents/*/one/note.md"))
 
 
 async def test_generic_child_cannot_call_planning_helper_directly(project):
     from researchx.tools.planner_tool import planner_tool
 
-    ctx, _ = context(project, ChildModel(), subagent_child=True)
+    ctx, _ = (await context(project, ChildModel(), subagent_child=True))
     with pytest.raises(ResearchError, match="child recursion"):
         await planner_tool("replace", ctx)
 
@@ -622,7 +649,7 @@ async def test_cancelled_parent_execution_restores_workspace_and_partial_candida
     project, tmp_path
 ):
     model = ChildModel(wait=["one"])
-    ctx, _ = context(project, model)
+    ctx, _ = (await context(project, model))
     pending = asyncio.create_task(
         _execute_tool_call(
             ctx.metadata["query_context"],
@@ -636,35 +663,33 @@ async def test_cancelled_parent_execution_restores_workspace_and_partial_candida
     with pytest.raises(asyncio.CancelledError):
         await pending
     await project.interrupt("P", "Execution interrupted")
-    saved_workspace = project.resolve_workspace("P")
-    memory_before = project.load_workspace_memory("P")
+    saved_workspace = (await project.resolve_workspace("P"))
+    memory_before = (await project.load_workspace_memory("P"))
     restored_store = ResearchStore(
         tmp_path, project.store.session_id, root=project.store.directory.parent
     )
     restored = ResearchAgentRuntime(restored_store, workspace_root=tmp_path / "changed-default")
     await restored.resume("P")
-    assert restored.resolve_workspace("P") == saved_workspace
-    assert restored.load_workspace_memory("P") == memory_before
-    assert restored.repository._plan(restored.store.load()).tasks[0].status == "ready"
+    assert (await restored.resolve_workspace("P")) == saved_workspace
+    assert (await restored.load_workspace_memory("P")) == memory_before
+    assert restored.repository._plan((await restored.store.load())).tasks[0].status == "ready"
     execution = next(
         item
-        for item in restored.store.load().executions.values()
+        for item in (await restored.store.load()).executions.values()
         if item.tool_use_id == "interrupted"
     )
     assert execution.status == "cancelled"
     assert not any(
-        source.title == "dispatch_subagents" for source in restored.store.load().sources.values()
+        source.title == "dispatch_subagents" for source in (await restored.store.load()).sources.values()
     )
-    batch = json.loads(
-        next((restored.store.directory / "dispatches").glob("*/batch.json")).read_text()
-    )
+    batch = (await dispatch_summaries(restored.store, "P"))[0]
     assert (
         batch["status"] == "cancelled"
         and (saved_workspace / batch["results"][0]["output_paths"][0]).is_file()
     )
-    restored.repository.transition_task(
-        "parent", "ready", "in_progress", restored.store.load().revision, task_revision=1
-    )
-    ctx, _ = context(restored, ChildModel())
+    (await restored.repository.transition_task(
+        "parent", "ready", "in_progress", (await restored.store.load()).revision, task_revision=1
+    ))
+    ctx, _ = (await context(restored, ChildModel()))
     retry = await dispatch_subagents(assignments("one"), ctx)
     assert retry.results[0].status == "completed" and retry.dispatch_id != batch["dispatch_id"]

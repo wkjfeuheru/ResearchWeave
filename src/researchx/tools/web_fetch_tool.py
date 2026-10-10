@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from researchx.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from researchx.research.sites import classify_source, describe_source, get_research_sites
+from researchx.config.sites import classify_source, describe_source, get_research_sites
 from researchx.security.network_guard import (
     NetworkGuardError,
     fetch_public_http_response,

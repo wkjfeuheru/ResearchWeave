@@ -56,7 +56,7 @@ class BashTool(BaseTool[BashToolInput]):
         from researchx.state.errors import ResearchError
 
         try:
-            cwd = context.resolve_path(arguments.cwd)
+            cwd = await context.resolve_path(arguments.cwd)
         except (ResearchError, OSError, ValueError) as exc:
             return ToolResult(
                 output=str(exc), is_error=True, no_effect=True, error_code="workspace_boundary"
@@ -68,7 +68,7 @@ class BashTool(BaseTool[BashToolInput]):
                 is_error=True,
                 metadata={"interactive_required": True},
             )
-        runtime = context.workspace_runtime()
+        runtime = await context.workspace_runtime()
         settings = context.settings
         owner = None
         execution = context.metadata.get("research_execution")
@@ -76,9 +76,9 @@ class BashTool(BaseTool[BashToolInput]):
             from researchx.config import Settings
             from researchx.state.errors import ResearchError
 
-            project = runtime.store.load().project
+            project = (await runtime.store.load()).project
             assert project is not None
-            workspace = runtime.resolve_workspace(project.id)
+            workspace = await runtime.resolve_workspace(project.id)
             # Direct tool callers without trusted configuration also fail closed.
             try:
                 settings = report_settings(settings or Settings(), workspace)
@@ -129,13 +129,13 @@ class BashTool(BaseTool[BashToolInput]):
             store = context.metadata.get("research_store")
             if store is not None:
                 env["RESEARCHX_RESEARCH_SESSION_DIR"] = str(store.directory)
-                task_id = store.load().research_state.current_task_id
+                task_id = (await store.load()).research_state.current_task_id
                 if task_id:
                     env["RESEARCHX_RESEARCH_TASK_ID"] = task_id
         legacy_store = context.metadata.get("research_store") if runtime is None else None
         legacy_baseline = None
         if legacy_store is not None:
-            memory = legacy_store.load()
+            memory = await legacy_store.load()
             if owner is not None and settings is not None:
                 settings.sandbox.filesystem.deny_read.append(str(legacy_store.directory.resolve()))
                 settings.sandbox.filesystem.deny_write.append(str(legacy_store.directory.resolve()))
@@ -184,21 +184,21 @@ class BashTool(BaseTool[BashToolInput]):
             if owner and settings and settings.sandbox.backend == "docker":
                 from researchx.sandbox.session import stop_docker_sandbox
 
-                await asyncio.shield(stop_docker_sandbox(owner.key))
+                await asyncio.shield((stop_docker_sandbox(owner.key)))
             metadata: dict[str, object] = {
                 "returncode": process.returncode,
                 "safety_level": "sandbox" if owner else "trusted_host",
             }
             if runtime and execution and process.returncode == 0:
                 try:
-                    metadata["exported_files"] = _register_exports(
+                    metadata["exported_files"] = await _register_exports(
                         output_buffer, context, runtime, execution
                     )
                 except (ResearchError, ValueError, OSError) as exc:
                     return ToolResult(output=f"Export registration rejected: {exc}", is_error=True)
             if legacy_store is not None and process.returncode == 0:
                 try:
-                    metadata["exported_files"] = _register_legacy_exports(
+                    metadata["exported_files"] = await _register_legacy_exports(
                         output_buffer, context, legacy_store, legacy_baseline
                     )
                 except (ValueError, OSError) as exc:
@@ -245,14 +245,14 @@ class BashTool(BaseTool[BashToolInput]):
             if owner and settings and settings.sandbox.backend == "docker":
                 from researchx.sandbox.session import stop_docker_sandbox
 
-                await asyncio.shield(stop_docker_sandbox(owner.key))
+                await asyncio.shield((stop_docker_sandbox(owner.key)))
 
 
 async def _terminate_process(process: asyncio.subprocess.Process, *, force: bool) -> None:
     await terminate_shell_process(process, force=force)
 
 
-def _register_exports(
+async def _register_exports(
     output: bytearray,
     context: ToolExecutionContext,
     runtime: ResearchAgentRuntime,
@@ -260,7 +260,6 @@ def _register_exports(
 ) -> list[FileManifest]:
     """Import declarations on the host, only while the execution lease remains valid."""
     from researchx.state.errors import ResearchError
-    from researchx.storage.file_lock import exclusive_file_lock
     from researchx.workspace.session_files import SessionFiles
 
     declarations = []
@@ -273,7 +272,7 @@ def _register_exports(
             for value in packet["files"]:
                 if not isinstance(value, str):
                     raise ValueError("Export paths must be strings")
-                path = context.resolve_path(value)
+                path = await context.resolve_path(value)
                 if not any(
                     path.is_relative_to(context.cwd / directory)
                     for directory in ("reports", "artifacts")
@@ -284,14 +283,16 @@ def _register_exports(
                 declarations.append((path, str(packet.get("status", "candidate"))))
     if len(declarations) > 50:
         raise ValueError("Too many exported files")
-    with exclusive_file_lock(runtime.store.lock):
-        memory = runtime.store._load()
+    async with runtime.store.transaction():
+        memory = await runtime.store._load()
         active = memory.executions.get(execution["id"])
         if active is None or not runtime.repository.execution_valid(memory, active):
             raise ResearchError("Export execution was revoked")
         return [
-            SessionFiles(runtime.store.directory).register(
-                path, task_id=active.task_id, status=status, kind="export", execution=execution
+            (
+                await SessionFiles(runtime.store).register(
+                    path, task_id=active.task_id, status=status, kind="export", execution=execution
+                )
             )
             for path, status in declarations
         ]
@@ -302,7 +303,7 @@ async def _read_remaining_output(process: asyncio.subprocess.Process) -> bytearr
     if process.stdout is not None:
         try:
             remaining = await asyncio.wait_for(
-                process.stdout.read(),
+                (process.stdout.read()),
                 timeout=_READ_REMAINING_OUTPUT_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -321,7 +322,7 @@ async def _drain_available_output(
         return output_buffer
     while True:
         try:
-            chunk = await asyncio.wait_for(stream.read(65536), timeout=read_timeout)
+            chunk = await asyncio.wait_for((stream.read(65536)), timeout=read_timeout)
         except asyncio.TimeoutError:
             return output_buffer
         if not chunk:
@@ -415,12 +416,11 @@ def _looks_like_prompt(output: str) -> bool:
     return any(marker in lowered_output for marker in prompt_markers)
 
 
-def _register_legacy_exports(
+async def _register_legacy_exports(
     output: bytearray, context: ToolExecutionContext, store: object, baseline: object
 ) -> list[FileManifest]:
     """Legacy scripts declare files; only the host imports them, never sandbox state writes."""
     from researchx.state.store import ResearchStore
-    from researchx.storage.file_lock import exclusive_file_lock
     from researchx.workspace.session_files import SessionFiles
     from researchx.config.paths import get_config_dir, get_data_dir, get_logs_dir
 
@@ -440,7 +440,7 @@ def _register_legacy_exports(
         for value in packet["files"]:
             if not isinstance(value, str):
                 raise ValueError("Export paths must be strings")
-            path = context.resolve_path(value)
+            path = await context.resolve_path(value)
             if not path.is_relative_to(context.cwd.resolve()) or any(
                 path.is_relative_to(root) for root in private
             ):
@@ -464,8 +464,8 @@ def _register_legacy_exports(
                 raise ValueError("Too many exported files")
     if not exports:
         return []
-    with exclusive_file_lock(store.lock):
-        memory = store._load()
+    async with store.transaction():
+        memory = await store._load()
         state = memory.research_state
         if (
             memory.current_context_id,
@@ -474,8 +474,10 @@ def _register_legacy_exports(
         ) != baseline or state.replan_required:
             raise ValueError("Legacy research scope changed; exports were not imported")
         return [
-            SessionFiles(store.directory).register(
-                path, task_id=state.current_task_id, status=status, kind=path.suffix[1:]
+            (
+                await SessionFiles(store).register(
+                    path, task_id=state.current_task_id, status=status, kind=path.suffix[1:]
+                )
             )
             for path, status in exports
         ]

@@ -64,6 +64,8 @@ def test_flat_tools_and_removed_utility_package():
         )
     assert not (PACKAGE / "utils").exists()
     assert importlib.util.find_spec("researchx." + "utils") is None
+    assert not (PACKAGE / "research").exists()
+    assert importlib.util.find_spec("researchx." + "research") is None
 
 
 def test_active_python_and_skills_use_current_module_paths():
@@ -87,7 +89,7 @@ def test_active_python_and_skills_use_current_module_paths():
         text = path.read_text()
         assert not any(old + "." in text for old in forbidden), path
         commands.extend(re.findall(r"-m (researchx[\w.-]+)", text))
-    assert commands and "researchx.research.documents" in commands
+    assert commands and "researchx.workspace.documents" in commands
     assert all(importlib.util.find_spec(module) is not None for module in commands)
 
 
@@ -114,7 +116,7 @@ def test_document_module_cli_retains_bounded_ingestion(tmp_path):
         [
             sys.executable,
             "-m",
-            "researchx.research.documents",
+            "researchx.workspace.documents",
             "--input",
             str(document),
             "--output-dir",

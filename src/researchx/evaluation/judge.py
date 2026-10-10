@@ -148,7 +148,13 @@ def citation_map(artifact: RunArtifact) -> dict[str, str]:
     )
     result = {}
     for item in latest.get("citations", {}).values():
-        result[f"[{item['number']}]"] = item["source"]["id"]
+        # 展示层 source（SourceDisplay）按设计不含 id；来源标识在 evidence 快照的 source_id 上。
+        # 兼容旧记录中仍带 source.id 的形态。
+        source_id = (item.get("evidence") or {}).get("source_id") or (item.get("source") or {}).get(
+            "id"
+        )
+        if source_id:
+            result[f"[{item['number']}]"] = source_id
     for key, evidence in state.get("evidence_pool", {}).items():
         result[f"[E:{key}]"] = evidence["source_id"]
     # Exported report references use file/URL locators instead of session display IDs.

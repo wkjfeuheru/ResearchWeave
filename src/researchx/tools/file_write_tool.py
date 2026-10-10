@@ -58,7 +58,7 @@ class FileWriteTool(BaseTool[FileWriteToolInput]):
     async def _write(
         self, arguments: FileWriteToolInput, context: ToolExecutionContext
     ) -> ToolResult:
-        path = context.resolve_path(arguments.path, write=True)
+        path = await context.resolve_path(arguments.path, write=True)
 
         from researchx.sandbox.session import is_docker_sandbox_active
 
@@ -71,8 +71,8 @@ class FileWriteTool(BaseTool[FileWriteToolInput]):
                     output=f"Sandbox: {reason}", is_error=True, metadata={"no_effect": True}
                 )
 
-        project_mode = context.workspace_runtime() is not None
-        with context.file_lock(arguments.path) as path:
+        project_mode = (await context.workspace_runtime()) is not None
+        async with context.file_lock(arguments.path) as path:
             existed = path.exists()
             original_bytes = path.read_bytes() if existed else b""
             original = original_bytes.decode("utf-8")
@@ -104,7 +104,7 @@ class FileWriteTool(BaseTool[FileWriteToolInput]):
                     metadata={"no_effect": True},
                 )
             stats = f"  ({_ANSI_GREEN}+{added}{_ANSI_RESET} {_ANSI_RED}-{removed}{_ANSI_RESET})"
-        with context.file_lock(arguments.path, write=True) as path:
+        async with context.file_lock(arguments.path, write=True) as path:
             current = path.read_bytes().decode("utf-8") if path.exists() else ""
             if project_mode and (path.exists() != existed or current != original):
                 return ToolResult(

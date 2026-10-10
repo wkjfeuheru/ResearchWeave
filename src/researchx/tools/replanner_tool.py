@@ -9,7 +9,7 @@ from pydantic import Field
 
 from researchx.state.models import PlanPatch, Record
 from researchx.tools.base import BaseTool, ToolResult
-from researchx.research.planning_support import generate_plan, planning_packet
+from researchx.engine.planning_support import generate_plan, planning_packet
 
 
 class ReplannerInput(Record):
@@ -17,7 +17,7 @@ class ReplannerInput(Record):
 
 
 async def replanner_tool(reason: str, context: ToolExecutionContext) -> dict[str, object]:
-    packet = planning_packet(context)
+    packet = await planning_packet(context)
     packet["reason"] = reason
     return await generate_plan(PlanPatch, packet, context, kind="replanner")
 

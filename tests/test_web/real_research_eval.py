@@ -83,8 +83,8 @@ class Evaluation:
         response.raise_for_status()
         return response.json()["session_id"]
 
-    def memory(self, sid):
-        return ResearchStore(self.cwd, sid).load()
+    async def memory(self, sid):
+        return (await ResearchStore(self.cwd, sid).load())
 
     async def turn(self, name: str, sid: str, question: str, *, steer: str | None = None) -> dict:
         started = time.monotonic()
@@ -96,7 +96,7 @@ class Evaluation:
         errors = []
         prompts = []
         interruptions = []
-        before = self.memory(sid)
+        before = await self.memory(sid)
         print(
             json.dumps({"case": name, "state": "START", "session_id": sid}, ensure_ascii=False),
             flush=True,
@@ -129,7 +129,7 @@ class Evaluation:
                             ),
                             flush=True,
                         )
-                        memory = self.memory(sid)
+                        memory = await self.memory(sid)
                         if (
                             steer
                             and not steering_id
@@ -206,7 +206,7 @@ class Evaluation:
             "prompts": prompts,
             "interruptions": interruptions,
             "before": before.model_dump(mode="json"),
-            "after": self.memory(sid).model_dump(mode="json"),
+            "after": (await self.memory(sid)).model_dump(mode="json"),
             "requests": self.traces[trace_start:],
             "tool_timings": self.tool_timings[tool_start:],
             "checks": [],
@@ -290,7 +290,7 @@ class Evaluation:
             bool(created is not None and fetched and created < min(fetched)),
         )
 
-    def audit_loss_directions(self, result):
+    async def audit_loss_directions(self, result):
         memory = ResearchMemory.model_validate(result["after"])
         comparisons = []
         issues = []
@@ -299,7 +299,7 @@ class Evaluation:
         for source in memory.sources.values():
             if source.title == "ft_v1_finance_income" and not source.is_error:
                 try:
-                    data = json.loads(self.memory_store(result["session_id"]).read_source(source))
+                    data = json.loads((await self.memory_store(result["session_id"]).read_source(source)))
                     companies_by_source[source.id] = {
                         row["stock_name"] for row in data.get("data", [])
                     }
@@ -324,7 +324,7 @@ class Evaluation:
             ):
                 provenance_issues.append(evidence.id)
             try:
-                rows = json.loads(self.memory_store(result["session_id"]).read_source(source)).get(
+                rows = json.loads((await self.memory_store(result["session_id"]).read_source(source))).get(
                     "data", []
                 )
             except (ValueError, TypeError):
@@ -400,7 +400,7 @@ class Evaluation:
         self.check(result, "亏损方向、差额及幅度与原始利润表一致", not issues)
         self.check(result, "财务证据分别关联对应公司来源", not provenance_issues)
 
-    def audit_recent_spot_prices(self, result):
+    async def audit_recent_spot_prices(self, result):
         memory = ResearchMemory.model_validate(result["after"])
         prices = []
         replaced = {item.supersedes for item in memory.evidence_pool.values()}
@@ -423,7 +423,7 @@ class Evaluation:
             collection = datetime.fromisoformat(source.collected_at.replace("Z", "+00:00"))
             if not 0 <= (collection - quote_date).days <= 45:
                 continue
-            raw = self.memory_store(result["session_id"]).read_source(source)
+            raw = (await self.memory_store(result["session_id"]).read_source(source))
             # Require actual manufacturing spot units in the immutable original;
             # export USD/kg averages or futures yuan/tonne are insufficient.
             numeric_unit = r"\d+(?:\.\d+)?\s*(?:元|美元|USD)[/／每]\s*(?:[Ww]|瓦|[Kk][Gg]|公斤|片)"
@@ -534,6 +534,12 @@ try {
 
 
 async def main(args):
+    from researchx.storage.database import database_lifespan
+    async with database_lifespan():
+        return await _main(args)
+
+
+async def _main(args):
     selected = profile_settings(args.profile)
     credential = selected.resolve_auth().value
     original = runtime._resolve_api_client_from_settings
@@ -668,7 +674,7 @@ async def main(args):
                     statements = [
                         record["statement"] for record in records if record["status"] != "retracted"
                     ]
-                    evaluation.audit_recent_spot_prices(result)
+                    await evaluation.audit_recent_spot_prices(result)
                     evaluation.check(
                         result,
                         "已登记光伏装机或出口的产业需求证据",
@@ -686,7 +692,7 @@ async def main(args):
                         "输出包括已保存论证及结论",
                         bool(result["after"]["reasoning_chain"] and result["after"]["conclusions"]),
                     )
-                    evaluation.audit_loss_directions(result)
+                    await evaluation.audit_loss_directions(result)
                 await evaluation.stop()
                 await evaluation.start()
                 followup = await evaluation.turn(
@@ -739,8 +745,8 @@ async def main(args):
                     "盈利与数据限制。原范围内直接完成，不需要再问我是否继续。",
                 )
                 evaluation.research_checks(result)
-                evaluation.audit_loss_directions(result)
-                evaluation.audit_recent_spot_prices(result)
+                await evaluation.audit_loss_directions(result)
+                await evaluation.audit_recent_spot_prices(result)
                 if args.browser:
                     await evaluation.browser_check(sid)
                 evaluation.save()

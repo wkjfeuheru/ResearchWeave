@@ -44,18 +44,20 @@ class FileReadTool(BaseTool[FileReadToolInput]):
         context: ToolExecutionContext,
     ) -> ToolResult:
         try:
-            return self._read(arguments, context)
+            return await self._read(arguments, context)
         except (ResearchError, OSError, UnicodeError, ValueError) as exc:
             return ToolResult(output=str(exc), is_error=True)
 
-    def _read(self, arguments: FileReadToolInput, context: ToolExecutionContext) -> ToolResult:
+    async def _read(
+        self, arguments: FileReadToolInput, context: ToolExecutionContext
+    ) -> ToolResult:
         from researchx.skills.resources import validate_skill_file_path, selected_skill_resource
 
         candidate = Path(arguments.path).expanduser()
         candidate = candidate if candidate.is_absolute() else context.cwd / candidate
         validate_skill_file_path(candidate)
         resource = selected_skill_resource(context, candidate)
-        path = resource if resource else context.resolve_path(arguments.path)
+        path = resource if resource else (await context.resolve_path(arguments.path))
 
         from researchx.sandbox.session import is_docker_sandbox_active
 
@@ -71,17 +73,21 @@ class FileReadTool(BaseTool[FileReadToolInput]):
         if path.is_dir():
             return ToolResult(output=f"Cannot read directory: {path}", is_error=True)
 
-        with nullcontext(resource) if resource else context.file_lock(arguments.path) as path:
+        async with nullcontext(resource) if resource else context.file_lock(arguments.path) as path:
             raw = path.read_bytes()
         if b"\x00" in raw:
             return ToolResult(output=f"Binary file cannot be read as text: {path}", is_error=True)
 
-        project_mode = context.workspace_runtime() is not None
-        runtime = context.workspace_runtime()
+        project_mode = (await context.workspace_runtime()) is not None
+        runtime = await context.workspace_runtime()
         memory_file = bool(
             runtime
             and path
-            == runtime.resolve_workspace(runtime.repository._project(runtime.store.load()).id)
+            == (
+                await runtime.resolve_workspace(
+                    runtime.repository._project((await runtime.store.load())).id
+                )
+            )
             / "MEMORY.md"
         )
         text = raw.decode("utf-8", errors="strict" if project_mode else "replace")

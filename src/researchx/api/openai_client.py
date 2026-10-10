@@ -103,8 +103,8 @@ def _convert_messages_to_openai(
             openai_messages.append(openai_msg)
         elif msg.role == "user":
             # User messages may contain text or tool_result blocks
-            tool_results = [b for b in msg.api_content() if isinstance(b, ToolResultBlock)]
-            user_blocks = [b for b in msg.api_content() if isinstance(b, (TextBlock, ImageBlock))]
+            tool_results = [b for b in (msg.api_content()) if isinstance(b, ToolResultBlock)]
+            user_blocks = [b for b in (msg.api_content()) if isinstance(b, (TextBlock, ImageBlock))]
 
             if tool_results:
                 # Each tool result becomes a separate message with role="tool"
@@ -190,8 +190,8 @@ def _convert_assistant_message(msg: ConversationMessage) -> dict[str, Any]:
     OpenAI direct, etc.) working out-of-the-box; Kimi-on-Anthropic users
     set the env var in their dotfiles or settings.
     """
-    text_parts = [b.text for b in msg.api_content() if isinstance(b, TextBlock)]
-    tool_uses = [b for b in msg.api_content() if isinstance(b, ToolUseBlock)]
+    text_parts = [b.text for b in (msg.api_content()) if isinstance(b, TextBlock)]
+    tool_uses = [b for b in (msg.api_content()) if isinstance(b, ToolUseBlock)]
 
     openai_msg: dict[str, Any] = {"role": "assistant"}
 
@@ -330,7 +330,7 @@ class OpenAICompatibleClient:
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         params = (
-            request if request.prepared_payload is not None else self.prepare_request(request)
+            request if request.prepared_payload is not None else (self.prepare_request(request))
         ).prepared_payload
         # Collect full response while streaming text deltas
         collected_content = ""

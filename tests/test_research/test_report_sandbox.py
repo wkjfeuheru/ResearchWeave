@@ -48,7 +48,7 @@ async def run(workspace, command, *, backend="srt", key="test"):
 
 
 async def test_actual_srt_exit_codes(project):
-    root = project.resolve_workspace("P")
+    root = (await project.resolve_workspace("P"))
     for code in (0, 1, 7):
         rc, output = await run(root, f"exit {code}")
         assert rc == code, output
@@ -58,18 +58,20 @@ async def test_actual_srt_exit_codes(project):
 async def test_actual_python_path_and_write_isolation(project, tmp_path, monkeypatch, backend):
     import os
 
-    root = project.resolve_workspace("P")
+    root = (await project.resolve_workspace("P"))
     outside = tmp_path / "other-project"
     outside.mkdir()
     private = outside / "credential.txt"
     private.write_text("acceptance-secret")
     (root / "artifacts" / "escape").symlink_to(outside, target_is_directory=True)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "acceptance-env-secret")
+    protected_state = project.store.directory / "private-ledger-marker"
+    protected_state.write_text("host-only research metadata")
     protected = [
         str(private),
         str(root / os.path.relpath(private, root)),
         str(root / "artifacts" / "escape" / "credential.txt"),
-        str(project.store.path),
+        str(protected_state),
     ]
     assert Path(protected[1]).resolve() == private
     program = f"""import os,json
@@ -78,12 +80,14 @@ failures=[]
 for value in {protected!r}:
  try: Path(value).read_text(); failures.append(value)
  except OSError: pass
-for value in {[str(root / "MEMORY.md"), str(project.store.path)]!r}:
+for value in {[str(root / "MEMORY.md"), str(protected_state)]!r}:
  try: Path(value).write_text('overwrite'); failures.append(value)
  except OSError: pass
 Path('reports/allowed.txt').write_text('allowed')
 assert 'ANTHROPIC_API_KEY' not in os.environ
 assert 'RESEARCHX_RESEARCH_SESSION_DIR' not in os.environ
+assert 'RESEARCHX_DATABASE_URL' not in os.environ
+assert 'AWS_SECRET_ACCESS_KEY' not in os.environ
 assert not failures,failures
 print('ISOLATED')"""
     rc, output = await run(root, "python -c " + shlex.quote(program), backend=backend)
@@ -101,7 +105,7 @@ async def test_report_backend_missing_fails_closed(project, monkeypatch):
         adapter.shutil, "which", lambda name: None if name == "srt" else original(name)
     )
     ctx = ToolExecutionContext(
-        cwd=project.resolve_workspace("P"),
+        cwd=(await project.resolve_workspace("P")),
         metadata={"research_runtime": project},
         settings=_settings(),
     )
@@ -112,7 +116,7 @@ async def test_report_backend_missing_fails_closed(project, monkeypatch):
 
 async def test_report_timeout_and_cancel_remove_descendants(project):
     ctx = ToolExecutionContext(
-        cwd=project.resolve_workspace("P"),
+        cwd=(await project.resolve_workspace("P")),
         metadata={"research_runtime": project},
         settings=_settings(),
     )
@@ -166,6 +170,8 @@ except OSError: pass
 else: raise AssertionError('memory writable')
 Path('reports/result').write_text('ok')
 assert 'RESEARCHX_RESEARCH_SESSION_DIR' not in os.environ
+assert 'RESEARCHX_DATABASE_URL' not in os.environ
+assert 'AWS_SECRET_ACCESS_KEY' not in os.environ
 print('DOCKER_ISOLATED')"""
         programs.append(run(root, "python -c " + shlex.quote(code), backend=backend, key=root.name))
     outcomes = await asyncio.gather(*programs)
@@ -180,7 +186,7 @@ async def test_actual_docker_cancel_removes_only_owned_execution(project, tmp_pa
         stop_docker_sandbox,
     )
 
-    root = project.resolve_workspace("P")
+    root = (await project.resolve_workspace("P"))
     settings = report_settings(_settings(), root)
     settings.sandbox.backend = "docker"
     keeper = await start_docker_sandbox(
@@ -217,10 +223,10 @@ async def test_actual_docker_cancel_removes_only_owned_execution(project, tmp_pa
 async def test_actual_isolated_exports_registered_only_by_host(project, backend):
     from researchx.workspace.session_files import SessionFiles
 
-    root = project.resolve_workspace("P")
+    root = (await project.resolve_workspace("P"))
     settings = _settings()
     settings.sandbox.backend = backend
-    execution = project.repository.begin_execution("bash", f"export-{backend}")
+    execution = (await project.repository.begin_execution("bash", f"export-{backend}"))
     ctx = ToolExecutionContext(
         cwd=root,
         settings=settings,
@@ -231,7 +237,7 @@ async def test_actual_isolated_exports_registered_only_by_host(project, backend)
     program = f"""import json
 from pathlib import Path
 from pydantic import BaseModel
-from researchx.research.exports import export_result
+from researchx.workspace.exports import export_result
 class Candidate(BaseModel):
  kind: str = 'sandbox-candidate'
  status: str = 'partial'
@@ -247,12 +253,12 @@ print(json.dumps(packet))"""
     assert not result.is_error, result.output
     exports = result.metadata["exported_files"]
     assert len(exports) == 4
-    files = SessionFiles(project.store.directory)
-    assert all(record["execution_id"] == execution["id"] for record in files.list("artifacts"))
-    assert all(record["status"] == "pending_execution" for record in files.list("artifacts"))
-    project.repository.commit_execution(execution["id"], [])
-    assert all(not record["stale"] for record in files.list("artifacts"))
-    assert not project.store.load().artifacts  # Downloads are candidates, not research acceptance.
+    files = SessionFiles(project.store)
+    assert all(record["execution_id"] == execution["id"] for record in (await files.list("artifacts")))
+    assert all(record["status"] == "pending_execution" for record in (await files.list("artifacts")))
+    (await project.repository.commit_execution(execution["id"], []))
+    assert all(not record["stale"] for record in (await files.list("artifacts")))
+    assert not (await project.store.load()).artifacts  # Downloads are candidates, not research acceptance.
 
 
 async def test_export_registration_rejects_revoked_lease_and_link(project, tmp_path):
@@ -261,8 +267,8 @@ async def test_export_registration_rejects_revoked_lease_and_link(project, tmp_p
     from researchx.workspace.session_files import SessionFiles
     import json
 
-    root = project.resolve_workspace("P")
-    execution = project.repository.begin_execution("bash", "revoked-export")
+    root = (await project.resolve_workspace("P"))
+    execution = (await project.repository.begin_execution("bash", "revoked-export"))
     ctx = ToolExecutionContext(cwd=root, metadata={"research_runtime": project})
     candidate = root / "reports/candidate.md"
     candidate.write_text("retained candidate")
@@ -270,7 +276,7 @@ async def test_export_registration_rejects_revoked_lease_and_link(project, tmp_p
     outside.write_text("private")
     (root / "reports/escape.md").symlink_to(outside)
     with pytest.raises(ResearchError):
-        _register_exports(
+        await _register_exports(
             bytearray(json.dumps({"files": ["reports/escape.md"]}).encode()),
             ctx,
             project,
@@ -278,20 +284,20 @@ async def test_export_registration_rejects_revoked_lease_and_link(project, tmp_p
         )
     await project.submit_feedback("P", "change direction before import")
     with pytest.raises(ResearchError, match="revoked"):
-        _register_exports(
+        await _register_exports(
             bytearray(json.dumps({"files": ["reports/candidate.md"]}).encode()),
             ctx,
             project,
             execution,
         )
-    assert not SessionFiles(project.store.directory).list("artifacts")
+    assert not (await SessionFiles(project.store).list("artifacts"))
 
 
 @pytest.mark.parametrize("backend", ["srt", "docker"])
 async def test_report_rejects_preexisting_cross_project_hardlinks(project, tmp_path, backend):
     import os
 
-    root = project.resolve_workspace("P")
+    root = (await project.resolve_workspace("P"))
     private = tmp_path / "other-project-secret"
     private.write_text("private")
     os.link(private, root / "artifacts/hardlink")

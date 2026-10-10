@@ -45,12 +45,12 @@ async def call_sequence(bundle, steps):
     return results, driver
 
 
-def operation(store, action, **fields):
+async def operation(store, action, **fields):
     return {
         "operation": {
             "action": action,
-            "operation_id": f"e2e-{store.load().revision}-{action}",
-            "expected_revision": store.load().revision,
+            "operation_id": f"e2e-{(await store.load()).revision}-{action}",
+            "expected_revision": (await store.load()).revision,
             **fields,
         }
     }
@@ -75,11 +75,11 @@ async def test_e2e_06_project_switch_files_context_and_child_boundaries(lab):
 
     other, other_store, _, _ = await lab.create(model_factory=BetaModel, session="b" * 12)
     await collect(other.engine)
-    other_root = Path(other_store.load().project.workspace_path)
+    other_root = Path((await other_store.load()).project.workspace_path)
     bundle, store, model, _ = await lab.create()
     model.external_private_path = str(other_root / "MEMORY.md")
     await collect(bundle.engine)
-    root = Path(store.load().project.workspace_path)
+    root = Path((await store.load()).project.workspace_path)
     assert root != other_root
     for request in main_requests(model)[2:]:
         assert "BETA_PRIVATE_BACKGROUND" not in " ".join(
@@ -132,8 +132,8 @@ async def test_e2e_09_stale_patch_rejected_then_main_replans(lab):
     await runtime.submit_feedback("Alpha", FEEDBACK)
     model.release_main.set()
     await await_point(model.task_paused, pending)
-    old_plan_id = current_plan(store).id
-    assert current_plan(store).revision == 2
+    old_plan_id = (await current_plan(store)).id
+    assert (await current_plan(store)).revision == 2
     await runtime.submit_feedback("Alpha", FEEDBACK)
     model.release_task.set()
     await asyncio.wait_for(pending, timeout=60)
@@ -151,7 +151,7 @@ async def test_e2e_09_stale_patch_rejected_then_main_replans(lab):
     assert (
         len(model.planning_packets) == 4
     )  # Initial planner, v2 patch, rejected v1 patch, repaired v3 patch.
-    assert current_plan(store).revision == 3 and store.load().project.status == "completed"
+    assert (await current_plan(store)).revision == 3 and (await store.load()).project.status == "completed"
 
 
 async def test_e2e_10_late_children_cannot_pollute_revised_plan(lab):
@@ -167,7 +167,7 @@ async def test_e2e_10_late_children_cannot_pollute_revised_plan(lab):
     await await_point(model.child_waiting, pending)
     runtime = bundle.engine.tool_metadata["research_runtime"]
     old_execution = next(
-        item for item in store.load().executions.values() if item.status == "running"
+        item for item in (await store.load()).executions.values() if item.status == "running"
     )
     await runtime.submit_feedback("Alpha", FEEDBACK)
     # A trusted host races a validated planning invocation against a delayed
@@ -186,19 +186,17 @@ async def test_e2e_10_late_children_cannot_pollute_revised_plan(lab):
     patch = await _execute_tool_call(
         context, "replanner", "host-racing-replan", {"reason": FEEDBACK}
     )
-    assert not patch.is_error and current_plan(store).revision == 2
+    assert not patch.is_error and (await current_plan(store)).revision == 2
     model.hold.clear()
     model.release_child.set()
     await asyncio.wait_for(pending, timeout=60)
-    memory = store.load()
+    memory = (await store.load())
     assert memory.executions[old_execution.id].status == "rejected"
     assert not any(
         source.origin_id == old_execution.tool_use_id for source in memory.sources.values()
     )
-    audits = [
-        json.loads(path.read_text())
-        for path in (store.directory / "dispatches").glob("*/batch.json")
-    ]
+    from researchx.state.dispatch_audit import dispatch_summaries
+    audits = await dispatch_summaries(store, "Alpha")
     old = next(item for item in audits if item["baseline"][2] == 1)
     assert all(item["status"] == "failed" and not item["evidence_refs"] for item in old["results"])
     assert all(item["output_paths"] for item in old["results"])
@@ -207,7 +205,7 @@ async def test_e2e_10_late_children_cannot_pollute_revised_plan(lab):
         for event in events
         if isinstance(event, ToolExecutionCompleted)
     )
-    assert current_plan(store).revision == 2 and memory.project.status == "completed"
+    assert (await current_plan(store)).revision == 2 and memory.project.status == "completed"
     assert all(not item.stale and item.plan_revision == 2 for item in memory.artifacts.values())
 
 
@@ -227,23 +225,30 @@ async def test_e2e_11_rejects_premature_task_then_main_repairs(lab, monkeypatch)
         for event in events
         if isinstance(event, ToolExecutionCompleted)
         and event.tool_name == "research_project"
-        and event.output.startswith('{"passed"')
+        and event.output.startswith("{")
     ]
+    checks = [check for check in checks if "passed" in check]
     failed = next(check for check in checks if not check["passed"])
     assert failed["missing_requirements"] and failed["recommended_actions"]
     assert ("research", "validating") in statuses and ("draft", "validating") in statuses
     assert (
-        len([entry for entry in store.load().history if entry["action"] == "task_completion_check"])
+        len([entry for entry in (await store.load()).history if entry["action"] == "task_completion_check"])
         == 3
     )
-    assert all(task.status == "completed" for task in current_plan(store).tasks)
+    assert all(task.status == "completed" for task in (await current_plan(store)).tasks)
     assert len(model.results) == 1
 
 
 async def test_e2e_12_completion_idempotency_and_dependency_readiness(lab):
+    async def _deferred_step_3(_):
+        return ('research_project', await operation(store, 'resume'))
+
+    async def _deferred_step_4(_):
+        return ('research_project', await operation(store, 'complete_task', task_id='research', task_revision=1))
+
     bundle, store, model, _, pending, _ = await pause_after_research(lab)
     await stop(pending)
-    completed = current_plan(store).tasks[0].model_dump()
+    completed = (await current_plan(store)).tasks[0].model_dump()
     complete = next(
         fields
         for name, fields in model.calls
@@ -252,12 +257,9 @@ async def test_e2e_12_completion_idempotency_and_dependency_readiness(lab):
     results, _ = await call_sequence(
         bundle,
         [
-            lambda _: ("research_project", operation(store, "resume")),
+            _deferred_step_3,
             ("research_project", complete),
-            lambda _: (
-                "research_project",
-                operation(store, "complete_task", task_id="research", task_revision=1),
-            ),
+            _deferred_step_4,
         ],
     )
     assert (
@@ -266,27 +268,33 @@ async def test_e2e_12_completion_idempotency_and_dependency_readiness(lab):
         and json.JSONDecoder().raw_decode(results[1].output)[0]["passed"]
     )
     assert results[2].is_error and "Invalid task transition" in results[2].output
-    assert current_plan(store).tasks[0].model_dump() == completed
-    assert current_plan(store).tasks[1].status == "ready" and len(store.load().artifacts) == 1
+    assert (await current_plan(store)).tasks[0].model_dump() == completed
+    assert (await current_plan(store)).tasks[1].status == "ready" and len((await store.load()).artifacts) == 1
 
 
 async def test_e2e_14_markdown_completion_claim_cannot_change_authority(lab):
+    async def _deferred_step_5(_):
+        return ('research_project', await operation(store, 'resume'))
+
+    async def _deferred_step_6(_):
+        return ('research_project', await operation(store, 'claim_task', task_id='draft', task_revision=1))
+
+    async def _deferred_step_7(_):
+        return ('research_project', await operation(store, 'finalize'))
+
     bundle, store, model, _, pending, _ = await pause_after_research(lab)
     await stop(pending)
-    before_records = {key: value.model_dump() for key, value in store.load().evidence_pool.items()}
+    before_records = {key: value.model_dump() for key, value in (await store.load()).evidence_pool.items()}
     results, driver = await call_sequence(
         bundle,
         [
-            lambda _: ("research_project", operation(store, "resume")),
-            lambda _: (
-                "research_project",
-                operation(store, "claim_task", task_id="draft", task_revision=1),
-            ),
+            _deferred_step_5,
+            _deferred_step_6,
             (
                 "edit_file",
                 {"path": "MEMORY.md", "old_str": "摘要尚待交付", "new_str": "所有研究任务已经完成"},
             ),
-            lambda _: ("research_project", operation(store, "finalize")),
+            _deferred_step_7,
             ("research_project", {"operation": {"action": "read"}}),
         ],
     )
@@ -299,11 +307,11 @@ async def test_e2e_14_markdown_completion_claim_cannot_change_authority(lab):
         "All required tasks must complete" in value for value in completion["missing_requirements"]
     )
     assert (
-        current_plan(store).tasks[1].status == "in_progress"
-        and store.load().project.status == "running"
+        (await current_plan(store)).tasks[1].status == "in_progress"
+        and (await store.load()).project.status == "running"
     )
     assert before_records == {
-        key: value.model_dump() for key, value in store.load().evidence_pool.items()
+        key: value.model_dump() for key, value in (await store.load()).evidence_pool.items()
     }
 
 
@@ -347,10 +355,16 @@ async def test_tool_registry_discovery_and_execution_compatibility(lab):
     assert "dispatch_subagents:" in results[1].output and not results[2].is_error
     assert results[3].is_error and "Unknown tool" in results[3].output
     assert results[4].is_error and "active project workspace" in results[4].output
-    assert store.load().project is None
+    assert (await store.load()).project is None
 
 
 async def test_report_shell_cwd_and_absolute_python_are_confined(lab):
+    async def _deferred_step_8(_):
+        return ('research_project', await operation(store, 'resume'))
+
+    async def _deferred_step_9(_):
+        return ('research_project', await operation(store, 'claim_task', task_id='draft', task_revision=1))
+
     bundle, store, _, _, pending, _ = await pause_after_research(lab)
     await stop(pending)
     outside = lab.root / "outside-private.md"
@@ -359,11 +373,8 @@ async def test_report_shell_cwd_and_absolute_python_are_confined(lab):
     results, _ = await call_sequence(
         bundle,
         [
-            lambda _: ("research_project", operation(store, "resume")),
-            lambda _: (
-                "research_project",
-                operation(store, "claim_task", task_id="draft", task_revision=1),
-            ),
+            _deferred_step_8,
+            _deferred_step_9,
             ("bash", {"command": "pwd", "cwd": str(lab.root)}),
             ("bash", {"command": "python3 -c " + shlex.quote(code)}),
         ],
@@ -374,6 +385,12 @@ async def test_report_shell_cwd_and_absolute_python_are_confined(lab):
 
 
 async def test_e2e_16_process_recovery_revokes_lease_between_tool_executions(lab):
+    async def _deferred_step_10(_):
+        return ('research_project', await operation(store, 'resume'))
+
+    async def _deferred_step_11(_):
+        return ('research_project', await operation(store, 'claim_task', task_id='draft', task_revision=1))
+
     from researchx.state.repository import ResearchRepository
     from researchx.state.store import ResearchStore
 
@@ -382,34 +399,37 @@ async def test_e2e_16_process_recovery_revokes_lease_between_tool_executions(lab
     await call_sequence(
         bundle,
         [
-            lambda _: ("research_project", operation(store, "resume")),
-            lambda _: (
-                "research_project",
-                operation(store, "claim_task", task_id="draft", task_revision=1),
-            ),
+            _deferred_step_10,
+            _deferred_step_11,
         ],
     )
     # The process can die while waiting for a model, after claim_task persisted
     # but before begin_execution. Reload the actual checkpoint used by Web startup.
-    assert store.load().research_state.current_task_id == "draft"
-    assert not any(item.status == "running" for item in store.load().executions.values())
+    assert (await store.load()).research_state.current_task_id == "draft"
+    assert not any(item.status == "running" for item in (await store.load()).executions.values())
     reloaded = ResearchStore(lab.root, store.session_id, root=lab.root / "state")
     repository = ResearchRepository(reloaded)
-    repository.recover()
-    assert reloaded.load().project.status == "suspended"
-    assert current_plan(reloaded).tasks[1].status == "blocked"
-    assert reloaded.load().research_state.current_task_id is None
-    revision = reloaded.load().revision
-    repository.recover()
-    assert reloaded.load().revision == revision
+    (await repository.recover())
+    assert (await reloaded.load()).project.status == "suspended"
+    assert (await current_plan(reloaded)).tasks[1].status == "blocked"
+    assert (await reloaded.load()).research_state.current_task_id is None
+    revision = (await reloaded.load()).revision
+    (await repository.recover())
+    assert (await reloaded.load()).revision == revision
 
 
 async def test_generic_conflict_candidates_bind_existing_evidence(lab):
+    async def _deferred_step_1(_):
+        return ('research_project', await operation(store, 'resume'))
+
+    async def _deferred_step_2(_):
+        return ('research_project', await operation(store, 'claim_task', task_id='draft', task_revision=1))
+
     class ConflictModel(AlphaModel):
         async def child(self, request):
             async for event in super().child(request):
                 call = event.message.tool_uses[0]
-                ids = self.checked(self.store.load())[:2]
+                ids = self.checked((await self.store.load()))[:2]
                 if call.name == "read_file":
                     call.name = "research_memory"
                     call.input = {
@@ -427,11 +447,8 @@ async def test_generic_conflict_candidates_bind_existing_evidence(lab):
     # The script controls the main agent, while the same transport serves children.
     driver = ScriptModel(
         [
-            lambda _: ("research_project", operation(store, "resume")),
-            lambda _: (
-                "research_project",
-                operation(store, "claim_task", task_id="draft", task_revision=1),
-            ),
+            _deferred_step_1,
+            _deferred_step_2,
             (
                 "dispatch_subagents",
                 {
@@ -458,7 +475,7 @@ async def test_generic_conflict_candidates_bind_existing_evidence(lab):
 
     driver.stream_message = route
     bundle.engine.set_api_client(driver)
-    before = store.load()
+    before = (await store.load())
     result = None
     stream = bundle.engine.submit_message("用通用委托整理现有证据中的冲突候选")
     try:
@@ -475,6 +492,6 @@ async def test_generic_conflict_candidates_bind_existing_evidence(lab):
     assert result and result["results"][0]["status"] == "completed"
     assert result["results"][0]["evidence_refs"] == child_model.checked(before)[:2]
     assert "冲突候选" in result["results"][0]["summary"]
-    after = store.load()
+    after = (await store.load())
     assert before.conclusions == after.conclusions and before.conflicts == after.conflicts
-    assert current_plan(store).tasks[1].status == "in_progress"
+    assert (await current_plan(store)).tasks[1].status == "in_progress"

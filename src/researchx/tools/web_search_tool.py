@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from researchx.config import load_settings
 from researchx.api.search_types import SearchBatch
 from researchx.tools.base import BaseTool, ToolExecutionContext, ToolResult
-from researchx.research.sites import (
+from researchx.config.sites import (
     CATEGORY_LABELS,
     SOURCE_TIER_ORDER,
     classify_source,

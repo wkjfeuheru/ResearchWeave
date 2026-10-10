@@ -6,8 +6,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Literal
 from pydantic import Field, field_validator, model_validator
-from researchx.research.contracts import Amount, Contract, Reference, Result
-from researchx.research.values import restore_decimal_fields
+from researchx.contracts import Amount, Contract, Reference, Result
+from researchx.contracts import restore_decimal_fields
 
 
 class FinancialPeriod(Contract):

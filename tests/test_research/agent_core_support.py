@@ -103,6 +103,8 @@ class ScriptModel:
         self.requests.append(request)
         step = self.steps.pop(0) if self.steps else "测试阶段已结束。"
         step = step(request) if callable(step) else step
+        if __import__("inspect").isawaitable(step):
+            step = await step
         if isinstance(step, str):
             blocks = [TextBlock(text=step)]
         else:
@@ -122,6 +124,7 @@ class AlphaModel:
         self.store = store
         self.keys = keys or ["company", "industry", "financial"]
         self.concurrency, self.fail, self.hold = concurrency, set(fail), set(hold)
+        self.held_children = set()
         self.requests, self.planning_packets, self.calls, self.results = [], [], [], []
         self.child_calls, self.child_active, self.child_peak, self.child_cancelled = {}, 0, 0, []
         self.child_rounds = {}
@@ -140,11 +143,11 @@ class AlphaModel:
         self.seen_results, self.allowed_errors, self.observed_errors = set(), set(), []
         self.premature = premature
 
-    def mutation(self, action, **fields):
+    async def mutation(self, action, **fields):
         return {
             "action": action,
             "operation_id": new_id("op"),
-            "expected_revision": self.store.load().revision,
+            "expected_revision": (await self.store.load()).revision,
             **fields,
         }
 
@@ -219,20 +222,20 @@ class AlphaModel:
             and not any(successor.supersedes == key for successor in memory.evidence_pool.values())
         ]
 
-    def observe(self, request):
+    async def observe(self, request):
         block = last_result(request)
         if block is None or block.tool_use_id in self.seen_results:
             return
         self.seen_results.add(block.tool_use_id)
         if block.is_error:
             assert any(value in block.content for value in self.allowed_errors), block.content
-            self.observed_errors.append((block.content, self.store.load().model_dump(mode="json")))
+            self.observed_errors.append((block.content, (await self.store.load()).model_dump(mode="json")))
             self.queue = []
             return
         if block.result_metadata.get("dispatch_id"):
             self.results.append(json_result(block))
 
-    def action(self, stage, memory, plan):
+    async def action(self, stage, memory, plan):
         runtime_task = next(task for task in plan.tasks if task.id == self.active)
         evidence = self.checked(memory)
         if stage == "dispatch":
@@ -256,41 +259,41 @@ class AlphaModel:
                 if item.tool_name == "web_fetch" and item.status == "committed"
             )
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": (await self.mutation(
                     "add_evidence", source_id=execution.source_ids[0], statement=DOCS[self.topic]
-                )
+                ))
             }
         if stage in {"verification", "finding_reason"}:
             key = next(reversed(memory.evidence_pool))
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": (await self.mutation(
                     "add_reasoning",
                     evidence_ids=[key],
                     method="核对完整合成公告的主体、期间与口径",
                     result=DOCS[self.topic],
                     output="可追溯公开核查",
                     verification=stage == "verification",
-                )
+                ))
             }
         if stage == "verify":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": (await self.mutation(
                     "verify_evidence",
                     evidence_id=next(reversed(memory.evidence_pool)),
                     level="source_checked",
                     method="source",
                     verification_step_id=next(reversed(memory.reasoning_chain)),
                     verification_note="与离线完整原文一致，不将单一来源升级为多来源验证",
-                )
+                ))
             }
         if stage == "finding":
             return "research_memory", {
-                "operation": self.mutation(
+                "operation": (await self.mutation(
                     "add_conclusion",
                     statement=DOCS[self.topic],
                     evidence_ids=[next(reversed(memory.evidence_pool))],
                     step_ids=[next(reversed(memory.reasoning_chain))],
-                )
+                ))
             }
         citations = " ".join(f"[E:{key}]" for key in evidence)
         if stage == "write":
@@ -356,13 +359,13 @@ class AlphaModel:
                     ],
                 )
             return "research_project", {
-                "operation": self.mutation("submit_artifact", artifact=fields)
+                "operation": (await self.mutation("submit_artifact", artifact=fields))
             }
         if stage in {"complete", "premature"}:
             return "research_project", {
-                "operation": self.mutation(
+                "operation": (await self.mutation(
                     "complete_task", task_id=self.active, task_revision=runtime_task.task_revision
-                )
+                ))
             }
         raise AssertionError(stage)
 
@@ -424,7 +427,11 @@ class AlphaModel:
                 )
             else:
                 if key in self.hold:
-                    self.child_waiting.set()
+                    self.held_children.add(key)
+                    # Cancellation tests target in-flight model calls, not the
+                    # intervening database writes. Observe every intended waiter.
+                    if len(self.held_children) >= min(self.concurrency, len(self.hold)):
+                        self.child_waiting.set()
                     await self.release_child.wait()
                 name, fields = (
                     "submit_subagent_result",
@@ -459,14 +466,14 @@ class AlphaModel:
             name = next(iter(names))
             fields = self.proposal() if name == "submit_plan_proposal" else self.patch(packet)
         else:
-            self.observe(request)
-            memory = self.store.load()
+            (await self.observe(request))
+            memory = (await self.store.load())
             plan = memory.plans.get(memory.research_state.current_plan_id or "")
             if self.pause_on_task and memory.research_state.current_task_id == self.pause_on_task:
                 self.pause_on_task = None
                 self.task_paused.set()
                 await self.release_task.wait()
-                memory = self.store.load()
+                memory = (await self.store.load())
                 plan = memory.plans[memory.research_state.current_plan_id]
             if (
                 plan
@@ -476,7 +483,7 @@ class AlphaModel:
                 self.pause = False
                 self.paused.set()
                 await self.release_main.wait()
-                memory = self.store.load()
+                memory = (await self.store.load())
                 plan = memory.plans[memory.research_state.current_plan_id]
             if memory.project is None:
                 user_id = next(
@@ -487,22 +494,22 @@ class AlphaModel:
                 name, fields = (
                     "research_project",
                     {
-                        "operation": self.mutation(
+                        "operation": (await self.mutation(
                             "start",
                             objective=self.objective().model_dump(mode="json"),
                             user_source_ids=[user_id],
-                        )
+                        ))
                     },
                 )
             elif memory.project.status == "suspended":
-                name, fields = "research_project", {"operation": self.mutation("resume")}
+                name, fields = "research_project", {"operation": (await self.mutation("resume"))}
             elif plan is None:
                 name, fields = "planner", {"objective": "AlphaTech 初步研究"}
             elif memory.research_state.replan_required:
                 self.queue = []
                 name, fields = "replanner", {"reason": FEEDBACK}
             elif self.queue:
-                name, fields = self.action(self.queue.pop(0), memory, plan)
+                name, fields = (await self.action(self.queue.pop(0), memory, plan))
             elif any(task.status == "ready" for task in plan.tasks):
                 selected = next(task for task in plan.tasks if task.status == "ready")
                 self.active = selected.id
@@ -529,13 +536,13 @@ class AlphaModel:
                 name, fields = (
                     "research_project",
                     {
-                        "operation": self.mutation(
+                        "operation": (await self.mutation(
                             "claim_task", task_id=self.active, task_revision=selected.task_revision
-                        )
+                        ))
                     },
                 )
             elif memory.project.status != "completed":
-                name, fields = "research_project", {"operation": self.mutation("finalize")}
+                name, fields = "research_project", {"operation": (await self.mutation("finalize"))}
             else:
                 yield ApiMessageCompleteEvent(
                     message=ConversationMessage(

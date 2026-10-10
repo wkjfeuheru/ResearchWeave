@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
@@ -156,13 +157,16 @@ class QueryContext:
     hook_executor: HookExecutor | None = None
     tool_metadata: ExecutionMetadata | None = None
     trusted_settings: Settings | None = None
-    runtime_context_provider: Callable[[], str | None] | None = None
-    runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None
+    runtime_context_provider: Callable[[], str | None | Awaitable[str | None]] | None = None
+    runtime_snapshot_provider: Callable[[], ContextSnapshot | Awaitable[ContextSnapshot]] | None = (
+        None
+    )
     context_components: ContextComponentsSettings | None = None
     current_user_message_id: str | None = None
     research_memory_enabled: bool = True
     capabilities: CapabilityContext = field(default_factory=CapabilityContext)
     execution_session_id: str = field(default_factory=lambda: uuid4().hex)
+    execution_workspace: Path | None = None
 
 
 def _tool_artifact_dir() -> Path:
@@ -178,11 +182,12 @@ def _safe_tool_artifact_name(tool_name: str) -> str:
     return (normalized or "tool")[:80]
 
 
-def _offload_tool_output_if_needed(
+async def _offload_tool_output_if_needed(
     *,
     tool_name: str,
     tool_use_id: str,
     output: str,
+    workspace: str,
 ) -> tuple[str, Path | None]:
     inline_limit = tool_output_inline_chars()
     if len(output) <= inline_limit:
@@ -192,9 +197,14 @@ def _offload_tool_output_if_needed(
         _tool_artifact_dir()
         / f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"
     )
-    from researchx.storage.filesystem import atomic_write_text
+    from researchx.storage.content import persist_object, materialize_object
+    from researchx.storage.database import current_database
 
-    atomic_write_text(artifact_path, output, mode=0o600)
+    database = current_database()
+    key = await persist_object(database, workspace, output.encode())
+    artifact_path = await materialize_object(
+        database, workspace, key, artifact_path.parent, artifact_path.name
+    )
     preview = output[: tool_output_preview_chars()]
     omitted = max(0, len(output) - len(preview))
     inline = (
@@ -285,7 +295,7 @@ async def _preprocess_images_in_messages(
             return msg_idx, blk_idx, f"[Image description failed: {result.output}]"
         return msg_idx, blk_idx, result.output
 
-    results = await asyncio.gather(*[_describe(mi, bi, blk) for mi, bi, blk in pending])
+    results = await asyncio.gather(*[(_describe(mi, bi, blk)) for mi, bi, blk in pending])
 
     # Replace ImageBlocks with TextBlocks in-place
     for msg_idx, blk_idx, description in results:
@@ -332,9 +342,9 @@ async def run_query(
             context.tool_metadata["research_runtime"] = runtime
         runtime.permission_checker = context.permission_checker
 
-    def pause_project(reason: str) -> None:
-        if runtime and runtime.store.load().project:
-            runtime.repository.suspend(reason)
+    async def pause_project(reason: str) -> None:
+        if runtime and (await runtime.store.load()).project:
+            (await runtime.repository.suspend(reason))
 
     compact_state = AutoCompactState()
     reactive_compact_attempted = False
@@ -389,7 +399,7 @@ async def run_query(
                     current_user_message_id=context.current_user_message_id,
                 )
 
-        task = asyncio.create_task(observed_compaction())
+        task = asyncio.create_task((observed_compaction()))
         pending_event = None
         try:
             while not task.done() or not progress_queue.empty():
@@ -450,14 +460,18 @@ async def run_query(
             try:
                 if context.runtime_snapshot_provider:
                     snapshot = context.runtime_snapshot_provider()
+                    if inspect.isawaitable(snapshot):
+                        snapshot = await snapshot
                 else:
                     current = (
                         context.runtime_context_provider()
                         if context.runtime_context_provider
                         else ""
                     )
+                    if inspect.isawaitable(current):
+                        current = await current
                     current = ResearchAgentRuntime.strip_workspace_context(current or "")
-                    snapshot = compose_research_context(
+                    snapshot = await compose_research_context(
                         ContextSnapshot(current),
                         store=store,
                         runtime=runtime,
@@ -469,7 +483,7 @@ async def run_query(
                         enabled=context.research_memory_enabled,
                     )
             except (ResearchError, OSError, ContextBudgetError) as exc:
-                pause_project(str(exc))
+                (await pause_project(str(exc)))
                 yield ErrorEvent(message=str(exc)), None
                 return
             request_messages = refresh_runtime_messages(
@@ -489,7 +503,12 @@ async def run_query(
                 context.api_client,
                 ApiMessageRequest(
                     model=context.model,
-                    messages=list(request_messages if candidate is None else candidate),
+                    audit_cwd=None
+                    if (context.tool_metadata or {}).get("subagent_child")
+                    else str(context.cwd),
+                    audit_session_id=(context.tool_metadata or {}).get("session_id")
+                    or context.execution_session_id,
+                    messages=(list(request_messages if candidate is None else candidate)),
                     system_prompt=context.system_prompt,
                     max_tokens=effective_max_tokens,
                     tools=request_tools,
@@ -503,7 +522,7 @@ async def run_query(
         try:
             # Validate configuration before attempting compaction or any main model call.
             initial = request_budget(
-                build_request(), threshold=context.auto_compact_threshold_tokens
+                (build_request()), threshold=context.auto_compact_threshold_tokens
             )
             if initial.component_policy_enabled and any(
                 initial.component_overflows[key]["hard_limit_exceeded"]
@@ -546,7 +565,7 @@ async def run_query(
             budget.require_fit()
             messages[:] = selected
         except ContextBudgetError as exc:
-            pause_project(str(exc))
+            (await pause_project(str(exc)))
             yield ErrorEvent(message=str(exc)), None
             return
 
@@ -598,7 +617,7 @@ async def run_query(
                     yield event, usage
                 compacted_messages, was_compacted = last_compaction_result
                 if was_compacted:
-                    retry_budget = request_budget(build_request(compacted_messages))
+                    retry_budget = request_budget((build_request(compacted_messages)))
                     if (
                         retry_budget.fits
                         and retry_budget.components_fit
@@ -606,7 +625,7 @@ async def run_query(
                     ):
                         messages[:] = compacted_messages
                         continue
-            pause_project(error_msg)
+            (await pause_project(error_msg))
             if (
                 "connect" in error_msg.lower()
                 or "timeout" in error_msg.lower()
@@ -623,11 +642,11 @@ async def run_query(
             return
 
         if final_message is None:
-            pause_project("Model stream finished without a final message")
+            (await pause_project("Model stream finished without a final message"))
             raise RuntimeError("Model stream finished without a final message")
 
         if final_message.role == "assistant" and final_message.is_effectively_empty():
-            pause_project("Model returned an empty assistant message")
+            (await pause_project("Model returned an empty assistant message"))
             log.warning("dropping empty assistant message from provider response")
             yield (
                 ErrorEvent(
@@ -642,7 +661,7 @@ async def run_query(
 
         store = (context.tool_metadata or {}).get("research_store")
         if store is not None and not final_message.tool_uses:
-            state = store.load()
+            state = await store.load()
             actionable = [
                 item
                 for item in state.conflicts.values()
@@ -652,7 +671,8 @@ async def run_query(
                     item.status == "awaiting_review"
                     or (
                         item.status == "open"
-                        and item.last_attempt_fingerprint != store.conflict_fingerprint(state, item)
+                        and item.last_attempt_fingerprint
+                        != (store.conflict_fingerprint(state, item))
                     )
                 )
             ]
@@ -682,19 +702,19 @@ async def run_query(
                 )
                 yield StatusEvent(message="正在核查影响核心结论的争议…", discard_draft=True), usage
                 continue
-            invalid = store.invalid_citations(final_message.text)
+            invalid = await store.invalid_citations(final_message.text)
             if (
                 invalid
                 and citation_repairs < 2
                 and (context.max_turns is None or turn_count < context.max_turns)
             ):
                 citation_repairs += 1
-                state = store.load()
+                state = await store.load()
                 note = {
                     "session_id": state.session_id,
                     "revision": state.revision,
                     "invalid_citations": invalid,
-                    "available_evidence_ids": list(state.evidence_pool),
+                    "available_evidence_ids": (list(state.evidence_pool)),
                     "draft": final_message.text,
                     "required_action": "使用现有的完整证据 ID（包括 ev_ 前缀）修正本回答中的无效引用。"
                     "支持证据不确定时按 ID 读取 research_memory。不要猜测或编造来源，不要静默替换其他来源，"
@@ -710,13 +730,15 @@ async def run_query(
                 )
                 yield StatusEvent(message="正在核对回答中的来源引用…", discard_draft=True), usage
                 continue
-            state = store.load()
+            state = await store.load()
             plan = state.plans.get(state.research_state.current_plan_id or "")
             ready_to_finalize = plan is not None and all(
                 task.status in {"completed", "blocked", "cancelled"} for task in plan.tasks
             )
             candidates = (
-                store.verification_candidates(final_message.text) if ready_to_finalize else []
+                (await store.verification_candidates(final_message.text))
+                if ready_to_finalize
+                else []
             )
             if (
                 candidates
@@ -752,7 +774,7 @@ async def run_query(
         runtime = (context.tool_metadata or {}).get("research_runtime")
         if runtime is not None and not final_message.tool_uses:
             completion = await runtime.evaluate_stop()
-            memory = runtime.store.load()
+            memory = await runtime.store.load()
             if (
                 completion is not None
                 and completion.passed
@@ -788,7 +810,11 @@ async def run_query(
                     "cancelled",
                     "failed",
                 }:
-                    runtime.repository.suspend("Main agent stopped before completion checks passed")
+                    (
+                        await runtime.repository.suspend(
+                            "Main agent stopped before completion checks passed"
+                        )
+                    )
 
         messages.append(final_message)
         yield AssistantTurnComplete(message=final_message, usage=usage), usage
@@ -807,7 +833,7 @@ async def run_query(
         tool_calls = final_message.tool_uses
         if any(call.name == "bash" for call in tool_calls):
             host_shell = context.capabilities.allow_trusted_host and not (
-                runtime is not None and runtime.store.load().project is not None
+                runtime is not None and (await runtime.store.load()).project is not None
             )
             yield (
                 StatusEvent(
@@ -849,7 +875,7 @@ async def run_query(
                 yield (
                     ResearchProgressEvent(
                         progress=progress
-                        or (context.tool_metadata or {})["research_store"].progress()
+                        or (await (context.tool_metadata or {})["research_store"].progress())
                     ),
                     None,
                 )
@@ -875,7 +901,7 @@ async def run_query(
                 return index, result
 
             pending_tools = [
-                asyncio.create_task(_run(index, tc)) for index, tc in enumerate(tool_calls)
+                asyncio.create_task((_run(index, tc))) for index, tc in enumerate(tool_calls)
             ]
             ordered_results = {}
             try:
@@ -897,7 +923,9 @@ async def run_query(
                         yield (
                             ResearchProgressEvent(
                                 progress=progress
-                                or (context.tool_metadata or {})["research_store"].progress()
+                                or (
+                                    await (context.tool_metadata or {})["research_store"].progress()
+                                )
                             ),
                             None,
                         )
@@ -913,8 +941,8 @@ async def run_query(
 
     if context.max_turns is not None:
         runtime = (context.tool_metadata or {}).get("research_runtime")
-        if runtime and runtime.store.load().project:
-            runtime.repository.suspend("Main agent turn budget exhausted")
+        if runtime and (await runtime.store.load()).project:
+            (await runtime.repository.suspend("Main agent turn budget exhausted"))
         raise MaxTurnsExceeded(context.max_turns)
     raise RuntimeError("Query loop exited without a max_turns limit or final response")
 

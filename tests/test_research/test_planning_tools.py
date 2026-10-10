@@ -85,37 +85,37 @@ def context(repo, model, **metadata):
 async def test_function_only_proposes_then_real_tool_loop_commits(project):
     model = PlanningModel()
     query = context(project, model)
-    before = project.store.load().revision
+    before = (await project.store.load()).revision
     proposal = await planner_tool(
         "公司财报点评",
         ToolExecutionContext(
             cwd=query.cwd, metadata={**query.tool_metadata, "query_context": query}
         ),
     )
-    assert not proposal["committed"] and project.store.load().revision == before
+    assert not proposal["committed"] and (await project.store.load()).revision == before
     result = await _execute_tool_call(
         query, "planner", "parent-plan", {"objective": "公司财报点评"}
     )
     assert not result.is_error and result.result_metadata["commit"]["committed"]
-    assert project.store.load().project.status == "running"
+    assert (await project.store.load()).project.status == "running"
     assert {item["name"] for item in model.requests[0].tools} == {"submit_plan_proposal"}
     assert all(request.model == "fixture-model" for request in model.requests)
-    assert "parent-plan" not in {item.origin_id for item in project.store.load().sources.values()}
+    assert "parent-plan" not in {item.origin_id for item in (await project.store.load()).sources.values()}
 
 
 async def test_replanner_is_registered_and_commits_incremental_patch(project):
-    commit(project)
-    project.submit_feedback("project_A", "增加储能预测", project.store.load().revision)
+    (await commit(project))
+    (await project.submit_feedback("project_A", "增加储能预测", (await project.store.load()).revision))
     query = context(project, PlanningModel())
     result = await _execute_tool_call(query, "replanner", "replan", {"reason": "增加储能预测"})
     assert not result.is_error
-    plan = project._plan(project.store.load())
+    plan = project._plan((await project.store.load()))
     assert plan.revision == 2 and {item.id for item in plan.tasks} == {
         "sources",
         "draft",
         "storage",
     }
-    assert len(project.store.load().plans) == 2
+    assert len((await project.store.load()).plans) == 2
 
 
 @pytest.mark.parametrize(
@@ -135,7 +135,7 @@ async def test_child_failure_suspends_without_fabricated_commit(project, mode, m
         query, "planner", "failed-plan", {"objective": "公司财报点评"}
     )
     assert result.is_error and error in result.content
-    memory = project.store.load()
+    memory = (await project.store.load())
     assert memory.project.status == "suspended" and not memory.plans
     assert memory.project.planning_calls == 1
 
@@ -144,9 +144,9 @@ async def test_planner_permission_denial_does_not_call_model_or_mutate(project):
     model = PlanningModel()
     query = context(project, model)
     query.permission_checker = PermissionChecker(PermissionSettings(denied_tools=["planner"]))
-    before = project.store.load().revision
+    before = (await project.store.load()).revision
     result = await _execute_tool_call(query, "planner", "denied", {"objective": "财报点评"})
-    assert result.is_error and not model.requests and project.store.load().revision == before
+    assert result.is_error and not model.requests and (await project.store.load()).revision == before
 
 
 async def test_subagent_recursion_rejected_even_if_function_called_directly(project):
@@ -168,7 +168,7 @@ async def test_subagent_recursion_rejected_even_if_function_called_directly(proj
 async def test_planning_cas_conflict_suspends_preserving_newer_state(project):
     class RacingModel(PlanningModel):
         async def stream_message(self, request):
-            project.store.capture(origin_id="concurrent-source", kind="user", content="新资料")
+            (await project.store.capture(origin_id="concurrent-source", kind="user", content="新资料"))
             async for event in super().stream_message(request):
                 yield event
 
@@ -176,9 +176,9 @@ async def test_planning_cas_conflict_suspends_preserving_newer_state(project):
         context(project, RacingModel()), "planner", "cas", {"objective": "财报"}
     )
     assert result.is_error and "Revision conflict" in result.content
-    assert project.store.load().project.status == "suspended"
+    assert (await project.store.load()).project.status == "suspended"
     assert any(
-        source.origin_id == "concurrent-source" for source in project.store.load().sources.values()
+        source.origin_id == "concurrent-source" for source in (await project.store.load()).sources.values()
     )
 
 
@@ -195,12 +195,12 @@ async def test_no_plan_blocks_research_and_legacy_plan_write(project):
                 "action": "create_plan",
                 "title": "绕过",
                 "tasks": ["绕过"],
-                "expected_revision": project.store.load().revision,
+                "expected_revision": (await project.store.load()).revision,
                 "operation_id": "bypass",
             }
         },
     )
-    assert result.is_error and not project.store.load().plans
+    assert result.is_error and not (await project.store.load()).plans
 
 
 @pytest.mark.parametrize("direct", [False, True])
@@ -216,7 +216,7 @@ async def test_premature_llm_stop_is_bounded_and_never_completes(project, direct
                 usage=UsageSnapshot(),
             )
 
-    commit(project)
+    (await commit(project))
     model = PrematureModel()
     agent = QueryEngine(
         api_client=model,
@@ -239,10 +239,10 @@ async def test_premature_llm_stop_is_bounded_and_never_completes(project, direct
         ]
     else:
         _ = [event async for event in agent.submit_message("继续研报")]
-    assert model.calls == 3 and project.store.load().project.status == "suspended"
+    assert model.calls == 3 and (await project.store.load()).project.status == "suspended"
     if not direct:
         assert "阶段性" in agent.messages[-1].text
-    assert not project.store.load().project.delivery_manifest
+    assert not (await project.store.load()).project.delivery_manifest
 
 
 @pytest.mark.parametrize(
@@ -258,14 +258,14 @@ async def test_malformed_tool_provenance_cancels_execution_without_current_sourc
         async def execute(self, arguments, context):
             return ToolResult(output="无效连接器结果", metadata={"research_source_specs": [spec]})
 
-    commit(project)
-    claim(project, "sources")
+    (await commit(project))
+    (await claim(project, "sources"))
     query = context(project, PlanningModel())
     query.tool_registry.register(MalformedTool())
     result = await _execute_tool_call(query, "malformed_source", "bad-source", {})
     assert result.is_error and "Tool result rejected" in result.content
-    execution = project.store.load().executions[result.result_metadata["execution_id"]]
+    execution = (await project.store.load()).executions[result.result_metadata["execution_id"]]
     assert execution.status == "cancelled"
     assert not any(
-        source.origin_id == "bad-source" for source in project.store.load().sources.values()
+        source.origin_id == "bad-source" for source in (await project.store.load()).sources.values()
     )

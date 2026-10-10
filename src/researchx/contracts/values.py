@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Iterable, TypeVar
-from researchx.research.contracts import Amount
+from researchx.contracts.models import Amount
 from decimal import Decimal
 
 

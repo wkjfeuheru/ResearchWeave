@@ -346,7 +346,7 @@ def try_context_collapse(
         return None
 
     result = [*collapsed_older, *newer]
-    if estimate_message_tokens(result) >= estimate_message_tokens(messages):
+    if (estimate_message_tokens(result)) >= (estimate_message_tokens(messages)):
         return None
     return result
 
@@ -520,7 +520,7 @@ def _split_preserving_tool_pairs(
     """
 
     if len(messages) <= preserve_recent:
-        return [], sanitize_conversation_messages(list(messages))
+        return [], sanitize_conversation_messages((list(messages)))
 
     split_index = max(0, len(messages) - preserve_recent)
     while split_index > 0 and _boundary_crosses_tool_pair(
@@ -529,7 +529,7 @@ def _split_preserving_tool_pairs(
         split_index -= 1
 
     older = list(messages[:split_index])
-    newer = sanitize_conversation_messages(list(messages[split_index:]))
+    newer = sanitize_conversation_messages((list(messages[split_index:])))
     return older, newer
 
 
@@ -589,7 +589,7 @@ def _create_hook_attachments(hook_note: str | None) -> list[CompactAttachment]:
     return [attachment] if attachment is not None else []
 
 
-def _build_compact_attachments(
+async def _build_compact_attachments(
     messages: list[ConversationMessage],
     *,
     metadata: ExecutionMetadata | None,
@@ -603,8 +603,10 @@ def _build_compact_attachments(
             CompactAttachment(
                 kind="research_memory",
                 title="当前研究检查点",
-                body=store.prompt(
-                    int(metadata.get("research_injection_budget", 6000)), model=model
+                body=(
+                    await store.prompt(
+                        int(metadata.get("research_injection_budget", 6000)), model=model
+                    )
                 ),
             )
         )
@@ -622,7 +624,7 @@ def _finalize_compaction_result(result: CompactionResult) -> CompactionResult:
     messages = build_post_compact_messages(result)
     result.compact_metadata.setdefault("post_compact_message_count", len(messages))
     result.compact_metadata.setdefault(
-        "post_compact_token_count", estimate_message_tokens(messages)
+        "post_compact_token_count", (estimate_message_tokens(messages))
     )
     result.boundary_marker = create_compact_boundary_message(result.compact_metadata)
     return result
@@ -650,7 +652,7 @@ def _build_passthrough_compaction_result(
         "trigger": trigger,
         "compact_kind": compact_kind,
         "pre_compact_message_count": len(messages),
-        "pre_compact_token_count": estimate_message_tokens(messages),
+        "pre_compact_token_count": (estimate_message_tokens(messages)),
         **_sanitize_metadata(metadata or {}),
     }
     result = CompactionResult(
@@ -658,7 +660,7 @@ def _build_passthrough_compaction_result(
         compact_kind=compact_kind,
         boundary_marker=create_compact_boundary_message(compact_metadata),
         summary_messages=[],
-        messages_to_keep=list(messages),
+        messages_to_keep=(list(messages)),
         attachments=[],
         hook_results=[],
         compact_metadata=compact_metadata,
@@ -695,7 +697,7 @@ def _collect_compactable_tool_ids(messages: list[ConversationMessage]) -> list[s
     ]
 
 
-def microcompact_messages(
+async def microcompact_messages(
     messages: list[ConversationMessage],
     *,
     keep_recent: int = DEFAULT_KEEP_RECENT,
@@ -717,9 +719,9 @@ def microcompact_messages(
     ]
     if not eligible:
         return result, 0
-    snapshot_path = snapshot_path or str(save_context_snapshot(messages))
+    snapshot_path = snapshot_path or str((await save_context_snapshot(messages)))
     for i, j, block in eligible:
-        artifact = save_tool_content(block.content)
+        artifact = await save_tool_content(block.content)
         sources = block.result_metadata.get("research_sources", [])
         reference = (
             f"[Archived tool result] tool_use_id={block.tool_use_id}; is_error={block.is_error}\n"
@@ -739,7 +741,7 @@ def microcompact_messages(
                 },
             }
         )
-    return result, max(0, estimate_message_tokens(messages) - estimate_message_tokens(result))
+    return result, max(0, (estimate_message_tokens(messages)) - (estimate_message_tokens(result)))
 
 
 # ---------------------------------------------------------------------------
@@ -878,8 +880,9 @@ async def compact_conversation(
     tools: list[dict[str, Any]] | None = None,
     auto_compact_threshold_tokens: int | None = None,
     snapshot_path: str | None = None,
-    runtime_context_provider: Callable[[], str | None] | None = None,
-    runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None,
+    runtime_context_provider: Callable[[], str | None | Awaitable[str | None]] | None = None,
+    runtime_snapshot_provider: Callable[[], ContextSnapshot | Awaitable[ContextSnapshot]]
+    | None = None,
     context_components: ContextComponentsSettings | None = None,
     target_input_tokens: int | None = None,
 ) -> CompactionResult:
@@ -908,7 +911,7 @@ async def compact_conversation(
             metadata={"reason": "no completed history available"},
         )
     snapshot_path = snapshot_path or str(
-        save_context_snapshot(original, model=model, metadata=carryover_metadata)
+        (await save_context_snapshot(original, model=model, metadata=carryover_metadata))
     )
     metadata = {
         "trigger": trigger,
@@ -981,7 +984,7 @@ async def compact_conversation(
         ),
     )
     # Never discard older rounds to make a summarizer request fit.
-    request_budget(summary_request).require_fit()
+    (request_budget(summary_request)).require_fit()
 
     async def collect() -> str:
         stream = api_client.stream_message(summary_request)
@@ -1004,7 +1007,7 @@ async def compact_conversation(
 
     for attempt in range(MAX_COMPACT_STREAMING_RETRIES + 1):
         try:
-            summary = await asyncio.wait_for(collect(), COMPACT_TIMEOUT_SECONDS)
+            summary = await asyncio.wait_for((collect()), COMPACT_TIMEOUT_SECONDS)
             break
         except Exception as exc:
             if (
@@ -1020,7 +1023,7 @@ async def compact_conversation(
                 attempt=attempt + 1,
                 message=str(exc),
             )
-    _validate_summary_ids(summary, original, carryover_metadata)
+    (await _validate_summary_ids(summary, original, carryover_metadata))
     hook_attachments = []
     if hook_executor is not None:
         hook = await hook_executor.execute(
@@ -1045,21 +1048,25 @@ async def compact_conversation(
         boundary_marker=create_compact_boundary_message(metadata),
         summary_messages=[
             ConversationMessage.from_user_text(
-                build_compact_summary_message(
-                    summary, suppress_follow_up=suppress_follow_up, recent_preserved=bool(newer)
+                (
+                    build_compact_summary_message(
+                        summary, suppress_follow_up=suppress_follow_up, recent_preserved=bool(newer)
+                    )
                 ),
                 context_origin="compaction",
             )
         ],
         messages_to_keep=newer,
-        attachments=_build_compact_attachments(older, metadata=carryover_metadata, model=model),
+        attachments=(
+            await _build_compact_attachments(older, metadata=carryover_metadata, model=model)
+        ),
         hook_results=hook_attachments,
         compact_metadata=metadata,
     )
     candidate = build_post_compact_messages(result)
-    _refresh_runtime(candidate, runtime_context_provider, runtime_snapshot_provider)
+    (await _refresh_runtime(candidate, runtime_context_provider, runtime_snapshot_provider))
     # Keep any refreshed runtime item in the exact candidate we validate and return.
-    result.runtime_messages = candidate[len(build_post_compact_messages(result)) :]
+    result.runtime_messages = candidate[len((build_post_compact_messages(result))) :]
     candidate = build_post_compact_messages(result)
     _validate_tool_pairs(candidate)
     after = _conversation_budget(
@@ -1178,13 +1185,13 @@ def _validate_tool_pairs(messages: list[ConversationMessage]) -> None:
         )
 
 
-def _validate_summary_ids(
+async def _validate_summary_ids(
     summary: str, messages: list[ConversationMessage], metadata: ExecutionMetadata | None
 ) -> None:
     pattern = r"\bev_[A-Za-z0-9_]+\b"
     store = (metadata or {}).get("research_store")
     if store is not None:
-        known = set(store.load().evidence_pool)
+        known = set((await store.load()).evidence_pool)
     else:
         known = set(re.findall(pattern, "\n".join(m.model_dump_json() for m in messages)))
     references = set(re.findall(pattern, summary))
@@ -1193,16 +1200,21 @@ def _validate_summary_ids(
         raise ContextBudgetError("摘要包含无效证据 ID；原始内容已保留")
 
 
-def _refresh_runtime(
+async def _refresh_runtime(
     messages: list[ConversationMessage],
-    provider: Callable[[], str | None] | None,
-    snapshot_provider: Callable[[], ContextSnapshot] | None = None,
+    provider: Callable[[], str | None | Awaitable[str | None]] | None,
+    snapshot_provider: Callable[[], ContextSnapshot | Awaitable[ContextSnapshot]] | None = None,
 ) -> None:
     if snapshot_provider is not None:
-        messages[:] = refresh_runtime_messages(messages, snapshot_provider())
+        snapshot = snapshot_provider()
+        if inspect.isawaitable(snapshot):
+            snapshot = await snapshot
+        messages[:] = refresh_runtime_messages(messages, snapshot)
         return
     if provider is not None:
         current = provider()
+        if inspect.isawaitable(current):
+            current = await current
         previous = next((m.runtime_context for m in reversed(messages) if m.runtime_context), None)
         if current and current != previous:
             messages.append(
@@ -1227,9 +1239,10 @@ async def auto_compact_if_needed(
     auto_compact_threshold_tokens: int | None = None,
     max_tokens: int = 4096,
     tools: list[dict[str, Any]] | None = None,
-    runtime_context_provider: Callable[[], str | None] | None = None,
+    runtime_context_provider: Callable[[], str | None | Awaitable[str | None]] | None = None,
     history_target_tokens: int | None = None,
-    runtime_snapshot_provider: Callable[[], ContextSnapshot] | None = None,
+    runtime_snapshot_provider: Callable[[], ContextSnapshot | Awaitable[ContextSnapshot]]
+    | None = None,
     context_components: ContextComponentsSettings | None = None,
     current_user_message_id: str | None = None,
 ) -> tuple[list[ConversationMessage], bool]:
@@ -1281,7 +1294,9 @@ async def auto_compact_if_needed(
     )
     snapshot = None
     try:
-        snapshot = str(save_context_snapshot(messages, model=model, metadata=carryover_metadata))
+        snapshot = str(
+            (await save_context_snapshot(messages, model=model, metadata=carryover_metadata))
+        )
         _record_compact_checkpoint(
             carryover_metadata,
             checkpoint="compact_snapshot_saved",
@@ -1290,8 +1305,8 @@ async def auto_compact_if_needed(
             token_count=before.input_tokens,
             details={"snapshot_path": snapshot},
         )
-        candidate, saved = microcompact_messages(messages, snapshot_path=snapshot)
-        _refresh_runtime(candidate, runtime_context_provider, runtime_snapshot_provider)
+        candidate, saved = await microcompact_messages(messages, snapshot_path=snapshot)
+        (await _refresh_runtime(candidate, runtime_context_provider, runtime_snapshot_provider))
         after = _conversation_budget(candidate, **kwargs)
         _record_compact_checkpoint(
             carryover_metadata,
@@ -1402,7 +1417,7 @@ def compact_messages(
 ) -> list[ConversationMessage]:
     """Replace older conversation history with a synthetic summary (legacy)."""
     if len(messages) <= preserve_recent:
-        return sanitize_conversation_messages(list(messages))
+        return sanitize_conversation_messages((list(messages)))
     older, newer = _split_preserving_tool_pairs(messages, preserve_recent=preserve_recent)
     summary = summarize_messages(older)
     if not summary:

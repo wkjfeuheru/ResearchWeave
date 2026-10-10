@@ -1,7 +1,7 @@
 """Lifecycle coordination around the existing hand-written tool loop."""
 
 from __future__ import annotations
-from typing import Iterator
+from typing import AsyncIterator
 from researchx.state.store import ResearchStore
 from researchx.state.models import ResearchProject, ResearchObjective
 from researchx.permissions.checker import PermissionChecker
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 import json
 import hashlib
 import re
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,7 +21,7 @@ from researchx.state.completion import CompletionPolicy, ResearchContext
 from researchx.state.errors import ResearchError
 from researchx.state.models import CompletionResult, PlanPatch, PlanProposal
 from researchx.state.repository import ResearchRepository
-from researchx.storage.file_lock import exclusive_file_lock
+from researchx.storage.file_lock import exclusive_file_lock, async_exclusive_file_lock
 from researchx.storage.filesystem import atomic_write_text
 
 PLANNING_TOOLS = {"planner", "replanner"}
@@ -94,12 +94,12 @@ class ResearchAgentRuntime:
             raise ResearchError("Invalid or symlinked research workspace binding")
         return path
 
-    def resolve_workspace(self, project_id: str) -> Path:
+    async def resolve_workspace(self, project_id: str) -> Path:
         """Resolve only the current persisted project, never a model-supplied directory."""
-        project = self.repository.load_project(project_id).project
+        project = (await self.repository.load_project(project_id)).project
         assert project is not None
         if project.workspace_path is None:
-            return self.initialize_workspace(project_id)
+            return await self.initialize_workspace(project_id)
         path = self._workspace_path(project)
         if not path.is_dir():
             raise ResearchError(f"Research workspace is missing or inaccessible: {path}")
@@ -128,8 +128,8 @@ class ResearchAgentRuntime:
             raise ResearchError("Hard-linked research files are forbidden")
         return path
 
-    def resolve_tool_path(self, project_id: str, candidate: str | Path) -> Path:
-        return self._check_path(self.resolve_workspace(project_id), candidate)
+    async def resolve_tool_path(self, project_id: str, candidate: str | Path) -> Path:
+        return self._check_path((await self.resolve_workspace(project_id)), candidate)
 
     def _initialize_project_workspace(
         self, project: ResearchProject, objective: ResearchObjective
@@ -158,38 +158,44 @@ class ResearchAgentRuntime:
             project.workspace_path = str(path)
         return path
 
-    def initialize_workspace(self, project_id: str) -> Path:
+    async def initialize_workspace(self, project_id: str) -> Path:
         """Also lazily binds pre-workspace checkpoints without changing their task state."""
-        with exclusive_file_lock(self.store.lock):
-            memory = self.store._load()
+        async with self.store.transaction():
+            memory = await self.store._load()
             project = self.repository._project(memory, project_id)
             was_bound = project.workspace_path is not None
             path = self._initialize_project_workspace(
                 project, memory.objectives[project.objective_revision]
             )
             if not was_bound:
-                self.store._save(
-                    memory,
-                    "workspace_bound",
-                    {"project_id": project_id, "workspace_path": str(path)},
+                (
+                    await self.store._save(
+                        memory,
+                        "workspace_bound",
+                        {"project_id": project_id, "workspace_path": str(path)},
+                    )
                 )
             return path
 
-    @contextmanager
-    def workspace_file_lock(self, project_id: str, candidate: str | Path) -> Iterator[Path]:
-        path = self.resolve_tool_path(project_id, candidate)
+    @asynccontextmanager
+    async def workspace_file_lock(
+        self, project_id: str, candidate: str | Path
+    ) -> AsyncIterator[Path]:
+        path = await self.resolve_tool_path(project_id, candidate)
         key = hashlib.sha256(str(path).encode()).hexdigest()
-        with exclusive_file_lock(self.store.directory / "workspace_locks" / f"{key}.lock"):
-            # Revalidate after acquiring the lock; no await belongs inside this critical section.
-            yield self.resolve_tool_path(project_id, candidate)
+        async with async_exclusive_file_lock(
+            self.store.directory / "workspace_locks" / f"{key}.lock"
+        ):
+            # Revalidate the DB binding after acquiring the cancellable file lock.
+            yield (await self.resolve_tool_path(project_id, candidate))
 
-    def load_workspace_memory(self, project_id: str, *, max_chars: int | None = None) -> str:
+    async def load_workspace_memory(self, project_id: str, *, max_chars: int | None = None) -> str:
         try:
-            with self.workspace_file_lock(project_id, "MEMORY.md") as path:
+            async with self.workspace_file_lock(project_id, "MEMORY.md") as path:
                 if not path.is_file():
                     raise ResearchError(f"Workspace memory is missing: {path}")
                 with path.open(encoding="utf-8", errors="strict") as stream:
-                    content = stream.read() if max_chars is None else stream.read(max_chars)
+                    content = (stream.read()) if max_chars is None else (stream.read(max_chars))
                 if "\0" in content:
                     raise ResearchError("Workspace memory contains binary data")
                 return content
@@ -200,11 +206,11 @@ class ResearchAgentRuntime:
     def strip_workspace_context(text: str) -> str:
         return re.sub(r"\n*<workspace_memory>.*?</workspace_memory>", "", text or "", flags=re.S)
 
-    def build_research_context(self, project_id: str) -> str:
-        memory = self.repository.load_project(project_id)
-        workspace = self.resolve_workspace(project_id)
+    async def build_research_context(self, project_id: str) -> str:
+        memory = await self.repository.load_project(project_id)
+        workspace = await self.resolve_workspace(project_id)
         limit = self.memory_auto_inject_max_chars
-        content = self.load_workspace_memory(project_id, max_chars=limit + 1)
+        content = await self.load_workspace_memory(project_id, max_chars=limit + 1)
         packet = {
             "project_id": project_id,
             "current_task_id": memory.research_state.current_task_id,
@@ -227,7 +233,7 @@ class ResearchAgentRuntime:
             "文件路径均相对于当前项目工作区。\n" + payload + "\n</workspace_memory>"
         )
 
-    def start_project(
+    async def start_project(
         self,
         objective: ResearchObjective,
         user_source_ids: list[str],
@@ -235,7 +241,7 @@ class ResearchAgentRuntime:
         *,
         operation_id: str | None = None,
     ) -> dict[str, object]:
-        return self.repository.start(
+        return await self.repository.start(
             objective,
             user_source_ids,
             expected_revision,
@@ -243,7 +249,7 @@ class ResearchAgentRuntime:
             initialize_project=self._initialize_project_workspace,
         )
 
-    def resume_project(
+    async def resume_project(
         self,
         project_id: str,
         *,
@@ -251,9 +257,9 @@ class ResearchAgentRuntime:
         operation_id: str | None = None,
     ) -> dict[str, object]:
         # Restore the persisted binding even when the host's default root has changed.
-        self.resolve_workspace(project_id)
-        self.load_workspace_memory(project_id)
-        return self.repository.resume(
+        (await self.resolve_workspace(project_id))
+        (await self.load_workspace_memory(project_id))
+        return await self.repository.resume(
             project_id, expected_revision=expected_revision, operation_id=operation_id
         )
 
@@ -264,28 +270,30 @@ class ResearchAgentRuntime:
         user_source_ids: list[str] | None = None,
         expected_revision: int | None = None,
     ) -> str:
-        memory = self.store.load()
+        memory = await self.store.load()
         if user_source_ids is None:
             user_source_ids = [
                 key for key, source in memory.sources.items() if source.kind == "user"
             ][-1:]
-        self.start_project(
-            objective,
-            user_source_ids,
-            memory.revision if expected_revision is None else expected_revision,
+        (
+            await self.start_project(
+                objective,
+                user_source_ids,
+                memory.revision if expected_revision is None else expected_revision,
+            )
         )
         return objective.project_id
 
     async def resume(self, project_id: str) -> dict[str, object]:
-        return self.resume_project(project_id)
+        return await self.resume_project(project_id)
 
     async def interrupt(self, project_id: str, reason: str) -> dict[str, object]:
-        self.repository.load_project(project_id)
-        return self.repository.suspend(reason)
+        (await self.repository.load_project(project_id))
+        return await self.repository.suspend(reason)
 
     async def submit_feedback(self, project_id: str, feedback: str) -> dict[str, object]:
-        memory = self.repository.load_project(project_id)
-        return self.repository.submit_feedback(project_id, feedback, memory.revision)
+        memory = await self.repository.load_project(project_id)
+        return await self.repository.submit_feedback(project_id, feedback, memory.revision)
 
     async def request_task_completion(
         self,
@@ -295,9 +303,9 @@ class ResearchAgentRuntime:
         expected_revision: int | None = None,
         task_revision: int | None = None,
     ) -> CompletionResult:
-        memory = self.repository.load_project(project_id)
+        memory = await self.repository.load_project(project_id)
         task = next(item for item in self.repository._plan(memory).tasks if item.id == task_id)
-        result = self.repository.request_task_completion(
+        result = await self.repository.request_task_completion(
             project_id,
             task_id,
             memory.revision if expected_revision is None else expected_revision,
@@ -308,14 +316,14 @@ class ResearchAgentRuntime:
     async def finalize(
         self, project_id: str, *, expected_revision: int | None = None
     ) -> CompletionResult:
-        memory = self.repository.load_project(project_id)
-        result = self.repository.finalize(
+        memory = await self.repository.load_project(project_id)
+        result = await self.repository.finalize(
             project_id, memory.revision if expected_revision is None else expected_revision
         )
         return CompletionResult.model_validate(result)
 
-    def guard_tool(self, tool_name: str, tool_input: dict[str, object]) -> str | None:
-        memory = self.store.load()
+    async def guard_tool(self, tool_name: str, tool_input: dict[str, object]) -> str | None:
+        memory = await self.store.load()
         project = memory.project
         if project is None:
             return None
@@ -363,7 +371,7 @@ class ResearchAgentRuntime:
         self, tool_name: str, result: ToolResult, baseline: dict[str, int]
     ) -> ToolResult:
         if result.is_error:
-            project = self.store.load().project
+            project = (await self.store.load()).project
             tokens = result.metadata.get("planning_tokens", 0)
             if (
                 project
@@ -371,9 +379,9 @@ class ResearchAgentRuntime:
                 and project.objective_revision == baseline["objective_revision"]
                 and project.plan_revision == baseline["plan_revision"]
             ):
-                self.repository.suspend(result.output, tokens=tokens)
+                (await self.repository.suspend(result.output, tokens=tokens))
             else:
-                self.repository.record_planning_rejection(result.output, tokens)
+                (await self.repository.record_planning_rejection(result.output, tokens))
             return result
         payload = result.metadata.get("plan_proposal" if tool_name == "planner" else "plan_patch")
         if payload is None:
@@ -387,7 +395,7 @@ class ResearchAgentRuntime:
                 decision = self.permission_checker.evaluate(tool_name, is_read_only=True)
                 if not decision.allowed:
                     raise ResearchError("Planning commit permission was revoked")
-            memory = self.store.load()
+            memory = await self.store.load()
             project = memory.project
             if (
                 not project
@@ -396,14 +404,14 @@ class ResearchAgentRuntime:
             ):
                 raise ResearchError("Planning result belongs to a revoked objective or execution")
             if tool_name == "planner":
-                receipt = self.repository.commit_plan(
+                receipt = await self.repository.commit_plan(
                     project.id,
                     PlanProposal.model_validate(payload),
                     baseline["revision"],
                     tokens=tokens,
                 )
             else:
-                receipt = self.repository.apply_plan_patch(
+                receipt = await self.repository.apply_plan_patch(
                     project.id,
                     PlanPatch.model_validate(payload),
                     baseline["revision"],
@@ -416,21 +424,21 @@ class ResearchAgentRuntime:
                 metadata={
                     **result.metadata,
                     "commit": receipt,
-                    "research_progress": self.store.progress(),
+                    "research_progress": (await self.store.progress()),
                 },
             )
         except (ResearchError, ValueError) as exc:
             # CAS failure keeps the newer plan/objective intact and makes the failure reviewable.
-            current = self.store.load().project
+            current = (await self.store.load()).project
             if (
                 current
                 and current.execution_epoch == baseline["epoch"]
                 and current.plan_revision == baseline["plan_revision"]
                 and current.objective_revision == baseline["objective_revision"]
             ):
-                self.repository.suspend(str(exc), tokens=tokens)
+                (await self.repository.suspend(str(exc), tokens=tokens))
             else:
-                self.repository.record_planning_rejection(str(exc), tokens)
+                (await self.repository.record_planning_rejection(str(exc), tokens))
             return replace(
                 result,
                 output=json.dumps({"committed": False, "error": str(exc)}, ensure_ascii=False),
@@ -439,7 +447,7 @@ class ResearchAgentRuntime:
             )
 
     async def evaluate_stop(self) -> CompletionResult | None:
-        memory = self.store.load()
+        memory = await self.store.load()
         if memory.project is None or memory.project.status == "completed":
             return None
         plan = memory.plans.get(memory.research_state.current_plan_id or "")

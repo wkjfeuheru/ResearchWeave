@@ -9,7 +9,7 @@ if not __package__:
     __package__ = script_package(__file__)
 
 from collections import defaultdict
-from researchx.research.values import amount_value
+from researchx.contracts import amount_value
 from .models import DigestResult
 from researchx.plugins.research_script_support import processing_main
 

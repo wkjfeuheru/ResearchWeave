@@ -220,7 +220,7 @@ async def test_history_snapshot_stable_and_restore(tmp_path):
         [ConversationMessage.from_user_text("second")]
     )
     restored = make_engine(tmp_path, RecordingClient())
-    restored.load_messages(
+    await restored.load_messages(
         [ConversationMessage.model_validate(m.model_dump()) for m in engine.messages]
     )
     restored.restore_usage(engine.total_usage.model_dump())
@@ -250,9 +250,9 @@ async def test_tool_pair_then_mode_update_and_compaction(tmp_path, monkeypatch):
     assert second[-1].text == ""
     assert client.requests[0].system_prompt == client.requests[1].system_prompt
     latest = second[0].runtime_context
-    engine.load_messages(
+    (await engine.load_messages(
         compact_messages(engine.messages, preserve_recent=1), preserve_runtime_context=True
-    )
+    ))
     assert any(m.runtime_context == latest for m in engine.messages)
     _ = [event async for event in engine.continue_pending()]
     assert any(m.runtime_context == latest for m in client.requests[-1].messages)
@@ -324,9 +324,9 @@ def test_mcp_schema_property_order_does_not_change_wire():
     assert json.dumps(registries[0].to_api_schema()) == json.dumps(registries[1].to_api_schema())
 
 
-def test_pending_results_remain_resumable_after_hidden_state_update(tmp_path):
+async def test_pending_results_remain_resumable_after_hidden_state_update(tmp_path):
     engine = make_engine(tmp_path, RecordingClient())
-    engine.load_messages(
+    (await engine.load_messages(
         [
             ConversationMessage(
                 role="assistant", content=[ToolUseBlock(id="read", name="glob", input={})]
@@ -336,11 +336,11 @@ def test_pending_results_remain_resumable_after_hidden_state_update(tmp_path):
             ),
             ConversationMessage(role="user", runtime_context="new state"),
         ]
-    )
+    ))
     assert engine.has_pending_continuation()
 
 
-def test_persisted_context_not_in_transcript_or_title(tmp_path, monkeypatch):
+async def test_persisted_context_not_in_transcript_or_title(tmp_path, monkeypatch):
     from researchx.services.sessions.storage import (
         save_session_snapshot,
         load_session_snapshot,
@@ -351,14 +351,14 @@ def test_persisted_context_not_in_transcript_or_title(tmp_path, monkeypatch):
     message = ConversationMessage(
         role="user", content=[TextBlock(text="Research")], runtime_context="PRIVATE_REFERENCE"
     )
-    save_session_snapshot(
+    (await save_session_snapshot(
         cwd=tmp_path,
         model="claude-sonnet-4-6",
         system_prompt="stable",
         messages=[message],
         usage=UsageSnapshot(input_tokens=10),
-    )
-    saved = load_session_snapshot(tmp_path)
+    ))
+    saved = (await load_session_snapshot(tmp_path))
     assert saved["summary"] == "Research"
     assert saved["messages"][0]["runtime_context"] == "PRIVATE_REFERENCE"
     transcript = export_session_markdown(cwd=tmp_path, messages=[message]).read_text()

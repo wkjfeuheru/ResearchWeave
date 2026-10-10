@@ -42,9 +42,18 @@ from researchx.state.models import (
     now,
 )
 from researchx.services.context.token_estimation import estimate_tokens
-from researchx.storage.file_lock import exclusive_file_lock
-from researchx.storage.filesystem import atomic_write_text, private_directory, private_file
-from researchx.research.sites import source_identity
+from researchx.storage.filesystem import private_directory
+from researchx.storage.database import current_database
+from typing import TYPE_CHECKING
+from contextlib import AbstractAsyncContextManager
+from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from researchx.storage.research_records import ResearchRecords
+from researchx.storage.content import ContentReference, ContentStore, content_store
+from researchx.storage.schema import content_objects
+from sqlalchemy import select
+from researchx.config.sites import source_identity
 from researchx.state.conflicts import ConflictStoreMixin
 from researchx.state.errors import ResearchError
 
@@ -58,35 +67,107 @@ class ResearchStore(ConflictStoreMixin):
             raise ResearchError("无效的研究会话 ID")
         digest = hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:16]
         self.session_id = session_id
+        self.cwd = str(Path(cwd).resolve())
+        self.workspace_id = digest
         self.directory = (root or get_data_dir() / "research" / digest) / session_id
-        self.path = self.directory / "state.json"
-        self.lock = self.directory / ".lock"
+        self.lock = self.directory / ".content.lock"
         private_directory(self.directory)
-        private_file(self.path)
 
-    def _load(self) -> ResearchMemory:
-        if not self.path.exists():
-            return ResearchMemory(session_id=self.session_id)
+    @property
+    def records(self) -> ResearchRecords:
+        from researchx.storage.research_records import ResearchRecords
+
+        return ResearchRecords(current_database(), self.workspace_id, self.session_id, self.cwd)
+
+    def transaction(self) -> AbstractAsyncContextManager[AsyncSession]:
+        return self.records.transaction()
+
+    @property
+    def content(self) -> ContentStore:
+        return content_store()
+
+    async def _load(self) -> ResearchMemory:
         try:
-            memory = ResearchMemory.model_validate_json(self.path.read_text(encoding="utf-8"))
-            if memory.session_id != self.session_id:
-                raise ValueError("session mismatch")
+            memory = await self.records.load(current_database().active_session())
             self._validate(memory)
+            await self._validate_content(memory)
             return memory
         except (ValueError, OSError, KeyError) as exc:
-            raise ResearchError("研究状态损坏或资料快照缺失；原文件已保留，请修复后继续") from exc
+            raise ResearchError("研究状态损坏或资料快照缺失；数据已保留，请修复后继续") from exc
 
-    def load(self) -> ResearchMemory:
-        with exclusive_file_lock(self.lock):
-            return self._load()
+    async def load(self) -> ResearchMemory:
+        # The relational view is loaded in one MVCC statement. Mutations still use
+        # records.transaction() and its exclusive session lock.
+        async with current_database().transaction():
+            return await self._load()
 
-    def _save(self, memory: ResearchMemory, action: str, data: dict[str, object]) -> None:
-        self._validate(memory)
+    async def _save(self, memory: ResearchMemory, action: str, data: dict[str, object]) -> None:
+        previous_revision = memory.revision
+        await self._validate_content(memory)
         memory.revision += 1
         memory.history.append(
             {"revision": memory.revision, "action": action, "data": data, "at": now()}
         )
-        atomic_write_text(self.path, memory.model_dump_json(indent=2) + "\n", mode=0o600)
+        await self.records.save(
+            current_database().active_session(),
+            memory,
+            self._validate,
+            expected_revision=previous_revision,
+        )
+
+    async def _content_reference(self, digest: str) -> ContentReference:
+        async with current_database().transaction() as db:
+            row = (
+                (
+                    await db.execute(
+                        select(content_objects).where(
+                            content_objects.c.workspace_id == self.workspace_id,
+                            content_objects.c.content_hash == digest,
+                        )
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise ResearchError("资料快照引用缺失")
+            return ContentReference(**dict(row))
+
+    async def _validate_content(self, memory: ResearchMemory) -> None:
+        digests = {item.content_hash for item in memory.sources.values()} | {
+            item.content_hash for item in memory.artifacts.values()
+        }
+        if not digests:
+            return
+        # Validate every reference, with one scoped SQL query instead of N network round trips.
+        async with current_database().transaction() as db:
+            rows = (
+                (
+                    await db.execute(
+                        select(content_objects).where(
+                            content_objects.c.workspace_id == self.workspace_id,
+                            content_objects.c.content_hash.in_(digests),
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        if {row["content_hash"] for row in rows} != digests:
+            raise ResearchError("资料快照引用缺失")
+        if not await self.content.exists_many([ContentReference(**dict(row)) for row in rows]):
+            raise ResearchError("资料快照缺失；数据已保留")
+
+    async def write_snapshot(self, content: str) -> tuple[str, str]:
+        try:
+            reference = await self.content.put(
+                self.workspace_id, content.encode(), media_type="text/plain"
+            )
+        except (ValueError, OSError) as exc:
+            raise ResearchError("资料快照校验失败；原内容已保留") from exc
+        async with self.transaction() as db:
+            await self.records.register_content(db, self.content, [reference])
+        return reference.content_hash, f"content/{reference.content_hash}.txt"
 
     @staticmethod
     def _require(ids: list[str], records: Mapping[str, object], label: str) -> None:
@@ -140,8 +221,6 @@ class ResearchStore(ConflictStoreMixin):
                 r"[a-f0-9]{64}", source.content_hash
             ):
                 raise ResearchError("Invalid snapshot reference")
-            if not (self.directory / source.snapshot).is_file():
-                raise ResearchError("Missing source snapshot")
         for context in contexts.values():
             self._require(context.user_source_ids, memory.sources, "user source")
             if any(memory.sources[key].kind != "user" for key in context.user_source_ids):
@@ -309,10 +388,8 @@ class ResearchStore(ConflictStoreMixin):
             ):
                 raise ResearchError("Project plan revision mismatch")
             for artifact in memory.artifacts.values():
-                if (
-                    artifact.snapshot != f"content/{artifact.content_hash}.txt"
-                    or not re.fullmatch(r"[a-f0-9]{64}", artifact.content_hash)
-                    or not (self.directory / artifact.snapshot).is_file()
+                if artifact.snapshot != f"content/{artifact.content_hash}.txt" or not re.fullmatch(
+                    r"[a-f0-9]{64}", artifact.content_hash
                 ):
                     raise ResearchError("Invalid artifact snapshot")
                 self._require(
@@ -359,7 +436,7 @@ class ResearchStore(ConflictStoreMixin):
             locator = re.sub(r":\d+(?:-\d+)?$", "", locator)
         return f"{source.kind}:{locator}"
 
-    def _task_has_work(self, memory: ResearchMemory, task_id: str) -> bool:
+    async def _task_has_work(self, memory: ResearchMemory, task_id: str) -> bool:
         recorded = (
             any(
                 source.task_id == task_id and not source.is_error
@@ -373,19 +450,24 @@ class ResearchStore(ConflictStoreMixin):
         )
         if recorded:
             return True
-        for path in (self.directory / "files" / "artifacts").glob("*/manifest.json"):
-            try:
-                artifact = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if artifact.get("task_id") == task_id and artifact.get("status") not in {
-                "failed",
-                "error",
-            }:
+        from researchx.storage.schema import file_records
+
+        async with self.transaction() as db:
+            rows = await db.scalars(
+                select(file_records.c.payload).where(
+                    file_records.c.workspace_id == self.workspace_id,
+                    file_records.c.session_id == self.session_id,
+                    file_records.c.kind == "artifacts",
+                )
+            )
+            if any(
+                item.get("task_id") == task_id and item.get("status") not in {"failed", "error"}
+                for item in rows
+            ):
                 return True
         return False
 
-    def capture(
+    async def capture(
         self,
         *,
         origin_id: str,
@@ -401,20 +483,14 @@ class ResearchStore(ConflictStoreMixin):
         """Program-only provenance entrypoint; write immutable content before its reference."""
         source_id = "src_" + hashlib.sha256(f"{origin_id}:{index}".encode()).hexdigest()[:20]
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+        async with self.transaction():
+            memory = await self._load()
             if source_id in memory.sources:
                 if memory.sources[source_id].content_hash != content_hash:
                     raise ResearchError("Source origin ID already used for different content")
-                self.read_source(memory.sources[source_id])
+                (await self.read_source(memory.sources[source_id]))
                 return memory.sources[source_id]
-            snapshot = f"content/{content_hash}.txt"
-            path = self.directory / snapshot
-            if not path.exists():
-                private_directory(path.parent)
-                atomic_write_text(path, content, mode=0o600)
-            elif hashlib.sha256(path.read_bytes()).hexdigest() != content_hash:
-                raise ResearchError("资料快照校验失败；原文件已保留")
+            content_hash, snapshot = await self.write_snapshot(content)
             source = SourceRecord(
                 id=source_id,
                 plan_id=memory.research_state.current_plan_id,
@@ -431,21 +507,25 @@ class ResearchStore(ConflictStoreMixin):
                 is_error=is_error,
             )
             memory.sources[source.id] = source
-            self._save(memory, "capture_source", {"source_id": source.id})
+            (await self._save(memory, "capture_source", {"source_id": source.id}))
             return source
 
-    def read_source(self, source: SourceRecord) -> str:
-        content = (self.directory / source.snapshot).read_text(encoding="utf-8")
-        if hashlib.sha256(content.encode("utf-8")).hexdigest() != source.content_hash:
-            raise ResearchError("资料快照校验失败；原文件已保留")
-        return content
+    async def read_source(self, source: SourceRecord) -> str:
+        return await self.read_content(source.content_hash)
 
-    def apply(
+    async def read_content(self, digest: str) -> str:
+        try:
+            reference = await self._content_reference(digest)
+            return (await self.content.read(reference)).decode("utf-8")
+        except (OSError, ValueError) as exc:
+            raise ResearchError("资料快照校验失败；原内容已保留") from exc
+
+    async def apply(
         self, data: dict[str, Any], *, budget: int | None = None, model: str = ""
     ) -> dict[str, object]:
         operation = OPERATION_ADAPTER.validate_python(data)
         if isinstance(operation, ReadMemory):
-            memory = self.load()
+            memory = await self.load()
             if not operation.ids:
                 return self.view(memory)
             records: dict[str, Record] = {item.id: item for item in memory.task_context}
@@ -465,14 +545,14 @@ class ResearchStore(ConflictStoreMixin):
                 record = records[key]
                 item = record.model_dump(mode="json")
                 if isinstance(record, SourceRecord) and operation.include_content:
-                    item["content"] = self.read_source(record)
+                    item["content"] = await self.read_source(record)
                 record_results.append(item)
             return {"revision": memory.revision, "records": record_results}
         fingerprint = hashlib.sha256(
             json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+        async with self.transaction():
+            memory = await self._load()
             previous = memory.operations.get(operation.operation_id)
             if previous:
                 if previous["fingerprint"] != fingerprint:
@@ -482,18 +562,20 @@ class ResearchStore(ConflictStoreMixin):
                 raise ResearchError(
                     f"Revision conflict: expected {operation.expected_revision}, current {memory.revision}; read and retry with a new operation_id"
                 )
-            result = self._apply(memory, operation)
+            result = await self._apply(memory, operation)
             if budget is not None:
                 self._prompt(memory, budget, model=model)
-            progress = self.progress(memory)
+            progress = await self.progress(memory)
             progress["revision"] = memory.revision + 1
             receipt = {"revision": memory.revision + 1, **result, "progress": progress}
             memory.operations[operation.operation_id] = {
                 "fingerprint": fingerprint,
                 "receipt": receipt,
             }
-            self._save(
-                memory, operation.action, operation.model_dump(mode="json") | {"result": result}
+            (
+                await self._save(
+                    memory, operation.action, operation.model_dump(mode="json") | {"result": result}
+                )
             )
             return receipt
 
@@ -570,9 +652,11 @@ class ResearchStore(ConflictStoreMixin):
                 memory.research_state.replan_required = True
                 memory.project.status = "replanning"
                 ResearchRepository.revoke_executions(memory, "Evidence version superseded")
-        self._reopen_affected_conflicts(memory, affected)
+        (self._reopen_affected_conflicts(memory, affected))
 
-    def _apply(self, memory: ResearchMemory, operation: ResearchOperation) -> dict[str, object]:
+    async def _apply(
+        self, memory: ResearchMemory, operation: ResearchOperation
+    ) -> dict[str, object]:
         if memory.project is not None and isinstance(
             operation, (SetContext, CreatePlan, UpdateTask)
         ):
@@ -587,7 +671,7 @@ class ResearchStore(ConflictStoreMixin):
             raise ResearchError(
                 "Resume and plan the report project before research memory mutations"
             )
-        conflict_result = self._apply_conflict(memory, operation)
+        conflict_result = await self._apply_conflict(memory, operation)
         if conflict_result is not None:
             return conflict_result
         state = memory.research_state
@@ -658,7 +742,7 @@ class ResearchStore(ConflictStoreMixin):
                     raise ResearchError("Only the current task can be completed")
                 if not operation.completion_note.strip():
                     raise ResearchError("Completing a task requires a completion note")
-                if not self._task_has_work(memory, task.id):
+                if not (await self._task_has_work(memory, task.id)):
                     raise ResearchError(
                         "A task needs recorded source, evidence or reasoning before completion"
                     )
@@ -729,7 +813,7 @@ class ResearchStore(ConflictStoreMixin):
                     item.supersedes == evidence.supersedes for item in memory.evidence_pool.values()
                 ):
                     raise ResearchError("Revise the latest evidence version")
-                self._invalidate(memory, evidence.supersedes)
+                (self._invalidate(memory, evidence.supersedes))
             memory.evidence_pool[evidence.id] = evidence
             return {"evidence_id": evidence.id}
         if isinstance(operation, AddReasoning):
@@ -784,7 +868,7 @@ class ResearchStore(ConflictStoreMixin):
                 supporting_evidence_ids=operation.supporting_evidence_ids,
                 supersedes=original.id,
             )
-            self._invalidate(memory, original.id)
+            (self._invalidate(memory, original.id))
             memory.evidence_pool[checked.id] = checked
             return {"evidence_id": checked.id, "supersedes": original.id}
         if isinstance(operation, AddConclusion):
@@ -851,8 +935,8 @@ class ResearchStore(ConflictStoreMixin):
                 "Explicitly reuse archived evidence in the current plan before analyzing it"
             )
 
-    def progress(self, memory: ResearchMemory | None = None) -> dict[str, object]:
-        memory = memory or self.load()
+    async def progress(self, memory: ResearchMemory | None = None) -> dict[str, object]:
+        memory = memory or (await self.load())
         state = memory.research_state
         plan = memory.plans.get(state.current_plan_id or "")
         tasks = [task.model_dump(mode="json") for task in plan.tasks] if plan else []
@@ -885,9 +969,9 @@ class ResearchStore(ConflictStoreMixin):
             ],
         }
 
-    def verification_candidates(self, text: str) -> list[dict[str, Any]]:
+    async def verification_candidates(self, text: str) -> list[dict[str, Any]]:
         """Return cited current evidence that can advance without inventing new sources."""
-        memory = self.load()
+        memory = await self.load()
         replaced = {item.supersedes for item in memory.evidence_pool.values()}
         checked = [
             item
@@ -1008,15 +1092,15 @@ class ResearchStore(ConflictStoreMixin):
             ],
         }
 
-    def prompt(self, budget: int = 6000, *, model: str = "") -> str:
-        return self._prompt(self.load(), budget, model=model)
+    async def prompt(self, budget: int = 6000, *, model: str = "") -> str:
+        return self._prompt((await self.load()), budget, model=model)
 
-    def prompt_snapshot(
+    async def prompt_snapshot(
         self, budget: int = 6000, *, model: str = "", memory_budget: int | None = None
     ) -> ContextSnapshot:
         from researchx.services.context.sources import tagged_snapshot
 
-        text = self._prompt(self.load(), budget, model=model, memory_budget=memory_budget)
+        text = self._prompt((await self.load()), budget, model=model, memory_budget=memory_budget)
         return tagged_snapshot(text, "research_store")
 
     def _prompt(
@@ -1084,10 +1168,10 @@ class ResearchStore(ConflictStoreMixin):
                     cast(list[object], required[bucket]).pop()
         return render(required)
 
-    def interrupt(self, *, request_id: str, target_request_id: str, text: str) -> None:
+    async def interrupt(self, *, request_id: str, target_request_id: str, text: str) -> None:
         """Persist steering before cancellation. Replanning starts only after old work settles."""
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+        async with self.transaction():
+            memory = await self._load()
             existing = memory.pending_steers.get(request_id)
             data: PendingSteer = {
                 "target_request_id": target_request_id,
@@ -1102,12 +1186,12 @@ class ResearchStore(ConflictStoreMixin):
             if memory.project:
                 from researchx.state.repository import ResearchRepository
 
-                ResearchRepository.feedback_memory(memory, text)
-            self._save(memory, "accept_steer", {"request_id": request_id, **data})
+                (ResearchRepository.feedback_memory(memory, text))
+            (await self._save(memory, "accept_steer", {"request_id": request_id, **data}))
 
-    def require_replan(self, request_id: str) -> None:
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+    async def require_replan(self, request_id: str) -> None:
+        async with self.transaction():
+            memory = await self._load()
             if request_id not in memory.pending_steers:
                 raise ResearchError("Steering request was not persisted")
             if memory.pending_steers[request_id].get("ready"):
@@ -1118,24 +1202,24 @@ class ResearchStore(ConflictStoreMixin):
             else:
                 memory.project.status = "replanning" if memory.project.plan_revision else "planning"
             memory.pending_steers[request_id]["ready"] = True
-            self._save(memory, "require_replan", {"request_id": request_id})
+            (await self._save(memory, "require_replan", {"request_id": request_id}))
 
-    def recover_pending_steers(self) -> None:
+    async def recover_pending_steers(self) -> None:
         """Called only when the Web host has no live execution for this session."""
-        memory = self.load()
+        memory = await self.load()
         for request_id, item in memory.pending_steers.items():
             if not item.get("ready"):
-                self.require_replan(request_id)
+                (await self.require_replan(request_id))
 
-    def stopped(self) -> None:
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+    async def stopped(self) -> None:
+        async with self.transaction():
+            memory = await self._load()
             if memory.project:
                 from researchx.state.repository import ResearchRepository
 
                 if memory.project.status not in {"completed", "failed", "cancelled"}:
                     ResearchRepository.suspend_memory(memory, "执行已停止")
-                    self._save(memory, "project_stop", {})
+                    (await self._save(memory, "project_stop", {}))
                 return
             plan = memory.plans.get(memory.research_state.current_plan_id or "")
             if plan:
@@ -1146,11 +1230,11 @@ class ResearchStore(ConflictStoreMixin):
                         changed = True
                 if changed:
                     memory.research_state.current_task_id = None
-                    self._save(memory, "stop", {})
+                    (await self._save(memory, "stop", {}))
 
-    def invalid_citations(self, text: str) -> list[str]:
+    async def invalid_citations(self, text: str) -> list[str]:
         """Validate exact IDs before publishing; never infer an intended source."""
-        memory = self.load()
+        memory = await self.load()
         invalid = [
             match.group(1)
             for match in CITATION_PATTERN.finditer(text)
@@ -1160,9 +1244,9 @@ class ResearchStore(ConflictStoreMixin):
             invalid.extend(match.group(0) for match in re.finditer(r"\[(\d{1,3})\](?!\()", text))
         return list(dict.fromkeys(invalid))
 
-    def render_answer(self, text: str, answer_id: str) -> tuple[str, dict[str, object]]:
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+    async def render_answer(self, text: str, answer_id: str) -> tuple[str, dict[str, object]]:
+        async with self.transaction():
+            memory = await self._load()
             if answer_id in memory.answers:
                 answer = memory.answers[answer_id]
                 return answer["rendered"], dict(answer)
@@ -1252,11 +1336,15 @@ class ResearchStore(ConflictStoreMixin):
                 "created_at": now(),
             }
             memory.answers[answer_id] = answer
-            self._save(memory, "answer", {"answer_id": answer_id, "evidence_ids": list(cited)})
+            (
+                await self._save(
+                    memory, "answer", {"answer_id": answer_id, "evidence_ids": (list(cited))}
+                )
+            )
             return rendered, dict(answer)
 
-    def completion_warning(self) -> str | None:
-        memory = self.load()
+    async def completion_warning(self) -> str | None:
+        memory = await self.load()
         warnings = []
         if memory.project and memory.project.status != "completed":
             warnings.append("研报项目尚未通过完成验证，当前内容为阶段性结果。")

@@ -9,7 +9,7 @@ from tests.test_web.research_model import ResearchModel
 from tests.test_web.test_app import ORIGIN, add_model, add_session, collect, submit
 
 
-def test_research_progress_provenance_and_history_restore(workspace, monkeypatch):
+async def test_research_progress_provenance_and_history_restore(workspace, monkeypatch):
     client, app, _, _, cwd = workspace
     (cwd / "report.txt").write_text("报告：营业收入同比增长。", encoding="utf-8")
     sid = add_session(client, add_model(client))
@@ -57,7 +57,7 @@ def test_research_progress_provenance_and_history_restore(workspace, monkeypatch
     assert "[1]" not in text and "来源：" not in text and "report.txt" not in text
     assert "research_memory" not in json.dumps(response, ensure_ascii=False)
     store = ResearchStore(cwd, sid)
-    memory = store.load()
+    memory = (await store.load())
     assert len(memory.task_context) == 1
     assert len(memory.reasoning_chain) == len(memory.evidence_pool) == 2
     assert len(memory.conclusions) == 1
@@ -77,14 +77,14 @@ def test_research_progress_provenance_and_history_restore(workspace, monkeypatch
     tools = {tool["name"] for tool in models[0].requests[0].tools}
     assert "research_memory" in tools and "lsp" not in tools and "enter_worktree" not in tools
     other = add_session(client, response["profile_id"])
-    assert not ResearchStore(cwd, other).load().evidence_pool
+    assert not (await ResearchStore(cwd, other).load()).evidence_pool
     with sse_connect(client, sid, headers=ORIGIN) as socket:
         ready = socket.receive_json()
         assert ready["session"]["research_progress"]["completed"] == 2
         assert ready["session"]["messages"][-1]["text"] == text
 
 
-def test_steering_cancels_old_run_then_commits_new_plan(workspace, monkeypatch):
+async def test_steering_cancels_old_run_then_commits_new_plan(workspace, monkeypatch):
     client, app, _, _, cwd = workspace
     (cwd / "report.txt").write_text("报告：营业收入同比增长。", encoding="utf-8")
     sid = add_session(client, add_model(client))
@@ -121,7 +121,7 @@ def test_steering_cancels_old_run_then_commits_new_plan(workspace, monkeypatch):
         == "new"
     )
     assert not events[-1]["failed"]
-    memory = ResearchStore(cwd, sid).load()
+    memory = (await ResearchStore(cwd, sid).load())
     assert len(memory.plans) == 2
     old, new = list(memory.plans.values())
     assert old.archived and all(task.status == "cancelled" for task in old.tasks)
@@ -144,10 +144,10 @@ def test_steering_cancels_old_run_then_commits_new_plan(workspace, monkeypatch):
     assert rows[-1]["turn_id"] == "new" and rows[-1]["phase"] == "final"
 
 
-def test_old_web_history_does_not_become_verified_memory(workspace):
+async def test_old_web_history_does_not_become_verified_memory(workspace):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
-    record = app.state.workspace.store.load_by_id(cwd, sid)
+    record = (await app.state.workspace.store.load_by_id(cwd, sid))
     record["messages"] = [
         {"role": "assistant", "content": [{"type": "text", "text": "旧摘要：研究已完成"}]}
     ]
@@ -155,30 +155,33 @@ def test_old_web_history_does_not_become_verified_memory(workspace):
         {"id": "old-tool", "role": "tool_result", "text": "内部工具详情"},
         {"id": "old-reply", "role": "assistant", "text": "旧摘要：研究已完成"},
     ]
-    app.state.workspace.store.write(record)
+    (await app.state.workspace.store.write(record))
     response = client.get(f"/api/sessions/{sid}").json()
     assert len(response["messages"]) == 1
     assert response["messages"][0]["text"] == "旧摘要：研究已完成"
-    assert not ResearchStore(cwd, sid).load().conclusions
+    assert not (await ResearchStore(cwd, sid).load()).conclusions
 
 
-def test_corrupt_memory_returns_explicit_error_and_preserves_file(workspace):
+async def test_corrupt_memory_returns_explicit_error_and_preserves_records(workspace):
     client, _, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
     store = ResearchStore(cwd, sid)
-    store.capture(origin_id="source", content="report")
-    store.path.write_text("invalid research JSON")
+    (await store.capture(origin_id="source", content="report"))
+    from tests.postgres_helpers import raw_state, corrupt_state
+    damaged = await raw_state(store)
+    damaged["research_state"]["current_plan_id"] = "missing"
+    await corrupt_state(store, damaged)
     response = client.get(f"/api/sessions/{sid}")
     assert response.status_code == 409
     assert "损坏" in response.json()["detail"]
-    assert store.path.read_text() == "invalid research JSON"
+    assert await raw_state(store) == damaged
 
 
-def test_crash_after_steer_acceptance_restores_requirement_without_execution(workspace):
+async def test_crash_after_steer_acceptance_restores_requirement_without_execution(workspace):
     client, _, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
     store = ResearchStore(cwd, sid)
-    store.interrupt(request_id="accepted-change", target_request_id="old", text="只研究公司 B")
+    (await store.interrupt(request_id="accepted-change", target_request_id="old", text="只研究公司 B"))
     response = client.get(f"/api/sessions/{sid}").json()
     assert response["research_progress"]["replan_required"]
     assert response["messages"][-1] == {
@@ -186,6 +189,6 @@ def test_crash_after_steer_acceptance_restores_requirement_without_execution(wor
         "role": "user",
         "text": "只研究公司 B",
     }
-    assert not store.load().plans
+    assert not (await store.load()).plans
     again = client.get(f"/api/sessions/{sid}").json()
     assert again["messages"] == response["messages"]

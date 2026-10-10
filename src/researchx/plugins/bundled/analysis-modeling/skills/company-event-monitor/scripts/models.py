@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 from pydantic import Field, field_validator
-from researchx.research.contracts import Contract, Reference, Result
+from researchx.contracts import Contract, Reference, Result
 
 
 class Score(Contract):

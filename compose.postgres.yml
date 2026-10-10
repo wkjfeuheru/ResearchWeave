@@ -1,0 +1,19 @@
+# Development/test only. Bind PostgreSQL to loopback; never use these credentials in production.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: researchx
+      POSTGRES_PASSWORD: ${RESEARCHX_POSTGRES_PASSWORD:?Set a local development password}
+      POSTGRES_DB: researchx_dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - researchx_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U researchx -d researchx_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  researchx_postgres:

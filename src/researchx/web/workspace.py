@@ -27,23 +27,23 @@ class WebWorkspace:
         self.deleting: set[str] = set()
         self.file_operations: set[str] = set()
 
-    def record(self, session_id: str) -> WebSessionRecord:
+    async def record(self, session_id: str) -> WebSessionRecord:
         try:
-            if session_id in self.deleting or not self.store._path(session_id).is_file():
+            if session_id in self.deleting or (await self.store.records.load(session_id)) is None:
                 raise HTTPException(404, "会话不存在")
             connection = self.connections.get(session_id)
             idle = connection is None or not connection.busy
             if idle:
-                ResearchStore(self.cwd, session_id).recover_pending_steers()
-                ResearchStore(self.cwd, session_id).recover_investigations()
+                (await ResearchStore(self.cwd, session_id).recover_pending_steers())
+                (await ResearchStore(self.cwd, session_id).recover_investigations())
                 from researchx.state.repository import ResearchRepository
 
-                ResearchRepository(ResearchStore(self.cwd, session_id)).recover()
-            record = self.store.load_by_id(self.cwd, session_id)
+                (await ResearchRepository(ResearchStore(self.cwd, session_id)).recover())
+            record = await self.store.load_by_id(self.cwd, session_id)
             if record is not None:
                 # Acceptance is authoritative even if the process stopped
                 # before the connection could save its display projection.
-                pending = ResearchStore(self.cwd, session_id).load().pending_steers
+                pending = (await ResearchStore(self.cwd, session_id).load()).pending_steers
                 rows = list(session_view(record)["messages"])
                 recovered = False
                 if idle:
@@ -65,7 +65,7 @@ class WebWorkspace:
                 ]
                 if missing or recovered:
                     record["display_messages"] = rows + missing
-                    self.store.write(record)
+                    (await self.store.write(record))
         except ResearchError as exc:
             raise HTTPException(409, str(exc)) from exc
         except ValueError:

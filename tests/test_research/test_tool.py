@@ -71,14 +71,14 @@ def test_missing_source_id_is_not_repaired_by_its_note():
 @pytest.mark.asyncio
 async def test_engine_commits_empty_note_and_recovers_nonempty_note(tmp_path, caplog):
     store = ResearchStore(tmp_path, "a" * 12, root=tmp_path / "memory")
-    source = store.capture(origin_id="report", kind="file", content="报告披露营业收入")
+    source = (await store.capture(origin_id="report", kind="file", content="报告披露营业收入"))
 
     class Model:
         phase = 0
         rejected_revision = None
 
         async def stream_message(self, request):
-            memory = store.load()
+            memory = (await store.load())
             if self.phase == 2:
                 results = [
                     block
@@ -125,7 +125,7 @@ async def test_engine_commits_empty_note_and_recovers_nonempty_note(tmp_path, ca
     model = Model()
     agent = engine(tmp_path, store, ResearchMemoryTool(), model)
     _ = [event async for event in agent.submit_message("分析报告")]
-    memory = store.load()
+    memory = (await store.load())
     assert model.phase == 4
     assert len(memory.evidence_pool) == 2
     assert all(record.source_id == source.id for record in memory.evidence_pool.values())

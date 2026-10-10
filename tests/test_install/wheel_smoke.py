@@ -20,6 +20,13 @@ from researchx.web.app import create_app
 
 
 async def main():
+    from researchx.storage.database import database_lifespan
+
+    async with database_lifespan():
+        await installed_smoke()
+
+
+async def installed_smoke():
     import researchx
 
     modules = list(pkgutil.walk_packages(researchx.__path__, "researchx."))
@@ -68,7 +75,7 @@ async def main():
         for name in tool_modules
     )
     assert "researchx/workspace/session_files.py" in names
-    assert "researchx/research/documents.py" in names
+    assert "researchx/workspace/documents.py" in names
     assert not any("sample_plugins" in f for f in names)
     assert not any(f.startswith("researchx/skills/bundled/") for f in names)
     assert {e.name for e in dist.entry_points} == {"oh", "openh", "rx"}
@@ -79,6 +86,9 @@ async def main():
         assert load_skill_registry(cwd).get("skill-creator") is None
         fixtures = Path(__file__).parents[1] / "fixtures" / "research_skills"
         for plugin, (kind, script) in research_plugins.items():
+            package = (
+                "report-generation" if plugin == "deep-investment-report" else "analysis-modeling"
+            )
             skill = load_skill_registry(cwd).get(plugin)
             assert skill is not None and skill.metadata.status == "active"
             assert len(skill.metadata.content_hash) == 64, (
@@ -115,11 +125,43 @@ async def main():
             ]
             for command in commands:
                 executed = subprocess.run(
-                    command, cwd=cwd, capture_output=True, text=True, timeout=30
+                    command,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env={**os.environ, "RESEARCHX_ISOLATED_EXPORT": "1"},
                 )
                 assert executed.returncode == 0, executed.stderr
                 response = json.loads(executed.stdout)
-            assert response["status"] == "complete" and len(response["artifacts"]) == 4
+            assert response["status"] == "complete" and len(response["files"]) == 4
+            assert response["artifacts"] == []
+            exporter = importlib.import_module(
+                f"researchx.plugins.bundled.{package}.skills.{plugin}.scripts.export_report"
+            )
+            result_module = importlib.import_module(
+                f"researchx.plugins.bundled.{package}.skills.{plugin}.scripts.models"
+            )
+            result_type = getattr(
+                result_module,
+                {
+                    "financial": "FinancialResult",
+                    "monitor": "MonitorResult",
+                    "digest": "DigestResult",
+                    "deep": "DeepResult",
+                }[kind],
+            )
+            from researchx.workspace.exports import export_registered
+
+            registered = await export_registered(
+                result_type.model_validate_json(computed.read_text()),
+                cwd / kind,
+                ResearchStore(cwd, "a" * 12),
+                task_id="installed-script",
+                render_markdown=exporter.render_markdown,
+                sheets=exporter.SHEETS,
+            )
+            assert len(registered["artifacts"]) == 4
         for name in (
             "earnings-forecast",
             "financial-commentary",
@@ -156,14 +198,19 @@ async def main():
                 ],
             ):
                 executed = subprocess.run(
-                    command, cwd=cwd, capture_output=True, text=True, timeout=30
+                    command,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env={**os.environ, "RESEARCHX_ISOLATED_EXPORT": "1"},
                 )
                 assert executed.returncode == 0, executed.stderr
         parsed = subprocess.run(
             [
                 sys.executable,
                 "-m",
-                "researchx.research.documents",
+                "researchx.workspace.documents",
                 "--input",
                 str(fixtures / "annual-report.pdf"),
                 "--output-dir",
@@ -176,17 +223,20 @@ async def main():
         )
         assert parsed.returncode == 0, parsed.stderr
         store = ResearchStore(cwd, "a" * 12)
-        source = store.capture(origin_id="user", kind="user", content="wheel smoke")
-        assert store.read_source(source) == "wheel smoke"
+        source = await store.capture(origin_id="user", kind="user", content="wheel smoke")
+        assert (await store.read_source(source)) == "wheel smoke"
         assert "research_memory" in {t.name for t in create_research_tool_registry().list_tools()}
         result = await BashTool().execute(
             BashToolInput(command="printf WHEEL_SHELL_OK"), ToolExecutionContext(cwd=cwd)
         )
         assert not result.is_error and result.output == "WHEEL_SHELL_OK"
         app = create_app(cwd=cwd)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
-        ) as client:
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+            ) as client,
+        ):
             assert (await client.get("/api/health")).status_code == 200
             assert (await client.get("/")).status_code == 200
             item = await client.post(

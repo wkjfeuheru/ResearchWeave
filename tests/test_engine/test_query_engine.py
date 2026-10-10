@@ -447,7 +447,7 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
         system_prompt="system",
         auto_compact_threshold_tokens=45_000,
     )
-    engine.load_messages(
+    (await engine.load_messages(
         [
             ConversationMessage(role="user", content=[TextBlock(text=long_text)]),
             ConversationMessage(role="assistant", content=[TextBlock(text=long_text)]),
@@ -458,7 +458,7 @@ async def test_query_engine_emits_compact_progress_before_reply(tmp_path: Path, 
             ConversationMessage(role="user", content=[TextBlock(text=long_text)]),
             ConversationMessage(role="assistant", content=[TextBlock(text=long_text)]),
         ]
-    )
+    ))
 
     for message in engine._messages[3:]:
         message.content = [TextBlock(text="recent detail")]
@@ -494,7 +494,7 @@ async def test_query_engine_reactive_compacts_after_prompt_too_long(tmp_path: Pa
         model="claude-sonnet-4-6",
         system_prompt="system",
     )
-    engine.load_messages(
+    (await engine.load_messages(
         [
             ConversationMessage(role="user", content=[TextBlock(text="one " * 2000)]),
             ConversationMessage(role="assistant", content=[TextBlock(text="two")]),
@@ -505,7 +505,7 @@ async def test_query_engine_reactive_compacts_after_prompt_too_long(tmp_path: Pa
             ConversationMessage(role="user", content=[TextBlock(text="seven")]),
             ConversationMessage(role="assistant", content=[TextBlock(text="eight")]),
         ]
-    )
+    ))
 
     events = [event async for event in engine.submit_message("nine")]
 
@@ -1190,7 +1190,7 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
         system_prompt="system",
         auto_compact_threshold_tokens=5_000,
     )
-    engine.load_messages(
+    (await engine.load_messages(
         [
             ConversationMessage.from_user_text(f"historical user request {index}")
             if index % 2 == 0
@@ -1199,7 +1199,7 @@ async def test_query_engine_persists_compacted_tool_turn_history(tmp_path: Path,
             )
             for index in range(8)
         ]
-    )
+    ))
 
     engine._messages[0].content = [TextBlock(text="historical detail " * 2000)]
     events = [event async for event in engine.submit_message("new request after compact")]
@@ -1385,7 +1385,7 @@ async def test_query_engine_sanitizes_dangling_tool_use_before_new_prompt(tmp_pa
         model="claude-sonnet-4-6",
         system_prompt="system",
     )
-    engine.load_messages(
+    (await engine.load_messages(
         [
             ConversationMessage.from_user_text("previous request"),
             ConversationMessage(
@@ -1393,7 +1393,7 @@ async def test_query_engine_sanitizes_dangling_tool_use_before_new_prompt(tmp_pa
                 content=[ToolUseBlock(id="call_missing_output", name="ok_tool", input={})],
             ),
         ]
-    )
+    ))
 
     events = [event async for event in engine.submit_message("new prompt")]
 
@@ -1416,7 +1416,7 @@ async def test_query_engine_continue_pending_sanitizes_dangling_tool_use(tmp_pat
         model="claude-sonnet-4-6",
         system_prompt="system",
     )
-    engine.load_messages(
+    (await engine.load_messages(
         [
             ConversationMessage.from_user_text("previous request"),
             ConversationMessage(
@@ -1424,7 +1424,7 @@ async def test_query_engine_continue_pending_sanitizes_dangling_tool_use(tmp_pat
                 content=[ToolUseBlock(id="call_missing_output", name="ok_tool", input={})],
             ),
         ]
-    )
+    ))
 
     events = [event async for event in engine.continue_pending()]
 

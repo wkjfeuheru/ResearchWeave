@@ -21,7 +21,9 @@ from researchx.hooks.schemas import (
     PromptHookDefinition,
 )
 from researchx.hooks.safety import post_hook
+from tests.postgres_helpers import ledger_rows
 from researchx.services.execution.operations import OperationStore
+from researchx.storage import schema as s
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +37,7 @@ async def test_failed_stream_discarded_and_every_attempt_persisted(tmp_path):
     calls = 0
     records = []
     request = ApiMessageRequest(
-        model="test", messages=[], max_tokens=100, attempt_callback=records.append
+        model="test", messages=[], max_tokens=100, attempt_callback=records.append, audit_cwd=str(tmp_path)
     )
 
     async def stream(request):
@@ -53,8 +55,7 @@ async def test_failed_stream_discarded_and_every_attempt_persisted(tmp_path):
     assert len([e for e in events if isinstance(e, ApiRetryEvent)]) == 1
     assert len({r["attempt_id"] for r in records}) == 2
     assert all(r["usage_status"] == "unknown" and r["usage"] is None for r in records)
-    with OperationStore(tmp_path / "data/executions/operations.sqlite3").connect() as db:
-        assert db.execute("SELECT count(*) FROM api_attempts").fetchone()[0] == 2
+    assert len(await ledger_rows(OperationStore(tmp_path), s.api_attempts)) == 2
 
 
 @pytest.mark.asyncio

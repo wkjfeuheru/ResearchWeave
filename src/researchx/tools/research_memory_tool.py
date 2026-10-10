@@ -113,22 +113,21 @@ class ResearchMemoryTool(BaseTool[ResearchMemoryInput]):
             )
         try:
             if (
-                store.load().project is not None
-                and arguments.operation.action in LEGACY_STATE_MIGRATION
-            ):
+                await store.load()
+            ).project is not None and arguments.operation.action in LEGACY_STATE_MIGRATION:
                 return ToolResult(
                     output="Legacy plan/task writes cannot bypass Runtime. "
                     + LEGACY_STATE_MIGRATION[arguments.operation.action],
                     is_error=True,
                 )
-            receipt = store.apply(
+            receipt = await store.apply(
                 arguments.operation.model_dump(mode="json"),
                 budget=int(context.metadata.get("research_injection_budget", 6000)),
                 model=getattr(context.metadata.get("query_context"), "model", ""),
             )
         except (ResearchError, ValueError) as exc:
             return ToolResult(output=str(exc), is_error=True)
-        progress = receipt["progress"] if "progress" in receipt else store.progress()
+        progress = receipt["progress"] if "progress" in receipt else (await store.progress())
         detail = {
             "add_conflict": "已登记双方证据与争议",
             "submit_conflict_report": "核查报告已保存，等待主代理审查裁决",
@@ -141,7 +140,7 @@ class ResearchMemoryTool(BaseTool[ResearchMemoryInput]):
                 else "裁决已提交，适用条件与证据已保存"
             )
         return ToolResult(
-            output=json.dumps(receipt, ensure_ascii=False),
+            output=json.dumps(receipt, ensure_ascii=False, sort_keys=True),
             metadata={
                 "context_component": "memory"
                 if arguments.operation.action == "read"

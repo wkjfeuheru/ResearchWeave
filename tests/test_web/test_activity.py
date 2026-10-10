@@ -83,10 +83,10 @@ def test_process_projection_preserves_url_path_but_discards_credentials():
     }
 
 
-def test_crashed_running_projection_restores_as_stopped_history(workspace):
+async def test_crashed_running_projection_restores_as_stopped_history(workspace):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
-    record = app.state.workspace.store.load_by_id(cwd, sid)
+    record = (await app.state.workspace.store.load_by_id(cwd, sid))
     record["display_messages"] = [
         {
             "id": "operation",
@@ -107,14 +107,14 @@ def test_crashed_running_projection_restores_as_stopped_history(workspace):
             "phase": "pending",
         },
     ]
-    app.state.workspace.store.write(record)
+    (await app.state.workspace.store.write(record))
     rows = client.get(f"/api/sessions/{sid}").json()["messages"]
     assert all(row["turn_status"] == "stopped" for row in rows)
     assert rows[0]["status"] == "interrupted" and rows[1]["phase"] == "progress"
     assert client.get(f"/api/sessions/{sid}").json()["messages"] == rows
 
 
-def test_process_completion_persistence_restart_and_stop(workspace):
+async def test_process_completion_persistence_restart_and_stop(workspace):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
     with sse_connect(client, sid, headers=ORIGIN) as socket:
@@ -147,19 +147,19 @@ def test_process_completion_persistence_restart_and_stop(workspace):
         )
     with TestClient(create_app(str(cwd)), base_url="http://localhost") as restarted:
         assert restarted.get(f"/api/sessions/{sid}").json()["messages"] == stopped
-    assert app.state.workspace.store.load_by_id(cwd, sid)["display_messages"] == stopped
+    assert (await app.state.workspace.store.load_by_id(cwd, sid))["display_messages"] == stopped
 
 
-def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace):
+async def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace):
     client, app, _, _, cwd = workspace
     profile = add_model(client)
     sid, other = add_session(client, profile), add_session(client, profile)
     original = cwd / "report.txt"
     original.write_text("original")
     research = ResearchStore(cwd, sid)
-    research.capture(origin_id="source", content="snapshot")
+    (await research.capture(origin_id="source", content="snapshot"))
     other_research = ResearchStore(cwd, other)
-    other_research.capture(origin_id="other", content="other snapshot")
+    (await other_research.capture(origin_id="other", content="other snapshot"))
     with sse_connect(client, sid, headers=ORIGIN) as socket:
         socket.receive_json()
         response = client.delete(f"/api/sessions/{sid}")
@@ -168,7 +168,10 @@ def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace
         with pytest.raises(EOFError):
             socket.receive_json()
     assert not app.state.workspace.store._path(sid).exists()
-    assert not research.directory.exists()
+    from researchx.storage.conversations import ConversationRecords
+    from researchx.storage.database import current_database
+    assert await ConversationRecords(current_database(), str(cwd)).load(sid) is None
+    assert research.content.root.exists()  # Immutable bodies survive metadata deletion.
     assert original.read_text() == "original"
     assert other_research.directory.exists()
     assert [item["session_id"] for item in client.get("/api/sessions").json()["items"]] == [other]
@@ -180,10 +183,13 @@ def test_delete_session_removes_only_owned_data_and_closes_idle_socket(workspace
         sse_connect(client, sid, headers=ORIGIN),
     ):
         pass
-    assert not research.directory.exists()
+    from researchx.storage.conversations import ConversationRecords
+    from researchx.storage.database import current_database
+    assert await ConversationRecords(current_database(), str(cwd)).load(sid) is None
+    assert research.content.root.exists()  # Immutable bodies survive metadata deletion.
 
 
-def test_delete_running_and_approval_sessions_rejected_then_allowed(workspace):
+async def test_delete_running_and_approval_sessions_rejected_then_allowed(workspace):
     client, app, _, _, _ = workspace
     sid = add_session(client, add_model(client))
     with sse_connect(client, sid, headers=ORIGIN) as socket:
@@ -192,44 +198,49 @@ def test_delete_running_and_approval_sessions_rejected_then_allowed(workspace):
             submit(socket, text, request_id=request_id)
             collect(socket, terminal)
             assert client.delete(f"/api/sessions/{sid}").status_code == 409
-            assert app.state.workspace.store._path(sid).exists()
+            assert await app.state.workspace.store.records.load(sid) is not None
             socket.send_json({"type": "cancel", "request_id": request_id})
             collect(socket)
         assert client.delete(f"/api/sessions/{sid}").status_code == 200
         assert socket.receive_json()["type"] == "session_deleted"
 
 
-def test_delete_storage_failure_preserves_record_and_allows_retry(workspace, monkeypatch):
+async def test_delete_storage_failure_preserves_record_and_allows_retry(workspace, monkeypatch):
     client, app, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
     research = ResearchStore(cwd, sid)
-    research.capture(origin_id="source", content="snapshot")
-    import shutil
+    (await research.capture(origin_id="source", content="snapshot"))
+    from researchx.storage.conversations import ConversationRecords
+    real_remove = ConversationRecords.delete
 
-    real_remove = shutil.rmtree
-
-    def failing_remove(path):
+    async def failing_remove(*args):
         raise PermissionError("private path must not leak")
 
     with monkeypatch.context() as context:
-        context.setattr("researchx.web.storage.shutil.rmtree", failing_remove)
+        context.setattr(ConversationRecords, "delete", failing_remove)
         response = client.delete(f"/api/sessions/{sid}")
         assert response.status_code == 500 and "private path" not in response.text
         assert client.get(f"/api/sessions/{sid}").status_code == 200
         assert sid not in app.state.workspace.deleting
-    assert shutil.rmtree is real_remove
+    assert ConversationRecords.delete is real_remove
     assert client.delete(f"/api/sessions/{sid}").status_code == 200
 
 
-def test_delete_corrupt_research_does_not_require_loading_it(workspace):
+async def test_delete_corrupt_research_does_not_require_loading_it(workspace):
     client, _, _, _, cwd = workspace
     sid = add_session(client, add_model(client))
     research = ResearchStore(cwd, sid)
-    research.directory.mkdir(parents=True, exist_ok=True)
-    research.path.write_text("broken")
+    from tests.postgres_helpers import raw_state, corrupt_state
+    await research.capture(origin_id="source", content="retained content")
+    damaged = await raw_state(research)
+    damaged["research_state"]["current_plan_id"] = "missing"
+    await corrupt_state(research, damaged)
     assert client.get(f"/api/sessions/{sid}").status_code == 409
     assert client.delete(f"/api/sessions/{sid}").status_code == 200
-    assert not research.directory.exists()
+    from researchx.storage.conversations import ConversationRecords
+    from researchx.storage.database import current_database
+    assert await ConversationRecords(current_database(), str(cwd)).load(sid) is None
+    assert research.content.root.exists()  # Immutable bodies survive metadata deletion.
 
 
 def test_failure_keeps_progress_without_promoting_it_to_a_final_answer(workspace, monkeypatch):

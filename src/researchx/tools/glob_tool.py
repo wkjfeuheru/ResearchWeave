@@ -37,19 +37,19 @@ class GlobTool(BaseTool[GlobToolInput]):
     async def execute(self, arguments: GlobToolInput, context: ToolExecutionContext) -> ToolResult:
         context = ToolExecutionContext.from_context(context)
         try:
-            base = context.resolve_path(".")
-            if context.workspace_runtime():
-                context.validate_search_pattern(arguments.pattern)
-                context.resolve_path(arguments.pattern)
+            base = await context.resolve_path(".")
+            if await context.workspace_runtime():
+                (await context.validate_search_pattern(arguments.pattern))
+                (await context.resolve_path(arguments.pattern))
                 if arguments.root:
-                    context.resolve_path(arguments.root)
+                    (await context.resolve_path(arguments.root))
             root, pattern = _resolve_glob_request(base, arguments.root, arguments.pattern)
-            context.resolve_path(root)
+            (await context.resolve_path(root))
             matches = await _glob(root, pattern, limit=arguments.limit)
-            if context.workspace_runtime():
+            if await context.workspace_runtime():
                 matches = [
                     str(path.relative_to(root))
-                    for path in context.safe_search_paths(root / match for match in matches)
+                    for path in (await context.safe_search_paths(root / match for match in matches))
                 ]
         except (ResearchError, OSError, ValueError) as exc:
             return ToolResult(output=str(exc), is_error=True)
@@ -163,7 +163,7 @@ async def _glob(root: Path, pattern: str, *, limit: int) -> list[str]:
 
         try:
             try:
-                await asyncio.wait_for(_read_stdout(), timeout=_GLOB_RG_TIMEOUT_SECONDS)
+                await asyncio.wait_for((_read_stdout()), timeout=_GLOB_RG_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
                 pass
         finally:

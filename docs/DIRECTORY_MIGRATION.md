@@ -1,22 +1,26 @@
 # 目录与职责迁移
 
+> 本文记录目录迁移阶段的边界。后续版本已将业务持久化切换到 PostgreSQL；本文提及的会话 JSON 是历史实现，当前部署和恢复请参阅 [PostgreSQL 说明](POSTGRESQL.md)。
+
 本次以本地 `researchx` 包和已完成的 FastAPI SSE 实现为基线。不会恢复旧的
 `openharness` 包名。研究任务、权威研究状态及 Runtime 继续位于现有 `state/`；
-新的 `research/` 保存文档、导出、来源分类、计算契约及规划适配器。
+原暂存的 `research/` 已在后续按职责拆分到 `contracts/`、`workspace/`、`engine/`、`config/`
+（见下方「research/ 职责拆分」）。
 
 ## 最终职责
 
 ```text
 src/researchx/
 ├── api/                  # 模型与外部检索适配，含 search_types、tavily_search
-├── config/paths.py       # 配置、数据目录（含原 get_data_path）
+├── config/               # paths、settings、sites（来源目录）
+├── contracts/            # models（研究数据契约）、values（金额口径）
+├── engine/               # 查询引擎、消息、子代理与 planning_support（规划适配器）
 ├── plugins/              # 插件加载与 research_script_support
 │   └── bundled/          # 原插件与 Skill 资源位置、ID 保留
-├── research/             # contracts、documents、exports、sites、values、planning_support
 ├── security/             # network_guard、redaction
 ├── state/                # 原研究状态、任务、存储、CompletionPolicy 与 Runtime
 ├── storage/              # filesystem、file_lock
-├── workspace/            # session_files、paths；不依赖 FastAPI/SSE
+├── workspace/            # session_files、paths、documents、exports；不依赖 FastAPI/SSE
 ├── services/
 │   ├── context/          # budget、snapshots、sources、token_estimation
 │   ├── execution/        # tool_execution、operations、outputs、async_timeout、shell
@@ -27,6 +31,24 @@ src/researchx/
 └── web/                  # app、events、runtime、workspace、session_view、redaction 等
 ```
 
+## research/ 职责拆分
+
+原先暂存的 `research/` 目录已按真实职责拆出，未保留兼容 shim：
+
+| 原 research/ 文件 | 现位置 |
+|---|---|
+| contracts.py | contracts/models.py |
+| values.py | contracts/values.py |
+| documents.py | workspace/documents.py |
+| exports.py | workspace/exports.py |
+| planning_support.py | engine/planning_support.py |
+| sites.py | config/sites.py |
+| __init__.py | 随目录一并移除 |
+
+拆分只移动位置并更新导入，未修改工具名称、Schema、权限、报告输出或存储协议。
+文档解析命令相应改为 `python -m researchx.workspace.documents`；
+`tests/test_directory_migration.py` 断言 `research/` 包不再存在。
+
 ## 工具迁移记录
 
 以下旧路径仅用于审计迁移，不作为兼容入口：
@@ -36,7 +58,7 @@ src/researchx/
 | research/planner.py | planner_tool.py |
 | research/replanner.py | replanner_tool.py |
 | research/project.py | research_project_tool.py |
-| research/planning.py | ../research/planning_support.py（共享适配器，不是工具） |
+| research/planning.py | ../engine/planning_support.py（共享适配器，不是工具） |
 | retired.py | contracts.py 内的 RETIRED_TOOL_NAMES |
 | research/__init__.py | 移除冗余包标记 |
 
@@ -57,19 +79,19 @@ src/researchx/
 | redaction.py | security/redaction.py |
 | network_guard.py | security/network_guard.py |
 | session_files.py | workspace/session_files.py |
-| research_documents.py | research/documents.py |
-| research_exports.py | research/exports.py |
+| research_documents.py | workspace/documents.py |
+| research_exports.py | workspace/exports.py |
 | research_script_support.py | plugins/research_script_support.py |
-| research_sites.py | research/sites.py |
-| research_types.py | research/contracts.py |
-| research_values.py | research/values.py |
+| research_sites.py | config/sites.py |
+| research_types.py | contracts/models.py |
+| research_values.py | contracts/values.py |
 | search_types.py | api/search_types.py |
 | tavily_search.py | api/tavily_search.py |
 | shell.py | services/execution/shell.py |
 | helpers.py | get_data_path → config/paths.py；safe_filename → workspace/paths.py；split_message → services/message_chunks.py |
 | __init__.py | 移除空包标记 |
 
-`research/contracts.py` 是 Skill 计算模型的共享契约，未合并进权威状态模型，避免改变
+`contracts/models.py`（原 `research/contracts.py`）是 Skill 计算模型的共享契约，未合并进权威状态模型，避免改变
 存储协议和产生导入循环。helpers 的函数按真实职责拆分，保留原实现和行为，未创建
 新的杂物目录。对应文件锁、网络、shell、文件名和文本分块测试也按职责重新归组，
 原有断言完整保留。
@@ -99,7 +121,7 @@ response、202 ack、事件字段和排序均未改动。断连仍取消运行�
 当前文档解析命令为：
 
 ```bash
-uv run python -m researchx.research.documents --input report.pdf --output-dir parsed
+uv run python -m researchx.workspace.documents --input report.pdf --output-dir parsed
 ```
 
 项目自带 SKILL.md、Python 脚本、评测 fixture 的模块白名单、CLI Tavily 凭据入口、

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Callable, TYPE_CHECKING
@@ -25,7 +24,9 @@ from researchx.engine.stream_events import ErrorEvent
 from researchx.state.errors import ResearchError
 from researchx.tools.base import ToolRegistry
 from researchx.permissions.capabilities import CapabilityContext
-from researchx.storage.filesystem import atomic_write_text, private_directory
+from researchx.storage.conversations import ConversationRecords, subagent_session_id
+from researchx.storage.database import current_database
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class BoundedSubagentClient:
@@ -103,12 +104,41 @@ async def execute_subagent(
         if parent.hook_executor
         else None
     )
+    parent_store = (parent.tool_metadata or {}).get("research_store")
+    parent_session = (parent.tool_metadata or {}).get("session_id") or (
+        parent_store.session_id if parent_store else parent.execution_session_id
+    )
+    parent_cwd = (
+        Path(parent_store.cwd) if parent_store else (parent.execution_workspace or parent.cwd)
+    )
+    child_session = subagent_session_id(parent_session, transcript_path)
+    conversations = ConversationRecords(current_database(), str(parent_cwd))
+
+    async def persist_transcript() -> None:
+        await conversations.write(
+            {
+                "session_id": child_session,
+                "parent_session_id": parent_session,
+                "cwd": str(parent_cwd.resolve()),
+                "working_directory": str(cwd.resolve()),
+                "model": parent.model,
+                "messages": [
+                    message.model_dump(mode="json", exclude={"reasoning_content"})
+                    for message in messages
+                ],
+                "usage": tracker.total.model_dump(),
+            },
+            channel="subagent",
+        )
+
+    await persist_transcript()  # Establish the parent/scope before child side effects.
     child = QueryContext(
         trusted_settings=parent.trusted_settings.model_copy(deep=True)
         if parent.trusted_settings
         else None,
         capabilities=CapabilityContext(parent.capabilities.allowed),
-        execution_session_id=parent.execution_session_id,
+        execution_session_id=child_session,
+        execution_workspace=parent_cwd,
         api_client=client,
         tool_registry=registry,
         permission_checker=parent.permission_checker,
@@ -122,7 +152,7 @@ async def execute_subagent(
         permission_prompt=parent.permission_prompt,
         hook_executor=hooks,
         max_turns=max_calls,
-        tool_metadata=metadata,
+        tool_metadata={**metadata, "session_id": child_session},
         runtime_context_provider=runtime_context_provider,
         context_components=parent.context_components,
         research_memory_enabled=parent.research_memory_enabled,
@@ -156,18 +186,7 @@ async def execute_subagent(
     finally:
         # Store only public tool/text history; model replay reasoning is never persisted here.
         try:
-            private_directory(transcript_path.parent)
-            atomic_write_text(
-                transcript_path,
-                json.dumps(
-                    [
-                        message.model_dump(mode="json", exclude={"reasoning_content"})
-                        for message in messages
-                    ],
-                    ensure_ascii=False,
-                ),
-                mode=0o600,
-            )
-        except OSError:
+            await persist_transcript()
+        except (OSError, SQLAlchemyError):
             if not cancelled:
                 raise

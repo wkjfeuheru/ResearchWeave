@@ -222,7 +222,7 @@ def combine_snapshots(snapshots: list[ContextSnapshot]) -> ContextSnapshot:
     return ContextSnapshot(text, spans)
 
 
-def compose_research_context(
+async def compose_research_context(
     base: ContextSnapshot,
     *,
     store: ResearchStore | None = None,
@@ -245,16 +245,16 @@ def compose_research_context(
     quota = (
         min(legacy_budget, targets["memory"], maxima["memory"]) if policy.enabled else legacy_budget
     )
-    recalled = store.prompt_snapshot(legacy_budget, model=model, memory_budget=quota)
+    recalled = await store.prompt_snapshot(legacy_budget, model=model, memory_budget=quota)
     used = sum(
         estimate_tokens(recalled.text[span.start : span.end], model)
         for span in recalled.manifest
         if span.component == "memory"
     )
     snapshots = [base, recalled]
-    if runtime and store.load().project:
-        project = runtime.repository._project(store.load())
-        text = runtime.build_research_context(project.id)
+    if runtime and (await store.load()).project:
+        project = runtime.repository._project((await store.load()))
+        text = await runtime.build_research_context(project.id)
         workspace = tagged_snapshot(text, "workspace_memory")
         amount = sum(
             estimate_tokens(text[span.start : span.end], model)

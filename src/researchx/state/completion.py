@@ -46,7 +46,7 @@ class CompletionPolicy:
             and not any(item.supersedes == key for item in memory.evidence_pool.values())
         )
 
-    def artifact_checks(
+    async def artifact_checks(
         self, artifact: ResearchArtifact, context: ResearchContext
     ) -> list[CheckResult]:
         memory = context.memory
@@ -64,12 +64,11 @@ class CompletionPolicy:
 
         content = ""
         try:
-            path = context.store.directory / artifact.snapshot
             if artifact.snapshot != f"content/{artifact.content_hash}.txt":
                 raise ValueError("Invalid snapshot")
-            content = path.read_text(encoding="utf-8")
+            content = await context.store.read_content(artifact.content_hash)
             intact = hashlib.sha256(content.encode()).hexdigest() == artifact.content_hash
-        except (OSError, ValueError):
+        except (OSError, ValueError, ResearchError):
             intact = False
         check(
             "snapshot",
@@ -114,7 +113,7 @@ class CompletionPolicy:
         )
         check(
             "source_snapshots",
-            all(self.source_intact(key, context) for key in evidence_ids),
+            all([await self.source_intact(key, context) for key in evidence_ids]),
             "Evidence source snapshots must be intact and nonempty",
         )
         if artifact.kind in {"dataset", "model", "chart"}:
@@ -151,7 +150,7 @@ class CompletionPolicy:
             try:
                 from researchx.workspace.session_files import SessionFiles
 
-                manifest, download = SessionFiles(context.store.directory).artifact(
+                manifest, download = await SessionFiles(context.store).artifact(
                     artifact.file_id or ""
                 )
                 delivery_intact = (
@@ -197,7 +196,7 @@ class CompletionPolicy:
             check(
                 "sections",
                 all(
-                    re.search(r"^#{1,6}\s+" + re.escape(section) + r"\s*$", content, re.M)
+                    (re.search(r"^#{1,6}\s+" + re.escape(section) + r"\s*$", content, re.M))
                     for section in artifact.sections
                 ),
                 "Declared draft sections must exist as headings",
@@ -205,14 +204,14 @@ class CompletionPolicy:
         return checks
 
     @staticmethod
-    def source_intact(evidence_id: str, context: ResearchContext) -> bool:
+    async def source_intact(evidence_id: str, context: ResearchContext) -> bool:
         try:
             source = context.memory.sources[context.memory.evidence_pool[evidence_id].source_id]
-            return bool(context.store.read_source(source).strip())
+            return bool((await context.store.read_source(source)).strip())
         except (OSError, KeyError, ResearchError):
             return False
 
-    def inspect_task(self, task: ResearchTask, context: ResearchContext) -> CompletionResult:
+    async def inspect_task(self, task: ResearchTask, context: ResearchContext) -> CompletionResult:
         memory = context.memory
         checks = []
 
@@ -285,7 +284,8 @@ class CompletionPolicy:
             )
             check(
                 f"finding_sources:{key}",
-                finding and all(self.source_intact(item, context) for item in finding.evidence_ids),
+                finding
+                and all([await self.source_intact(item, context) for item in finding.evidence_ids]),
                 "Finding source snapshots must remain intact",
             )
             if finding and finding.status == "tentative":
@@ -296,10 +296,12 @@ class CompletionPolicy:
                     False,
                 )
         for artifact in artifacts:
-            checks.extend(self.artifact_checks(artifact, context))
+            checks.extend((await self.artifact_checks(artifact, context)))
         return self.result(checks)
 
-    def inspect_project(self, plan: ResearchPlan, context: ResearchContext) -> CompletionResult:
+    async def inspect_project(
+        self, plan: ResearchPlan, context: ResearchContext
+    ) -> CompletionResult:
         memory = context.memory
         project = memory.project
         assert project is not None
@@ -355,11 +357,11 @@ class CompletionPolicy:
             "Core research conflicts must be resolved",
         )
         for task in active:
-            checks.extend(self.inspect_task(task, context).checks)
+            checks.extend((await self.inspect_task(task, context)).checks)
         return self.result(checks)
 
     async def check_task(self, task: ResearchTask, context: ResearchContext) -> CompletionResult:
-        return self.inspect_task(task, context)
+        return await self.inspect_task(task, context)
 
     async def check_project(self, plan: ResearchPlan, context: ResearchContext) -> CompletionResult:
-        return self.inspect_project(plan, context)
+        return await self.inspect_project(plan, context)

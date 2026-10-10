@@ -192,7 +192,7 @@ def test_try_context_collapse_trims_oversized_tool_results():
     assert collapsed_results[0].tool_use_id == "toolu_snapshot"
 
 
-def test_microcompact_compacts_mcp_results_while_preserving_recent():
+async def test_microcompact_compacts_mcp_results_while_preserving_recent():
     messages = []
     for index in range(3):
         tool_id = f"toolu_snapshot_{index}"
@@ -221,7 +221,7 @@ def test_microcompact_compacts_mcp_results_while_preserving_recent():
             ]
         )
 
-    compacted, tokens_saved = microcompact_messages(messages, keep_recent=1)
+    compacted, tokens_saved = (await microcompact_messages(messages, keep_recent=1))
 
     assert tokens_saved > 0
     results = [
@@ -235,7 +235,7 @@ def test_microcompact_compacts_mcp_results_while_preserving_recent():
     assert results[2].content.startswith("snapshot 2")
 
 
-def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
+async def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
     monkeypatch.setenv("RESEARCHX_MICROCOMPACT_TOOL_RESULT_CHARS", "256")
     messages = [
         ConversationMessage(
@@ -260,7 +260,7 @@ def test_microcompact_compacts_large_non_allowlisted_results(monkeypatch):
         ),
     ]
 
-    compacted, tokens_saved = microcompact_messages(messages, keep_recent=1)
+    compacted, tokens_saved = (await microcompact_messages(messages, keep_recent=1))
 
     assert tokens_saved > 0
     results = [

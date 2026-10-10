@@ -17,7 +17,7 @@ def evaluation(tmp_path, monkeypatch):
     asyncio.run(instance.client.aclose())
 
 
-def financial_record(evaluation, statement):
+async def financial_record(evaluation, statement):
     store = evaluation.memory_store("a" * 12)
     rows = [
         {
@@ -30,13 +30,13 @@ def financial_record(evaluation, statement):
         }
         for year, form, value in [(2026, "合并未调整", -51.19e8), (2025, "合并调整", -49.55e8)]
     ]
-    source = store.capture(
+    source = (await store.capture(
         origin_id="finance-a",
         kind="mcp",
         title="ft_v1_finance_income",
         content=json.dumps({"data": rows}),
-    )
-    memory = store.load()
+    ))
+    memory = (await store.load())
     evidence = Evidence(source_id=source.id, statement=statement, collected_at=source.collected_at)
     memory.evidence_pool[evidence.id] = evidence
     return store, memory, evidence
@@ -57,33 +57,33 @@ def financial_record(evaluation, statement):
         ),
     ],
 )
-def test_financial_audit_uses_current_claim_and_restatement_group(evaluation, statement, passed):
-    _, memory, _ = financial_record(evaluation, statement)
+async def test_financial_audit_uses_current_claim_and_restatement_group(evaluation, statement, passed):
+    _, memory, _ = (await financial_record(evaluation, statement))
     result = {
         "session_id": memory.session_id,
         "after": memory.model_dump(mode="json"),
         "checks": [],
     }
-    evaluation.audit_loss_directions(result)
+    await evaluation.audit_loss_directions(result)
     assert result["checks"][0]["passed"] is passed
     assert len(result["financial_comparisons"]) == 1
 
 
-def test_multiple_company_claims_need_multiple_input_sources(evaluation):
-    store, memory, evidence = financial_record(evaluation, "样本公司A、样本公司B均亏损")
-    source = store.capture(
+async def test_multiple_company_claims_need_multiple_input_sources(evaluation):
+    store, memory, evidence = (await financial_record(evaluation, "样本公司A、样本公司B均亏损"))
+    source = (await store.capture(
         origin_id="finance-b",
         kind="mcp",
         title="ft_v1_finance_income",
         content=json.dumps({"data": [{"stock_name": "样本公司B"}]}),
-    )
+    ))
     memory.sources[source.id] = source
     result = {
         "session_id": memory.session_id,
         "after": memory.model_dump(mode="json"),
         "checks": [],
     }
-    evaluation.audit_loss_directions(result)
+    await evaluation.audit_loss_directions(result)
     assert result["financial_provenance_issues"] == [evidence.id]
 
 
@@ -95,12 +95,12 @@ def test_multiple_company_claims_need_multiple_input_sources(evaluation):
         ("2024年底-2026年上半年", "全球现货12美元/公斤", False),
     ],
 )
-def test_spot_audit_accepts_original_unit_order_but_rejects_old_quotes(
+async def test_spot_audit_accepts_original_unit_order_but_rejects_old_quotes(
     evaluation, period, raw, passed
 ):
     store = evaluation.memory_store("a" * 12)
-    source = store.capture(origin_id="quote", kind="web", content=raw)
-    memory = store.load()
+    source = (await store.capture(origin_id="quote", kind="web", content=raw))
+    memory = (await store.load())
     memory.sources[source.id].collected_at = "2026-10-04T00:00:00Z"
     evidence = Evidence(
         source_id=source.id,
@@ -114,5 +114,5 @@ def test_spot_audit_accepts_original_unit_order_but_rejects_old_quotes(
         "after": memory.model_dump(mode="json"),
         "checks": [],
     }
-    evaluation.audit_recent_spot_prices(result)
+    await evaluation.audit_recent_spot_prices(result)
     assert result["checks"][0]["passed"] is passed

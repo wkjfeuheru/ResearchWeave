@@ -25,7 +25,7 @@ class ResearchModel:
         if self.step_delay:
             await asyncio.sleep(self.step_delay)
         self.requests.append(request)
-        memory = self.store.load()
+        memory = (await self.store.load())
         fields = None
         current_plan = memory.plans.get(memory.research_state.current_plan_id or "")
         source = list(memory.sources.values())[-1]

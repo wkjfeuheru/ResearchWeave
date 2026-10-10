@@ -444,6 +444,39 @@ def score_case(
     else:
         scores.append(MetricResult(name="requirement_coverage", value=None, status="unjudged"))
     scores.append(ratio("requirement_judgment_coverage", len(known), len(requirements)))
+    # Gap declaration rate: only meaningful for tasks that deliberately withhold material.
+    # Per case it is the pass ratio of limitation checks; the corpus-level mean is 缺口声明率.
+    limitation_ids = [r.id for r in case.requirements if r.check == "limitation"]
+    if not limitation_ids:
+        scores.append(
+            MetricResult(
+                name="gap_declaration",
+                value=None,
+                status="not_applicable",
+                explanation="该任务不含资料缺口或不可计算项声明要求",
+            )
+        )
+    else:
+        reviewed_limitations = [reviews[i].score for i in limitation_ids if i in reviews]
+        if len(reviewed_limitations) == len(limitation_ids):
+            scores.append(
+                ratio(
+                    "gap_declaration",
+                    sum(score >= 3 for score in reviewed_limitations),
+                    len(limitation_ids),
+                    source="combined",
+                    explanation="资料缺口、不可计算项或覆盖限制被明确说明，未擅自补数",
+                )
+            )
+        else:
+            scores.append(
+                MetricResult(
+                    name="gap_declaration",
+                    value=None,
+                    status="unjudged",
+                    explanation="缺口声明语义判定尚未完成",
+                )
+            )
     if artifact.status != "completed" or not artifact.answer.strip():
         success = 0
     elif len(known) != len(requirements):

@@ -113,10 +113,10 @@ def _resolve_api_client_from_settings(settings: Settings) -> SupportsStreamingMe
         )
     if settings.provider == "anthropic_claude":
         return AnthropicApiClient(
-            auth_token=_safe_resolve_auth().value,
+            auth_token=(_safe_resolve_auth()).value,
             base_url=settings.base_url,
             claude_oauth=True,
-            auth_token_resolver=lambda: settings.resolve_auth().value,
+            auth_token_resolver=lambda: (settings.resolve_auth()).value,
         )
     if settings.api_format in ("openai", "openai_compat"):
         auth = _safe_resolve_auth()
@@ -280,7 +280,7 @@ async def build_runtime(
         from researchx.state.store import ResearchStore
 
         store = research_store_override or ResearchStore(cwd, session_id)
-        store.load()  # Corruption must be reported, never silently reset.
+        (await store.load())  # Corruption must be reported, never silently reset.
         restored_metadata["research_store"] = store
         restored_metadata["research_injection_budget"] = (
             settings.research_memory.injection_budget_tokens
@@ -337,15 +337,19 @@ async def build_runtime(
     engine.restore_usage(restore_usage)
     # Restore messages from a saved session if provided
     if restore_messages:
-        engine.load_messages([ConversationMessage.model_validate(m) for m in restore_messages])
-        engine.load_messages(sanitize_conversation_messages(engine.messages))
+        (
+            await engine.load_messages(
+                [ConversationMessage.model_validate(m) for m in restore_messages]
+            )
+        )
+        (await engine.load_messages(sanitize_conversation_messages(engine.messages)))
 
     # Start Docker sandbox if configured
     sandbox_store = engine.tool_metadata.get("research_store")
     if (
         settings.sandbox.enabled
         and settings.sandbox.backend == "docker"
-        and (sandbox_store is None or sandbox_store.load().project is None)
+        and (sandbox_store is None or (await sandbox_store.load()).project is None)
     ):
         from researchx.sandbox.session import start_docker_sandbox
 
@@ -368,14 +372,24 @@ async def build_runtime(
 
 async def start_runtime(bundle: RuntimeBundle) -> None:
     """Run session start hooks."""
-    await bundle.hook_executor.execute(
-        HookEvent.SESSION_START,
-        {"cwd": bundle.cwd, "event": HookEvent.SESSION_START.value},
-    )
+    from researchx.api.retry import bind_api_audit
+
+    with bind_api_audit(bundle.cwd, bundle.session_id):
+        await bundle.hook_executor.execute(
+            HookEvent.SESSION_START,
+            {"cwd": bundle.cwd, "event": HookEvent.SESSION_START.value},
+        )
 
 
 async def close_runtime(bundle: RuntimeBundle) -> None:
-    """Close runtime-owned resources."""
+    """Close runtime-owned resources, keeping final hook attempts in this session."""
+    from researchx.api.retry import bind_api_audit
+
+    with bind_api_audit(bundle.cwd, bundle.session_id):
+        await _close_runtime(bundle)
+
+
+async def _close_runtime(bundle: RuntimeBundle) -> None:
     from researchx.sandbox.session import stop_runtime_sandboxes
 
     try:

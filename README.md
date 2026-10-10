@@ -1,5 +1,7 @@
 # ResearchX
 
+> **PostgreSQL cutover / 数据库切换**：启动前必须配置 `RESEARCHX_DATABASE_URL` 并执行 `uv run python -m researchx.storage.migrate`。旧版用户先备份和显式导入；不再读取 JSON/SQLite 业务状态。见 [部署、Schema、历史导入与恢复](docs/POSTGRESQL.md)。测试使用独立 `RESEARCHX_TEST_DATABASE_URL`。
+
 ResearchX is a local investment research Web workspace. Each conversation owns its task context, research state, evidence pool and auditable reasoning summaries. Sources carry immutable snapshots, timestamps and stable IDs; answers freeze the versions they cite.
 
 [中文说明](README.zh-CN.md) · [Web workspace](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界) · [Contributing](CONTRIBUTING.md)
@@ -20,7 +22,7 @@ Open the local address printed by `rx web`. The server accepts local hosts and c
 
 The Web workspace streams events with FastAPI SSE and sends commands through HTTP POST. Disconnecting stops the active run and saves partial output; reopening restores its snapshot without replaying messages. See [SSE and command contracts](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界).
 
-Internal modules now separate storage, security, research documents, workspace files and Web session coordination. Tools are flat modules, and document ingestion uses `python -m researchx.research.documents`. See the [directory migration and import mapping](docs/DIRECTORY_MIGRATION.md).
+Internal modules now separate storage, security, research documents, workspace files and Web session coordination. Tools are flat modules, and document ingestion uses `python -m researchx.workspace.documents`. See the [directory migration and import mapping](docs/DIRECTORY_MIGRATION.md).
 
 For a source checkout, build the frontend with Node.js 20 or newer:
 
@@ -88,11 +90,11 @@ The personal assistant product, messaging integrations, coding orchestration, te
 
 The deterministic Agent core integration suite covers parallel delegation, memory updates, replanning, cancellation/recovery and report delivery through the existing loop. See the [E2E-01–16 test report and coverage](docs/testing/agent-core-e2e-report.md) and [remaining limits](docs/testing/agent-core-risks.md).
 
-Agent Shell and Skill calculations require SRT 0.0.79 or the configured Docker backend; unavailable backends reject execution. Explicit trusted host mode is available only to the main agent outside report projects. See [shell policy, exports and recovery](docs/BACKEND_STABILIZATION.md). Run `uv run python scripts/check_types.py` for strict checks of all production Python, including bundled scripts.
+Agent Shell and Skill calculations require SRT 0.0.79 or the configured Docker backend; unavailable backends reject execution. Explicit trusted host mode is available only to the main agent outside report projects. See [shell policy, exports and recovery](docs/BACKEND_STABILIZATION.md). Run `uv run python tools/check_types.py` for strict checks of all production Python, including bundled scripts.
 
 ```bash
 uv run pytest -q
-uv run ruff check src tests scripts
+uv run ruff check src tests tools evals hatch_build.py
 cd frontend/web
 npm run build
 npx playwright install chromium

@@ -49,6 +49,12 @@ for kind, (plugin, script, function, result_type) in SKILL_FUNCTIONS.items():
 
 
 async def run(args):
+    from researchx.storage.database import database_lifespan
+    async with database_lifespan():
+        return await _run(args)
+
+
+async def _run(args):
     selected = profile_settings(args.profile)
     credential = selected.resolve_auth().value
     output = args.output.resolve()
@@ -258,7 +264,7 @@ async def run(args):
                             )
                     else:
                         item["checks"]["artifact_created"] = False
-                    state = ResearchStore(cwd, sid).load()
+                    state = (await ResearchStore(cwd, sid).load())
                     item["checks"]["research_memory"] = bool(state.sources and state.evidence_pool)
                     record = (await client.get(f"/api/sessions/{sid}")).json()
                     (output / f"{kind}-session.json").write_text(

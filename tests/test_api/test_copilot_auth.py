@@ -257,7 +257,8 @@ class TestPollForAccessToken:
 
         monkeypatch.setattr("researchx.api.copilot_auth.httpx.post", fake_post)
         monkeypatch.setattr("researchx.api.copilot_auth.time.sleep", lambda _: None)
-        monkeypatch.setattr("researchx.api.copilot_auth.time.monotonic", fake_monotonic)
+        from types import SimpleNamespace
+        monkeypatch.setattr("researchx.api.copilot_auth.time", SimpleNamespace(monotonic=fake_monotonic, sleep=lambda _: None))
 
         with pytest.raises(RuntimeError, match="timed out"):
             poll_for_access_token("dc_timeout", interval=0, timeout=10)

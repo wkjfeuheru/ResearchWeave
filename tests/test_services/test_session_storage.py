@@ -15,12 +15,12 @@ from researchx.services.sessions.storage import (
 )
 
 
-def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
+async def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     project = tmp_path / "repo"
     project.mkdir()
 
-    path = save_session_snapshot(
+    path = (await save_session_snapshot(
         cwd=project,
         model="claude-test",
         system_prompt="system",
@@ -30,10 +30,10 @@ def test_save_and_load_session_snapshot(tmp_path: Path, monkeypatch):
             "task_focus_state": {"goal": "Fix compact carry-over"},
             "recent_verified_work": ["Focused session storage test passed"],
         },
-    )
+    ))
 
-    assert path.exists()
-    snapshot = load_session_snapshot(project)
+    assert not path.exists()  # Stable locator; no runtime JSON authority.
+    snapshot = (await load_session_snapshot(project))
     assert snapshot is not None
     assert snapshot["model"] == "claude-test"
     assert snapshot["usage"]["output_tokens"] == 2
@@ -61,7 +61,7 @@ def test_export_session_markdown(tmp_path: Path, monkeypatch):
     assert "world" in content
 
 
-def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(
+async def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(
     tmp_path: Path, monkeypatch
 ):
     monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
@@ -88,7 +88,11 @@ def test_load_session_snapshot_sanitizes_legacy_empty_assistant_messages(
     }
     (target_dir / "latest.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    snapshot = load_session_snapshot(project)
+    from researchx.storage.legacy_import import import_legacy
+    from researchx.storage.database import current_database
+    imported = await import_legacy(tmp_path / "data", [project], current_database())
+    assert not imported["errors"]
+    snapshot = (await load_session_snapshot(project))
     assert snapshot is not None
     assert snapshot["message_count"] == 2
     assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]

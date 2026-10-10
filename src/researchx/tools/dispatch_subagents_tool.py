@@ -21,8 +21,13 @@ from researchx.engine.subagents import execute_subagent
 from researchx.state.errors import ResearchError
 from researchx.state.models import ReadMemory, Record
 from researchx.tools.base import BaseTool, ToolExecutionContext, ToolRegistry, ToolResult
-from researchx.state.dispatch_audit import dispatch_directory, lifecycle_lock, read_batch
-from researchx.storage.filesystem import atomic_write_text
+from researchx.state.dispatch_audit import (
+    dispatch_directory,
+    lifecycle_lock,
+    read_batch,
+    write_batch,
+    write_result,
+)
 
 
 class SubagentTask(Record):
@@ -83,7 +88,7 @@ class ReadOnlyResearchMemoryTool(BaseTool[ReadOnlyMemoryInput]):
         self, arguments: ReadOnlyMemoryInput, context: ToolExecutionContext
     ) -> ToolResult:
         try:
-            result = self.store.apply(
+            result = await self.store.apply(
                 arguments.operation.model_dump(mode="json"),
                 budget=int(context.metadata.get("research_injection_budget", 6000)),
             )
@@ -119,7 +124,7 @@ class SubmitCandidateTool(BaseTool[CandidateSubmission]):
         self, arguments: CandidateSubmission, context: ToolExecutionContext
     ) -> ToolResult:
         try:
-            current = self.runtime.store.load()
+            current = await self.runtime.store.load()
             project = current.project
             if (
                 not project
@@ -137,19 +142,19 @@ class SubmitCandidateTool(BaseTool[CandidateSubmission]):
                 ):
                     raise ResearchError(f"Unverifiable evidence reference: {key}")
                 self.runtime.store._ensure_scope(current, [key], [])
-                self.runtime.store.read_source(current.sources[evidence.source_id])
+                (await self.runtime.store.read_source(current.sources[evidence.source_id]))
             paths = []
             for value in arguments.output_paths:
                 if Path(value).is_absolute():
                     raise ResearchError("Subagent output_paths must be relative")
-                path = context.resolve_path(value, write=True)
+                path = await context.resolve_path(value, write=True)
                 if not path.is_file():
                     raise ResearchError(f"Subagent output does not exist: {value}")
                 paths.append(str(path.relative_to(self.workspace)))
             self.result = {
                 "summary": arguments.summary,
-                "evidence_refs": list(dict.fromkeys(arguments.evidence_refs)),
-                "output_paths": list(dict.fromkeys(paths)),
+                "evidence_refs": (list(dict.fromkeys(arguments.evidence_refs))),
+                "output_paths": (list(dict.fromkeys(paths))),
             }
             return ToolResult(
                 output="Candidate accepted for main-agent review; no authoritative state was changed."
@@ -171,13 +176,15 @@ SUBAGENT_PROMPT = """你是一个受约束的研究子代理，负责完成一�
 """
 
 
-def _safe_outputs(context: ToolExecutionContext, workspace: Path, output_dir: Path) -> list[str]:
+async def _safe_outputs(
+    context: ToolExecutionContext, workspace: Path, output_dir: Path
+) -> list[str]:
     if not output_dir.exists():
         return []
     paths = []
     for path in output_dir.rglob("*"):
         try:
-            path = context.resolve_path(path, write=True)
+            path = await context.resolve_path(path, write=True)
             if path.is_file():
                 paths.append(str(path.relative_to(workspace)))
         except ResearchError:
@@ -191,7 +198,7 @@ async def dispatch_subagents(
     tasks: list[SubagentTask], context: ToolExecutionContext, retry_dispatch_id: str | None = None
 ) -> DispatchResult:
     DispatchInput(tasks=tasks, retry_dispatch_id=retry_dispatch_id)
-    runtime = context.workspace_runtime()
+    runtime = await context.workspace_runtime()
     if runtime is None:
         raise ResearchError("Dispatch requires an active project workspace")
     if retry_dispatch_id:
@@ -199,8 +206,8 @@ async def dispatch_subagents(
         with lifecycle_lock(previous_dir) as acquired:
             if not acquired:
                 raise ResearchError("Original dispatch is still active")
-            previous = read_batch(previous_dir)
-            memory = runtime.store.load()
+            previous = await read_batch(runtime.store, retry_dispatch_id)
+            memory = await runtime.store.load()
             project = memory.project
             if project is None or previous.get("project_id") != project.id:
                 raise ResearchError("Retry belongs to another project")
@@ -261,12 +268,12 @@ async def _dispatch(
     ):
         raise ResearchError("Recursive subagent dispatch is forbidden")
     query = context.metadata.get("query_context")
-    runtime = context.workspace_runtime()
+    runtime = await context.workspace_runtime()
     if query is None or runtime is None:
         raise ResearchError(
             "Dispatch requires the main query context and an active project workspace"
         )
-    memory = runtime.store.load()
+    memory = await runtime.store.load()
     if (
         memory.project is None
         or memory.project.status != "running"
@@ -275,7 +282,7 @@ async def _dispatch(
         raise ResearchError("Claim a research task before dispatching subagents")
     project = memory.project
     baseline = (project.execution_epoch, project.objective_revision, project.plan_revision)
-    workspace = runtime.resolve_workspace(project.id)
+    workspace = await runtime.resolve_workspace(project.id)
     audit_dir = runtime.store.directory / "dispatches" / dispatch_id
     shared = query.tool_metadata
     if shared is None:
@@ -304,7 +311,7 @@ async def _dispatch(
         "status": "running",
         "tasks": [task.model_dump(mode="json") for task in tasks],
     }
-    atomic_write_text(audit_dir / "batch.json", json.dumps(audit, ensure_ascii=False), mode=0o600)
+    await write_batch(runtime.store, audit)
 
     async def worker(index: int, task: SubagentTask) -> None:
         output_dir = workspace / "subagents" / dispatch_id / task.task_id
@@ -313,7 +320,7 @@ async def _dispatch(
         result: SubagentResult | None = None
         try:
             async with semaphore:
-                output_dir = runtime.resolve_tool_path(project.id, output_dir)
+                output_dir = await runtime.resolve_tool_path(project.id, output_dir)
                 output_dir.mkdir(parents=True, exist_ok=True)
                 registry = ToolRegistry()
                 permitted = {
@@ -380,7 +387,8 @@ async def _dispatch(
                     metadata=metadata,
                     max_calls=max_calls,
                     timeout=timeout,
-                    transcript_path=audit_dir / task.task_id / "messages.json",
+                    # Logical identity only; transcript rows are stored in PostgreSQL.
+                    transcript_path=audit_dir / task.task_id / "transcript",
                     tracker=tracker,
                     account=context.metadata.get("account_subagent_usage"),
                     stop_when=lambda: submission.result is not None,
@@ -404,21 +412,20 @@ async def _dispatch(
                 results[index] = result
                 try:
                     if result.status != "completed" and child_context:
-                        result.output_paths = _safe_outputs(child_context, workspace, output_dir)
-                    atomic_write_text(
-                        audit_dir / task.task_id / "result.json",
-                        json.dumps(
-                            {**result.model_dump(mode="json"), "usage": tracker.total.model_dump()},
-                            ensure_ascii=False,
-                        ),
-                        mode=0o600,
+                        result.output_paths = await _safe_outputs(
+                            child_context, workspace, output_dir
+                        )
+                    await write_result(
+                        runtime.store,
+                        dispatch_id,
+                        {**result.model_dump(mode="json"), "usage": tracker.total.model_dump()},
                     )
                 except (OSError, ResearchError) as exc:
                     result.errors.append(f"Could not persist child audit: {exc}")
                     if result.status != "cancelled":
                         raise
 
-    children = [asyncio.create_task(worker(index, task)) for index, task in enumerate(tasks)]
+    children = [asyncio.create_task((worker(index, task))) for index, task in enumerate(tasks)]
     try:
         outcomes = await asyncio.gather(*children, return_exceptions=True)
         for index, outcome in enumerate(outcomes):
@@ -437,7 +444,7 @@ async def _dispatch(
                     item.status = "failed"
         assert all(item is not None for item in results), "Every settled child must have a result"
         settled = [item for item in results if item is not None]
-        current = runtime.store.load().project
+        current = (await runtime.store.load()).project
         if (
             not current
             or (current.execution_epoch, current.objective_revision, current.plan_revision)
@@ -464,9 +471,7 @@ async def _dispatch(
         await asyncio.gather(*children, return_exceptions=True)
         audit["results"] = [item.model_dump(mode="json") for item in results if item is not None]
         try:
-            atomic_write_text(
-                audit_dir / "batch.json", json.dumps(audit, ensure_ascii=False), mode=0o600
-            )
+            await write_batch(runtime.store, audit)
         except OSError:
             if audit["status"] != "cancelled":
                 raise

@@ -13,8 +13,8 @@ from researchx.config.settings import save_settings, load_settings
 from researchx.engine.messages import ConversationMessage
 from researchx.api.usage import UsageSnapshot
 from researchx.permissions.modes import PermissionMode
-from researchx.services.execution.operations import OperationStore
 from researchx.services.execution.tool_execution import ToolExecutionService
+from researchx.services.execution.operations import OperationStore
 from researchx.services.sessions.storage import save_session_snapshot
 from researchx.skills.loader import load_skills_from_dirs
 from researchx.plugins.loader import discover_plugin_paths, load_plugin
@@ -23,6 +23,10 @@ from researchx.tools.bash_tool import BashTool, BashToolInput
 from researchx.storage.filesystem import atomic_write_text
 from researchx.workspace.session_files import SessionFiles
 from tests.test_harness.test_execution import setup, Write, ledger
+from tests.postgres_helpers import ledger_rows
+from researchx.storage import schema as s
+from researchx.state.store import ResearchStore
+from researchx.services.sessions.storage import load_session_snapshot
 
 
 def mode(path):
@@ -33,58 +37,37 @@ def mode(path):
     os.name != "posix",
     reason="POSIX permission-bit assertions; other platforms document ACL limits",
 )
-def test_private_storage_new_and_existing_modes_do_not_chmod_workspace(tmp_path, monkeypatch):
+async def test_private_storage_new_and_existing_modes_do_not_chmod_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "private-data"))
     monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "private-config"))
     os.chmod(tmp_path, 0o755)
     normal = tmp_path / "user.txt"
     normal.write_text("ordinary workspace")
     os.chmod(normal, 0o644)
-    path = save_session_snapshot(
+    path = (await save_session_snapshot(
         cwd=tmp_path,
         model="test",
         system_prompt="private",
         messages=[ConversationMessage.from_user_text("private conversation")],
         usage=UsageSnapshot(),
         session_id="a" * 12,
-    )
-    assert mode(path) == mode(path.parent / ("session-" + "a" * 12 + ".json")) == 0o600
-    assert mode(path.parent) == mode(tmp_path / "private-data") == 0o700
-    os.chmod(path, 0o666)
-    save_session_snapshot(
-        cwd=tmp_path,
-        model="test",
-        system_prompt="secret",
-        messages=[],
-        usage=UsageSnapshot(),
-        session_id="a" * 12,
-    )
-    assert mode(path) == 0o600
+    ))
+    assert not path.exists()
+    snapshot = await load_session_snapshot(tmp_path)
+    assert snapshot["messages"][0]["role"] == "user"
+    assert not list((tmp_path / "private-data").rglob("session-*.json"))
     save_settings(Settings())
     config = tmp_path / "private-config/settings.json"
     os.chmod(config, 0o666)
     load_settings()
     assert mode(config) == 0o600
-    store = OperationStore(tmp_path / "database/operations.sqlite3")
-    with store.connect() as db:
-        db.execute("BEGIN IMMEDIATE")
-        db.execute(
-            "INSERT INTO api_attempts(attempt_id, request_id, record) VALUES ('audit','req','{}')"
-        )
-        for candidate in (
-            store.path,
-            Path(str(store.path) + "-wal"),
-            Path(str(store.path) + "-shm"),
-        ):
-            assert candidate.exists() and mode(candidate) == 0o600
-        db.rollback()
-    assert mode(store.path.parent) == 0o700
-    files = SessionFiles(tmp_path / "session")
-    uploaded = files.upload("sensitive.txt", b"private attachment")
-    _, directory = files.attachment(uploaded["id"])
+    store = ResearchStore(tmp_path, "a" * 12)
+    files = SessionFiles(store)
+    uploaded = (await files.upload("sensitive.txt", b"private attachment"))
+    _, directory = (await files.attachment(uploaded["id"]))
     assert mode(directory) == mode(files.root) == 0o700
     assert all(mode(p) == 0o600 for p in directory.iterdir() if p.is_file())
-    files.register(normal, task_id=None, status="ready", kind="note")
+    (await files.register(normal, task_id=None, status="ready", kind="note"))
     assert mode(tmp_path) == 0o755 and mode(normal) == 0o644
 
 
@@ -119,9 +102,8 @@ async def test_claim_wait_is_bounded_and_does_not_modify_live_owner(
     assert result.is_error and result.result_metadata["error_code"] == (
         "operation_in_progress" if same_call else "resource_conflict"
     )
-    with ledger(tmp_path).connect() as db:
-        row = db.execute("SELECT status,owner FROM operations WHERE call_id='active'").fetchone()
-        assert row["status"] == "running" and row["owner"] != waiting.owner
+    row = next(row for row in await ledger_rows(ledger(tmp_path), s.tool_operations) if row["call_id"] == "active")
+    assert row["status"] == "running" and row["owner"] != waiting.owner
     assert tool.calls == 1
     active.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -143,8 +125,8 @@ async def test_cancel_waiter_keeps_original_owner_and_never_runs_hooks(tmp_path,
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
-    with ledger(tmp_path).connect() as db:
-        assert db.execute("SELECT status,attempts FROM operations").fetchone()[:] == ("running", 1)
+    row = (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]
+    assert (row["status"], row["attempts"]) == ("running", 1)
     active.cancel()
     with pytest.raises(asyncio.CancelledError):
         await active
@@ -378,7 +360,6 @@ def test_private_file_handles_removed_sqlite_sidecar_without_recreating_it(tmp_p
 
 
 async def test_cancel_propagates_even_if_tool_receipt_database_is_busy(tmp_path, monkeypatch):
-    import sqlite3
 
     tool, context = setup(tmp_path, monkeypatch)
     tool.wait = True
@@ -390,18 +371,18 @@ async def test_cancel_propagates_even_if_tool_receipt_database_is_busy(tmp_path,
     monkeypatch.setattr(
         OperationStore,
         "settle",
-        lambda *a, **kw: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
+        lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("PostgreSQL unavailable")),
     )
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    with ledger(tmp_path).connect() as db:
-        assert db.execute("SELECT status,attempts FROM operations").fetchone()[:] == ("running", 1)
+    row = (await ledger_rows(ledger(tmp_path), s.tool_operations))[0]
+    assert (row["status"], row["attempts"]) == ("running", 1)
     assert tool.calls == 1
 
 
 @pytest.mark.parametrize("case", ["normal", "private", "stale"])
-def test_legacy_export_import_is_host_scoped_and_rejects_private_or_stale_data(
+async def test_legacy_export_import_is_host_scoped_and_rejects_private_or_stale_data(
     tmp_path, monkeypatch, case
 ):
     import json
@@ -410,8 +391,8 @@ def test_legacy_export_import_is_host_scoped_and_rejects_private_or_stale_data(
 
     monkeypatch.setenv("RESEARCHX_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
-    store, evs, _, _ = make_research(tmp_path)
-    memory = store.load()
+    store, evs, _, _ = (await make_research(tmp_path))
+    memory = await store.load()
     baseline = (
         memory.current_context_id,
         memory.research_state.current_plan_id,
@@ -420,20 +401,22 @@ def test_legacy_export_import_is_host_scoped_and_rejects_private_or_stale_data(
     output = tmp_path / "reports/report.md"
     output.parent.mkdir()
     output.write_text("declared output")
-    path = store.path if case == "private" else output
+    private = store.directory / "private.txt"
+    private.write_text("private research state")
+    path = private if case == "private" else output
     if case == "stale":
-        apply(store, "create_plan", title="new scope", tasks=["new task"], reused_evidence_ids=evs)
+        (await apply(store, "create_plan", title="new scope", tasks=["new task"], reused_evidence_ids=evs))
     packet = bytearray(json.dumps({"files": [str(path)], "status": "candidate"}).encode())
     context = ToolExecutionContext(cwd=tmp_path)
     if case == "normal":
-        files = _register_legacy_exports(packet, context, store, baseline)
+        files = await _register_legacy_exports(packet, context, store, baseline)
         assert len(files) == 1 and files[0]["task_id"] == baseline[2]
-        _, saved = SessionFiles(store.directory).artifact(files[0]["id"])
+        _, saved = (await SessionFiles(store).artifact(files[0]["id"]))
         assert saved.read_text() == "declared output"
     else:
         with pytest.raises(ValueError):
-            _register_legacy_exports(packet, context, store, baseline)
-        assert SessionFiles(store.directory).list("artifacts") == []
+            await _register_legacy_exports(packet, context, store, baseline)
+        assert (await SessionFiles(store).list("artifacts")) == []
 
 
 async def test_generated_shell_cannot_choose_a_broader_sandbox_root(tmp_path):

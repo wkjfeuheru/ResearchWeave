@@ -4,6 +4,10 @@ import asyncio
 import json
 import multiprocessing
 import sqlite3
+from uuid import uuid4
+from sqlalchemy import event, select, text, update
+from researchx.storage import schema as s
+from tests.postgres_helpers import ledger_rows
 
 import pytest
 
@@ -184,7 +188,7 @@ async def test_cancel_still_propagates_when_settlement_audit_is_unavailable(tmp_
     monkeypatch.setenv("RESEARCHX_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
         "researchx.api.retry._record",
-        lambda *args: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
+        lambda *args: (_ for _ in ()).throw(ConnectionError("PostgreSQL unavailable")),
     )
     entered = asyncio.Event()
 
@@ -197,7 +201,7 @@ async def test_cancel_still_propagates_when_settlement_audit_is_unavailable(tmp_
         return [
             e
             async for e in stream_with_retry(
-                stream, ApiMessageRequest(model="test", messages=[]), translate=lambda exc: exc
+                stream, ApiMessageRequest(model="test", messages=[], audit_cwd=str(tmp_path)), translate=lambda exc: exc
             )
         ]
 
@@ -206,39 +210,40 @@ async def test_cancel_still_propagates_when_settlement_audit_is_unavailable(tmp_
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    with OperationStore(tmp_path / "data/executions/operations.sqlite3").connect() as db:
-        record = json.loads(db.execute("SELECT record FROM api_attempts").fetchone()[0])
-        assert record["status"] == "running" and record["usage_status"] == "unknown"
+    records = await ledger_rows(OperationStore(tmp_path), s.api_attempts)
+    assert len(records) == 1
+    record = records[0]["record"]
+    assert record["status"] == "running" and record["usage_status"] == "unknown"
 
 
-def test_schema_initialized_once_with_hot_query_indexes(tmp_path, monkeypatch):
+async def test_schema_initialized_once_with_hot_query_indexes(tmp_path, postgres_scope):
     statements = []
-    real = sqlite3.connect
+    def trace(connection, cursor, statement, parameters, context, many):
+        statements.append(statement)
+    event.listen(postgres_scope.engine.sync_engine, "before_cursor_execute", trace)
+    try:
+        first = OperationStore(tmp_path)
+        OperationStore(tmp_path)
+        assert not statements  # Constructors never execute DDL or connect.
+        async with first.database.transaction() as db:
+            await db.execute(text("SET LOCAL enable_seqscan = off"))
+            plan = await db.scalars(text(
+                "EXPLAIN SELECT resources FROM tool_operations WHERE workspace_id=:workspace "
+                "AND scope=:scope AND status IN ('running','uncertain','partial')"
+            ), {"workspace": first.workspace, "scope": "w"})
+            assert any("Index" in row for row in plan)
+            definition = await db.scalar(text("SELECT indexdef FROM pg_indexes WHERE indexname='ix_operations_resources'"))
+            assert "(workspace_id, scope, status)" in definition
+            assert await db.scalar(text("SELECT version_num FROM alembic_version")) == "0003_child_sessions"
+        assert not any("CREATE " in statement for statement in statements)
+    finally:
+        event.remove(postgres_scope.engine.sync_engine, "before_cursor_execute", trace)
 
-    def traced(*args, **kwargs):
-        db = real(*args, **kwargs)
-        db.set_trace_callback(statements.append)
-        return db
 
-    monkeypatch.setattr("researchx.services.execution.operations.sqlite3.connect", traced)
-    path = tmp_path / "private/operations.sqlite3"
-    first = OperationStore(path)
-    statements.clear()
-    OperationStore(path)
-    assert not any("CREATE " in s or "journal_mode" in s or "user_version" in s for s in statements)
-    with first.connect() as db:
-        plan = db.execute(
-            "EXPLAIN QUERY PLAN SELECT resources FROM operations WHERE scope=? AND status IN ('running','uncertain','partial')",
-            ("w",),
-        ).fetchall()
-        assert any("operation_scope_status" in row[3] for row in plan)
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
-
-
-def test_first_initialization_is_safe_across_processes(tmp_path):
+async def test_first_initialization_is_safe_across_processes(tmp_path):
     ctx = multiprocessing.get_context("spawn")
     queue = ctx.Queue()
-    path = tmp_path / "private/operations.sqlite3"
+    path = tmp_path
     workers = [ctx.Process(target=open_store, args=(path, queue)) for _ in range(3)]
     try:
         for worker in workers:
@@ -248,8 +253,7 @@ def test_first_initialization_is_safe_across_processes(tmp_path):
             worker.join(timeout=20)
         assert results == ["ok"] * 3
         assert all(worker.exitcode == 0 for worker in workers)
-        with OperationStore(path).connect() as db:
-            assert db.execute("SELECT count(*) FROM operations").fetchone()[0] == 3
+        assert len(await ledger_rows(OperationStore(path), s.tool_operations)) == 3
     finally:
         for worker in workers:
             if worker.is_alive():
@@ -258,22 +262,31 @@ def test_first_initialization_is_safe_across_processes(tmp_path):
         queue.close()
 
 
-def test_legacy_api_audit_migration_preserves_records(tmp_path):
-    path = tmp_path / "legacy.db"
+async def test_legacy_api_audit_migration_preserves_records(tmp_path, postgres_scope):
+    from researchx.storage.legacy_import import import_legacy
+    root = tmp_path / "legacy"
+    root.mkdir()
+    path = root / "operations.sqlite3"
     record = {"status": "failed", "usage_status": "unknown", "usage": None}
+    identity = uuid4().hex
     with sqlite3.connect(path) as db:
-        db.execute(
-            "CREATE TABLE api_attempts(attempt_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,record TEXT NOT NULL)"
-        )
-        db.execute("INSERT INTO api_attempts VALUES(?,?,?)", ("legacy", "req", json.dumps(record)))
-    store = OperationStore(path)
-    with store.connect() as db:
-        assert json.loads(db.execute("SELECT record FROM api_attempts").fetchone()[0]) == record
-    assert store.prune_audit(before=2, limit=10) == {"api_attempts": 0, "tool_attempts": 0}
+        for name, table in (("runs", s.tool_runs), ("steps", s.tool_steps),
+                            ("operations", s.tool_operations), ("attempts", s.tool_attempts)):
+            db.execute(f"CREATE TABLE {name} (" + ",".join(f"{column.name} TEXT" for column in table.c) + ")")
+        db.execute("CREATE TABLE api_attempts(attempt_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,record TEXT NOT NULL)")
+        db.execute("INSERT INTO api_attempts VALUES(?,?,?)", (identity, "req", json.dumps(record)))
+    before = path.read_bytes()
+    report = await import_legacy(root, [tmp_path], postgres_scope)
+    assert not report["errors"]
+    assert report["counts"]["ledger"]["imported"] == 1
+    store = OperationStore(tmp_path)
+    assert (await ledger_rows(store, s.api_attempts))[0]["record"] == record
+    assert path.read_bytes() == before
+    assert await store.prune_audit(before=2, limit=10) == {"api_attempts": 0, "tool_attempts": 0}
 
 
-def test_audit_retention_is_bounded_and_keeps_unresolved_receipts(tmp_path):
-    store = OperationStore(tmp_path / "private/operations.sqlite3")
+async def test_audit_retention_is_bounded_and_keeps_unresolved_receipts(tmp_path):
+    store = OperationStore(tmp_path)
     for status in (
         "succeeded",
         "failed",
@@ -284,7 +297,7 @@ def test_audit_retention_is_bounded_and_keeps_unresolved_receipts(tmp_path):
         "prepared",
         "blocked",
     ):
-        row = store.prepare(
+        row = (await store.prepare(
             session="s",
             scope=status,
             run=status,
@@ -294,42 +307,39 @@ def test_audit_retention_is_bounded_and_keeps_unresolved_receipts(tmp_path):
             digest="digest",
             effect="external_write",
             resources={"read": [], "write": [status]},
-        )
+        ))
         op = row["operation_id"]
         if status != "prepared":
-            assert store.claim(op, "owner")
+            assert (await store.claim(op, "owner"))
             if status != "running":
-                store.settle(op, status, owner="owner")
+                (await store.settle(op, status, owner="owner"))
     for i in range(3):
-        store.record_api_attempt(
+        (await store.record_api_attempt(
             {
-                "attempt_id": f"api-{i}",
+                "attempt_id": f"{store.workspace}-api-{i}",
                 "request_id": "request",
                 "status": "succeeded",
                 "usage_status": "reported",
                 "finished": 1,
-            }
-        )
-    store.record_api_attempt(
+            }, session="s"
+        ))
+    (await store.record_api_attempt(
         {
-            "attempt_id": "unknown",
+            "attempt_id": f"{store.workspace}-unknown",
             "request_id": "request",
             "status": "failed",
             "usage_status": "unknown",
             "finished": 1,
-        }
-    )
-    with store.transaction() as db:
-        db.execute("UPDATE operations SET updated=1")
-        db.execute("UPDATE attempts SET updated=1")
-    assert store.prune_audit(before=2, limit=2) == {"api_attempts": 2, "tool_attempts": 0}
-    assert store.prune_audit(before=2, limit=100) == {"api_attempts": 1, "tool_attempts": 3}
-    with store.connect() as db:
-        assert db.execute("SELECT count(*) FROM operations").fetchone()[0] == 8
-        assert {row[0] for row in db.execute("SELECT status FROM attempts")} == {
-            "running",
-            "partial",
-            "uncertain",
-            "blocked",
-        }
-        assert db.execute("SELECT attempt_id FROM api_attempts").fetchone()[0] == "unknown"
+        }, session="s"
+    ))
+    async with store.transaction() as db:
+        operations = select(s.tool_operations.c.operation_id).where(s.tool_operations.c.workspace_id == store.workspace)
+        await db.execute(update(s.tool_operations).where(s.tool_operations.c.workspace_id == store.workspace).values(updated=1))
+        await db.execute(update(s.tool_attempts).where(s.tool_attempts.c.operation_id.in_(operations)).values(updated=1))
+    assert await store.prune_audit(before=2, limit=2) == {"api_attempts": 2, "tool_attempts": 0}
+    assert await store.prune_audit(before=2, limit=100) == {"api_attempts": 1, "tool_attempts": 3}
+    assert len(await ledger_rows(store, s.tool_operations)) == 8
+    assert {row["status"] for row in await ledger_rows(store, s.tool_attempts)} == {
+        "running", "partial", "uncertain", "blocked",
+    }
+    assert (await ledger_rows(store, s.api_attempts))[0]["attempt_id"] == f"{store.workspace}-unknown"

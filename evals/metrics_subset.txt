@@ -1,0 +1,32 @@
+# 指标专项子集：用于低成本冒烟与 CI，覆盖五维关键指标。
+# 每类各取：missing_data（缺口声明率）、conflict（推理路径/冲突）、recovery（恢复路径）、
+# 以及一条无标签基线任务；全部为 fixed 环境，评测时不访问外部网络。
+# 由 evals/run_research_eval.sh 读取（MODE=smoke），每行一个 case_id。
+# 生成依据：evals/research_v1/cases.jsonl 的 tags / environment 字段，非人工虚构。
+
+# financial：数值计算 + 缺口 + 冲突
+financial-real-01
+financial-real-05
+financial-real-13
+
+# events：时点窗口 + 缺口 + 冲突
+events-real-01
+events-real-05
+events-real-10
+
+# digest：研报精读 + 缺口 + 冲突
+digest-real-01
+digest-real-05
+digest-real-10
+
+# deep：预测/交付 + 缺口 + 冲突 + 恢复（含证据修订二次轮次）
+deep-real-01
+deep-real-04
+deep-real-10
+deep-syn-15
+
+# cross：跨技能口径 + 缺口 + 冲突 + 恢复
+cross-real-01
+cross-real-02
+cross-real-05
+cross-real-10

@@ -233,22 +233,22 @@ async def test_session_storage():
         usage = UsageSnapshot(input_tokens=500, output_tokens=200)
 
         # Save
-        path = save_session_snapshot(
+        path = (await save_session_snapshot(
             cwd=tmpdir,
             model="test-model",
             system_prompt="Test prompt",
             messages=messages,
             usage=usage,
             session_id="test-session-123",
-        )
+        ))
         print(f"  Saved to: {path}")
 
         # List
-        snapshots = list_session_snapshots(tmpdir)
+        snapshots = (await list_session_snapshots(tmpdir))
         print(f"  Listed: {len(snapshots)} snapshots")
 
         # Load latest
-        loaded = load_session_snapshot(tmpdir)
+        loaded = (await load_session_snapshot(tmpdir))
         print(f"  Loaded: model={loaded.get('model')}, messages={len(loaded.get('messages', []))}")
 
         # Load by ID
@@ -259,7 +259,7 @@ async def test_session_storage():
         print(f"  Exported markdown: {len(md_content)} chars")
 
         assert (
-            path.exists()
+            any(item["session_id"] == path.name for item in snapshots)
             and len(snapshots) >= 1
             and loaded is not None
             and loaded.get("model") == "test-model"
@@ -368,7 +368,7 @@ async def test_mcp_types():
 # ====================================================================
 # 13. Config paths: all path functions return valid paths
 # ====================================================================
-async def test_config_paths():
+async def test_config_paths(monkeypatch, tmp_path):
     """Verify all config path functions return sensible paths."""
     from researchx.config.paths import (
         get_config_dir,
@@ -378,6 +378,9 @@ async def test_config_paths():
         get_sessions_dir,
     )
 
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    for name in ("RESEARCHX_DATA_DIR", "RESEARCHX_CONFIG_DIR", "RESEARCHX_LOGS_DIR"):
+        monkeypatch.delenv(name, raising=False)
     paths = {
         "config_dir": get_config_dir(),
         "config_file": get_config_file_path(),
@@ -388,7 +391,7 @@ async def test_config_paths():
     for name, p in paths.items():
         print(f"  {name}: {p}")
 
-    # All should be under ~/.researchx
+    # This case verifies defaults, independently of the test database content root.
     all_under_home = all(".researchx" in str(p) for p in paths.values())
     assert all_under_home
 

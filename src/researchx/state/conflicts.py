@@ -21,8 +21,6 @@ from researchx.state.models import (
     new_id,
     now,
 )
-from researchx.storage.file_lock import exclusive_file_lock
-from researchx.storage.filesystem import atomic_write_text, private_directory
 
 if TYPE_CHECKING:
     from researchx.state.store import ResearchStore
@@ -53,12 +51,19 @@ class ConflictStoreMixin:
     directory: Path
     lock: Path
     if TYPE_CHECKING:
+        from contextlib import AbstractAsyncContextManager
+        from sqlalchemy.ext.asyncio import AsyncSession
 
-        def _apply(
+        def transaction(self) -> AbstractAsyncContextManager[AsyncSession]: ...
+        async def write_snapshot(self, content: str) -> tuple[str, str]: ...
+
+        async def _apply(
             self, memory: ResearchMemory, operation: ResearchOperation
         ) -> dict[str, object]: ...
-        def _load(self) -> ResearchMemory: ...
-        def _save(self, memory: ResearchMemory, action: str, data: dict[str, object]) -> None: ...
+        async def _load(self) -> ResearchMemory: ...
+        async def _save(
+            self, memory: ResearchMemory, action: str, data: dict[str, object]
+        ) -> None: ...
         @staticmethod
         def _require(ids: list[str], records: Mapping[str, object], label: str) -> None: ...
         @staticmethod
@@ -234,15 +239,15 @@ class ConflictStoreMixin:
 
     def _reopen_record(self, memory: ResearchMemory, conflict: ConflictRecord, reason: str) -> None:
         conflict.status, conflict.review_note, conflict.updated_at = "open", reason, now()
-        self._mark_conflict_review(memory, conflict)
+        (self._mark_conflict_review(memory, conflict))
 
     def _reopen_affected_conflicts(self, memory: ResearchMemory, affected: set[str]) -> None:
         for conflict in memory.conflicts.values():
             inputs, _, _ = self._conflict_inputs(memory, conflict)
             if inputs & affected:
-                self._reopen_record(memory, conflict, "相关证据已修订或撤回，裁决需要复核")
+                (self._reopen_record(memory, conflict, "相关证据已修订或撤回，裁决需要复核"))
 
-    def _apply_conflict(
+    async def _apply_conflict(
         self, memory: ResearchMemory, operation: ResearchOperation
     ) -> dict[str, object] | None:
         if isinstance(operation, AddConflict):
@@ -274,11 +279,11 @@ class ConflictStoreMixin:
                         existing.core = True
                         existing.updated_at = now()
                         if existing.status != "resolved":
-                            self._mark_conflict_review(memory, existing)
+                            (self._mark_conflict_review(memory, existing))
                     return {"conflict_id": existing.id}
             memory.conflicts[conflict.id] = conflict
             if conflict.core:
-                self._mark_conflict_review(memory, conflict)
+                (self._mark_conflict_review(memory, conflict))
             return {"conflict_id": conflict.id}
         if isinstance(operation, ReopenConflict):
             conflict = self._current_conflict(memory, operation.conflict_id)
@@ -286,7 +291,7 @@ class ConflictStoreMixin:
             conflict.additional_evidence_ids = list(
                 dict.fromkeys(conflict.additional_evidence_ids + operation.evidence_ids)
             )
-            self._reopen_record(memory, conflict, operation.reason)
+            (self._reopen_record(memory, conflict, operation.reason))
             return {"conflict_id": conflict.id}
         if isinstance(operation, SubmitConflictReport):
             # The main loop has already collected and registered both sides. Submit only a
@@ -303,8 +308,8 @@ class ConflictStoreMixin:
             self._validate_decision(memory, conflict, operation.report)
             arbitration = ArbitrationRecord(
                 conflict_id=conflict.id,
-                input_fingerprint=self.conflict_fingerprint(memory, conflict),
-                evidence_versions=sorted(self._conflict_inputs(memory, conflict)[0]),
+                input_fingerprint=(self.conflict_fingerprint(memory, conflict)),
+                evidence_versions=sorted((self._conflict_inputs(memory, conflict))[0]),
                 report=operation.report,
                 status="completed",
                 finished_at=now(),
@@ -313,7 +318,7 @@ class ConflictStoreMixin:
             memory.arbitrations[arbitration.id] = arbitration
             conflict.current_arbitration_id = arbitration.id
             conflict.status, conflict.updated_at = "awaiting_review", now()
-            self._mark_conflict_review(memory, conflict)
+            (self._mark_conflict_review(memory, conflict))
             arbitration.review_fingerprint = self.conflict_fingerprint(memory, conflict)
             conflict.last_attempt_fingerprint = arbitration.review_fingerprint
             return {"conflict_id": conflict.id, "arbitration_id": arbitration.id}
@@ -328,7 +333,7 @@ class ConflictStoreMixin:
                 or conflict.status != "awaiting_review"
             ):
                 raise ResearchError("Review the latest completed investigation before resolving")
-            if arbitration.review_fingerprint != self.conflict_fingerprint(memory, conflict):
+            if arbitration.review_fingerprint != (self.conflict_fingerprint(memory, conflict)):
                 raise ResearchError(
                     "Arbitration inputs changed; investigate again before resolving"
                 )
@@ -353,7 +358,7 @@ class ConflictStoreMixin:
             conditions = "；".join(decision.conditions)
             statement = decision.statement + (f"（适用条件：{conditions}）" if conditions else "")
             conflict.status = "unresolved" if decision.outcome == "unresolved" else "resolved"
-            result = self._apply(
+            result = await self._apply(
                 memory,
                 AddConclusion(
                     action="add_conclusion",
@@ -374,18 +379,18 @@ class ConflictStoreMixin:
             conflict.review_note, conflict.updated_at = decision.rationale, now()
             output = memory.conclusions[str(result["conclusion_id"])]
             output_needs_review = output.needs_review
-            self._mark_conflict_review(memory, conflict)
+            (self._mark_conflict_review(memory, conflict))
             output.needs_review = output_needs_review or decision.outcome == "unresolved"
             # Account for the new conclusion in the no-repeat key.
             conflict.last_attempt_fingerprint = self.conflict_fingerprint(memory, conflict)
             return {"conflict_id": conflict.id, "arbitration_id": arbitration.id, **result}
         return None
 
-    def begin_investigation(
+    async def begin_investigation(
         self, conflict_id: str, *, retry: bool = False
     ) -> tuple[ArbitrationRecord, ResearchMemory]:
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+        async with self.transaction():
+            memory = await self._load()
             conflict = self._current_conflict(memory, conflict_id)
             if any(item.status == "running" for item in memory.arbitrations.values()):
                 raise ResearchError("Only one investigation may run in this session")
@@ -404,15 +409,15 @@ class ConflictStoreMixin:
             conflict.current_arbitration_id = arbitration.id
             conflict.last_attempt_fingerprint = fingerprint
             conflict.status, conflict.updated_at = "investigating", now()
-            self._mark_conflict_review(memory, conflict)
-            self._save(
+            (self._mark_conflict_review(memory, conflict))
+            await self._save(
                 memory,
                 "begin_investigation",
                 {"conflict_id": conflict.id, "arbitration_id": arbitration.id},
             )
             return arbitration, memory
 
-    def finish_investigation(
+    async def finish_investigation(
         self,
         arbitration_id: str,
         *,
@@ -424,9 +429,9 @@ class ConflictStoreMixin:
         usage: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Import complete records atomically; never merge results into a changed scope."""
-        stage_memory = staging.load() if staging else None
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+        stage_memory = (await staging.load()) if staging else None
+        async with self.transaction():
+            memory = await self._load()
             self._require([arbitration_id], memory.arbitrations, "arbitration")
             arbitration = memory.arbitrations[arbitration_id]
             if arbitration.status != "running":
@@ -436,7 +441,7 @@ class ConflictStoreMixin:
                 conflict.plan_id == memory.research_state.current_plan_id
                 and conflict.context_id == memory.current_context_id
                 and not memory.research_state.replan_required
-                and arbitration.input_fingerprint == self.conflict_fingerprint(memory, conflict)
+                and arbitration.input_fingerprint == (self.conflict_fingerprint(memory, conflict))
             )
             if memory.project and baseline and baseline.project:
                 current = current and (
@@ -474,18 +479,9 @@ class ConflictStoreMixin:
                         fields["task_id"] = memory.research_state.current_task_id
                         if bucket == "sources":
                             fields["origin_id"] = f"{arbitration.id}:{fields['origin_id']}"
-                            snapshot = self.directory / record.snapshot
                             assert staging is not None
-                            content = staging.read_source(record)
-                            if snapshot.exists():
-                                if (
-                                    hashlib.sha256(snapshot.read_bytes()).hexdigest()
-                                    != record.content_hash
-                                ):
-                                    raise ResearchError("资料快照校验失败；原文件已保留")
-                            else:
-                                private_directory(snapshot.parent)
-                                atomic_write_text(snapshot, content, mode=0o600)
+                            content = await staging.read_source(record)
+                            await self.write_snapshot(content)
                         if (
                             bucket == "evidence_pool"
                             and record.supersedes
@@ -510,19 +506,19 @@ class ConflictStoreMixin:
                 )
                 conflict.review_note, conflict.updated_at = note, now()
             elif conflict.status == "investigating":
-                self._reopen_record(memory, conflict, note)
+                (self._reopen_record(memory, conflict, note))
             if current:
                 arbitration.review_fingerprint = self.conflict_fingerprint(memory, conflict)
                 conflict.last_attempt_fingerprint = arbitration.review_fingerprint
-            self._save(
+            await self._save(
                 memory, "finish_investigation", {"arbitration_id": arbitration.id, "status": status}
             )
             return arbitration.model_dump(mode="json")
 
-    def recover_investigations(self) -> None:
+    async def recover_investigations(self) -> None:
         """Only call when the host has established that this session has no live run."""
-        with exclusive_file_lock(self.lock):
-            memory = self._load()
+        async with self.transaction():
+            memory = await self._load()
             changed = False
             for arbitration in memory.arbitrations.values():
                 if arbitration.status == "running":
@@ -530,7 +526,7 @@ class ConflictStoreMixin:
                     arbitration.note = "执行已中断，可按需重新核查"
                     conflict = memory.conflicts[arbitration.conflict_id]
                     conflict.status, conflict.review_note = "interrupted", arbitration.note
-                    self._mark_conflict_review(memory, conflict)
+                    (self._mark_conflict_review(memory, conflict))
                     changed = True
             if changed:
-                self._save(memory, "recover_investigations", {})
+                await self._save(memory, "recover_investigations", {})

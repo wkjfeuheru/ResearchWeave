@@ -9,7 +9,7 @@ from pydantic import Field
 
 from researchx.state.models import PlanProposal, Record
 from researchx.tools.base import BaseTool, ToolResult
-from researchx.research.planning_support import generate_plan, planning_packet
+from researchx.engine.planning_support import generate_plan, planning_packet
 
 
 class PlannerInput(Record):
@@ -17,7 +17,7 @@ class PlannerInput(Record):
 
 
 async def planner_tool(objective: str, context: ToolExecutionContext) -> dict[str, object]:
-    packet = planning_packet(context)
+    packet = await planning_packet(context)
     packet["focus"] = objective
     return await generate_plan(PlanProposal, packet, context, kind="planner")
 

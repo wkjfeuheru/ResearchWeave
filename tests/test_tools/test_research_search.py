@@ -14,9 +14,9 @@ from researchx.config.settings import (
     load_settings,
     save_settings,
 )
-from researchx.research import sites as research_sites
+from researchx.config import sites as research_sites
 from researchx.tools.base import ToolExecutionContext
-from researchx.research.sites import classify_source, get_research_sites
+from researchx.config.sites import classify_source, get_research_sites
 from researchx.tools.web_fetch_tool import WebFetchTool, WebFetchToolInput
 from researchx.tools.web_search_tool import WebSearchTool, WebSearchToolInput
 

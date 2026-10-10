@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Iterable, Iterator
+from typing import Protocol, Iterable, AsyncIterator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast, Generic, TypeVar
 from typing import TYPE_CHECKING
@@ -50,12 +50,12 @@ class ToolExecutionContext:
             )
         )
 
-    def workspace_runtime(self) -> ResearchAgentRuntime | None:
+    async def workspace_runtime(self) -> ResearchAgentRuntime | None:
         runtime = self.metadata.get("research_workspace_runtime") or self.metadata.get(
             "research_runtime"
         )
         store = self.metadata.get("research_store")
-        if runtime is None and store is not None and store.load().project is not None:
+        if runtime is None and store is not None and (await store.load()).project is not None:
             from researchx.state.runtime import ResearchAgentRuntime
 
             runtime = ResearchAgentRuntime(
@@ -66,10 +66,12 @@ class ToolExecutionContext:
                 ),
             )
             self.metadata["research_runtime"] = runtime
-        return runtime if runtime and runtime.store.load().project is not None else None
+        return runtime if runtime and (await runtime.store.load()).project is not None else None
 
-    def resolve_path(self, candidate: str | Path | None = None, *, write: bool = False) -> Path:
-        runtime = self.workspace_runtime()
+    async def resolve_path(
+        self, candidate: str | Path | None = None, *, write: bool = False
+    ) -> Path:
+        runtime = await self.workspace_runtime()
         output_dir = self.metadata.get("subagent_output_dir")
         if output_dir:
             from researchx.state.errors import ResearchError
@@ -88,53 +90,58 @@ class ToolExecutionContext:
                 raise ResearchError("Other subagent output directories are not authorized")
             return path
         if runtime:
-            return runtime.resolve_tool_path(
-                runtime.repository._project(runtime.store.load()).id, candidate or "."
+            return await runtime.resolve_tool_path(
+                runtime.repository._project((await runtime.store.load())).id, candidate or "."
             )
         path = Path(candidate or ".").expanduser()
         return (path if path.is_absolute() else self.cwd / path).resolve()
 
-    def validate_search_pattern(self, pattern: str) -> None:
-        if self.workspace_runtime() and ".." in Path(pattern).parts:
+    async def validate_search_pattern(self, pattern: str) -> None:
+        if (await self.workspace_runtime()) and ".." in Path(pattern).parts:
             from researchx.state.errors import ResearchError
 
             raise ResearchError("Workspace search path traversal is forbidden")
 
-    def safe_search_paths(self, paths: Iterable[Path]) -> Iterator[Path]:
+    async def safe_search_paths(self, paths: Iterable[Path]) -> list[Path]:
         from researchx.state.errors import ResearchError
 
-        runtime = self.workspace_runtime()
+        runtime = await self.workspace_runtime()
         root = (
-            runtime.resolve_workspace(runtime.repository._project(runtime.store.load()).id)
+            (
+                await runtime.resolve_workspace(
+                    runtime.repository._project((await runtime.store.load())).id
+                )
+            )
             if runtime
             else None
         )
+        safe = []
         for path in paths:
             try:
                 if self.metadata.get("subagent_output_dir"):
-                    self.resolve_path(path)
+                    (await self.resolve_path(path))
                 elif runtime and root is not None:
                     runtime._check_path(root, path)
             except ResearchError:
                 continue
-            yield path
+            safe.append(path)
+        return safe
 
-    @contextmanager
-    def file_lock(self, candidate: str | Path, *, write: bool = False) -> Iterator[Path]:
+    @asynccontextmanager
+    async def file_lock(self, candidate: str | Path, *, write: bool = False) -> AsyncIterator[Path]:
         """Use the existing process lock for workspace read-modify-write operations."""
-        runtime = self.workspace_runtime()
+        runtime = await self.workspace_runtime()
         if self.metadata.get("subagent_output_dir"):
-            candidate = self.resolve_path(candidate, write=write)
+            candidate = await self.resolve_path(candidate, write=write)
         if runtime:
-            project_id = runtime.repository._project(runtime.store.load()).id
-            with runtime.workspace_file_lock(project_id, candidate) as path:
+            project_id = runtime.repository._project((await runtime.store.load())).id
+            async with runtime.workspace_file_lock(project_id, candidate) as path:
                 if write:
                     from researchx.state.errors import ResearchError
-                    from researchx.storage.file_lock import exclusive_file_lock
 
                     # The state lock orders a write against interruption/lease revocation.
-                    with exclusive_file_lock(runtime.store.lock):
-                        current = runtime.store._load()
+                    async with runtime.store.transaction():
+                        current = await runtime.store._load()
                         project = runtime.repository._project(current)
                         execution = self.metadata.get("research_execution")
                         if project.status not in {"planning", "replanning", "running"}:
@@ -165,7 +172,7 @@ class ToolExecutionContext:
                 else:
                     yield path
         else:
-            yield self.resolve_path(candidate, write=write)
+            yield (await self.resolve_path(candidate, write=write))
 
 
 @dataclass(frozen=True)

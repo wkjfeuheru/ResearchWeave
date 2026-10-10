@@ -119,7 +119,7 @@ def _convert_messages_to_codex(messages: list[ConversationMessage]) -> list[dict
             continue
 
         assistant_text = "".join(
-            block.text for block in msg.api_content() if isinstance(block, TextBlock)
+            block.text for block in (msg.api_content()) if isinstance(block, TextBlock)
         )
         if assistant_text:
             result.append(
@@ -264,7 +264,7 @@ class CodexApiClient:
             "store": False,
             "stream": True,
             "instructions": request.system_prompt or "你是 ResearchX。",
-            "input": _convert_messages_to_codex(request.messages),
+            "input": (_convert_messages_to_codex(request.messages)),
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
             "tool_choice": "auto",
@@ -280,7 +280,7 @@ class CodexApiClient:
 
     async def _stream_once(self, request: ApiMessageRequest) -> AsyncIterator[ApiStreamEvent]:
         body = (
-            request if request.prepared_payload is not None else self.prepare_request(request)
+            request if request.prepared_payload is not None else (self.prepare_request(request))
         ).prepared_payload
         content: list[TextBlock | ToolUseBlock] = []
         current_text_parts: list[str] = []

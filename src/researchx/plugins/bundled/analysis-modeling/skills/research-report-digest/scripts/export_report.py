@@ -12,7 +12,7 @@ if not __package__:
     __package__ = script_package(__file__)
 
 from .models import DigestResult
-from researchx.research.exports import (
+from researchx.workspace.exports import (
     ReportContext,
     display,
     export_result as write_exports,

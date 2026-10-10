@@ -94,7 +94,7 @@ class SessionController:
         async with self.command_lock:
             if self.channel.detached.is_set() or not self.ready:
                 raise HTTPException(409, "请先连接会话事件流并等待 ready")
-            record = self.workspace.record(self.session_id)
+            record = await self.workspace.record(self.session_id)
             fingerprint = hashlib.sha256(request.model_dump_json().encode()).hexdigest()
             accepted = self.workspace.command_ids.setdefault(self.session_id, {})
             if request.type in {"submit", "steer"} and request.request_id in accepted:
@@ -127,9 +127,11 @@ class SessionController:
                     raise HTTPException(409, "另一个会话正在生成，请等待完成或先停止它")
                 if request.attachment_ids:
                     try:
-                        SessionFiles(
-                            ResearchStore(self.workspace.cwd, self.session_id).directory
-                        ).describe(list(dict.fromkeys(request.attachment_ids)))
+                        (
+                            await SessionFiles(
+                                ResearchStore(self.workspace.cwd, self.session_id)
+                            ).describe((list(dict.fromkeys(request.attachment_ids))))
+                        )
                     except (ValueError, FileNotFoundError):
                         raise HTTPException(404, "附件不存在或不属于当前会话") from None
                 profile_settings(request.profile_id or record["profile_id"])
@@ -137,7 +139,7 @@ class SessionController:
                 self.request_id = request.request_id
                 self.run_entered = False
                 self.cancel_requested = False
-                self.task = asyncio.create_task(self.run(request))
+                self.task = asyncio.create_task((self.run(request)))
             elif request.type == "steer":
                 if not self.busy or request.target_request_id != self.request_id:
                     raise HTTPException(409, "当前执行已结束或目标请求不匹配")
@@ -146,17 +148,19 @@ class SessionController:
                 if request.request_id == self.request_id:
                     raise HTTPException(409, "修改要求需要新的请求 ID")
                 try:
-                    ResearchStore(self.workspace.cwd, self.session_id).interrupt(
-                        request_id=request.request_id,
-                        target_request_id=self.request_id,
-                        text=request.text.strip(),
+                    (
+                        await ResearchStore(self.workspace.cwd, self.session_id).interrupt(
+                            request_id=request.request_id,
+                            target_request_id=self.request_id,
+                            text=request.text.strip(),
+                        )
                     )
                 except ResearchError as exc:
                     raise HTTPException(409, self.redactor.clean(str(exc))) from None
                 except OSError:
                     raise HTTPException(500, "无法保存修改要求，请检查本地存储") from None
                 ack["next_request_id"] = request.request_id
-                self.control_task = asyncio.create_task(self.steer(request))
+                self.control_task = asyncio.create_task((self.steer(request)))
             elif request.type == "cancel":
                 if request.request_id != self.request_id:
                     raise HTTPException(409, "目标请求已过期")
@@ -165,7 +169,7 @@ class SessionController:
                     previous_control = self.control_task
                     if previous_control and not previous_control.done():
                         previous_control.cancel()
-                    self.control_task = asyncio.create_task(self.stop_after(previous_control))
+                    self.control_task = asyncio.create_task((self.stop_after(previous_control)))
             else:
                 if not self.respond(request.request_id, request.prompt_id or "", request.answer):
                     raise HTTPException(409, "确认提示已过期或不属于当前请求")
@@ -241,20 +245,20 @@ class SessionController:
         approvals = self.bundle.engine.tool_metadata.get("session_approvals", {})
         return value in approvals.get(scope, [])
 
-    def grant_session_approval(self, grant: tuple[str, str]) -> None:
+    async def grant_session_approval(self, grant: tuple[str, str]) -> None:
         if self.bundle is None:
             raise RuntimeError("No active execution to approve")
         scope, value = grant
         current = self.bundle.engine.tool_metadata.get("session_approvals", {})
-        approvals = {key: list(items) for key, items in current.items()}
+        approvals = {key: (list(items)) for key, items in current.items()}
         values = approvals.setdefault(scope, [])
         if value not in values:
             values.append(value)
         # Commit to this conversation before allowing the operation to run.
         # Do not mutate global settings or another conversation's permissions.
-        record = self.workspace.record(self.session_id)
+        record = await self.workspace.record(self.session_id)
         record["tool_metadata"]["session_approvals"] = approvals
-        self.workspace.store.write(record)
+        (await self.workspace.store.write(record))
         self.bundle.engine.tool_metadata["session_approvals"] = approvals
 
     async def ask(
@@ -276,7 +280,7 @@ class SessionController:
                     await self.emit("prompt", kind=kind, prompt_id=prompt_id, **payload)
                     answer = await future
                     if answer == "allow_session" and session_grant:
-                        self.grant_session_approval(session_grant)
+                        (await self.grant_session_approval(session_grant))
                         return "allow"
                     return answer
                 finally:
@@ -411,16 +415,16 @@ class SessionController:
                 raise HTTPException(409, "另一个会话正在生成，请等待完成或先停止它")
             await self.workspace.lock.acquire()
             locked = True
-            record = self.workspace.record(self.session_id)
+            record = await self.workspace.record(self.session_id)
             if self.session_id in self.workspace.file_operations:
                 raise HTTPException(409, "请等待附件解析完成，再提交消息")
             user_text = request.text.strip()
             if request.attachment_ids:
                 try:
-                    files = SessionFiles(
-                        ResearchStore(self.workspace.cwd, self.session_id).directory
+                    files = SessionFiles(ResearchStore(self.workspace.cwd, self.session_id))
+                    description = await files.describe(
+                        (list(dict.fromkeys(request.attachment_ids)))
                     )
-                    description = files.describe(list(dict.fromkeys(request.attachment_ids)))
                 except (ValueError, FileNotFoundError):
                     raise HTTPException(404, "附件不存在或不属于当前会话") from None
                 user_text += (
@@ -429,7 +433,7 @@ class SessionController:
             profile_id = request.profile_id or record["profile_id"]
             settings = profile_settings(profile_id)
             try:
-                settings.resolve_auth()
+                (settings.resolve_auth())
             except ValueError:
                 raise HTTPException(
                     400, "当前模型未配置凭据，请先配置 API Key 或通过 CLI 登录订阅"
@@ -442,7 +446,7 @@ class SessionController:
             ):
                 self.row("user", request.text.strip(), id=request.request_id)
             record["profile_id"] = profile_id
-            self.workspace.store.write(record)
+            (await self.workspace.store.write(record))
             await self.emit("started", profile_id=profile_id, model=settings.model)
             self.bundle = await build_runtime(
                 cwd=self.workspace.cwd,
@@ -485,7 +489,7 @@ class SessionController:
                 if self.bundle is not None:
                     store = self.bundle.engine.tool_metadata.get("research_store")
                     if (cancelled or self.failed) and store is not None:
-                        store.stopped()
+                        (await store.stopped())
                     if self.partial:
                         self.row("assistant", self.partial, id=self.partial_id, phase="progress")
                         messages = sanitize_conversation_messages(self.bundle.engine.messages)
@@ -495,15 +499,17 @@ class SessionController:
                                 content=[TextBlock(text=self.partial)],
                             )
                         )
-                        self.bundle.engine.load_messages(messages)
-                    self.workspace.store.save_snapshot(
-                        cwd=self.workspace.cwd,
-                        session_id=self.session_id,
-                        model=self.bundle.engine.model,
-                        system_prompt=self.bundle.engine.system_prompt,
-                        messages=self.bundle.engine.messages,
-                        usage=self.bundle.engine.total_usage,
-                        tool_metadata=self.bundle.engine.tool_metadata,
+                        (await self.bundle.engine.load_messages(messages))
+                    (
+                        await self.workspace.store.save_snapshot(
+                            cwd=self.workspace.cwd,
+                            session_id=self.session_id,
+                            model=self.bundle.engine.model,
+                            system_prompt=self.bundle.engine.system_prompt,
+                            messages=self.bundle.engine.messages,
+                            usage=self.bundle.engine.total_usage,
+                            tool_metadata=self.bundle.engine.tool_metadata,
+                        )
                     )
                     await close_runtime(self.bundle)
             finally:
@@ -522,12 +528,12 @@ class SessionController:
                                 if not cancelled and not self.failed and row is candidates[-1]
                                 else "progress"
                             )
-                    record = self.workspace.record(self.session_id)
+                    record = await self.workspace.record(self.session_id)
                     record["display_messages"] = self.rows
                     record["summary"] = next(
                         (r["text"][:60] for r in self.rows if r["role"] == "user"), "新对话"
                     )
-                    self.workspace.store.write(record)
+                    (await self.workspace.store.write(record))
                 self.bundle = None
                 if locked:
                     self.workspace.lock.release()
@@ -539,7 +545,7 @@ class SessionController:
                     "done",
                     cancelled=cancelled,
                     failed=self.failed,
-                    session=session_view(self.workspace.record(self.session_id)),
+                    session=session_view((await self.workspace.record(self.session_id))),
                 )
 
     def clear_prompts(self) -> None:
@@ -597,10 +603,10 @@ class SessionController:
             self.row(
                 "user", request.text.strip(), id=request.request_id, turn_id=request.request_id
             )
-            record = self.workspace.record(self.session_id)
+            record = await self.workspace.record(self.session_id)
             if self.rows is not None:
                 record["display_messages"] = self.rows
-                self.workspace.store.write(record)
+                (await self.workspace.store.write(record))
             self.steer_ids.add(request.request_id)
             self.steer_targets[request.request_id] = self.request_id
             await self.emit("steer_accepted", next_request_id=request.request_id)
@@ -608,20 +614,20 @@ class SessionController:
             if self.channel.detached.is_set():
                 return
             self.request_id = request.request_id
-            store.require_replan(request.request_id)
+            (await store.require_replan(request.request_id))
             self.run_entered = False
             self.cancel_requested = False
-            self.task = asyncio.create_task(self.run(request))
+            self.task = asyncio.create_task((self.run(request)))
         except (ResearchError, OSError) as exc:
             await self.stop()
             self.request_id = request.request_id
             for row in self.rows or []:
                 if row.get("turn_id") == request.request_id:
                     row["turn_status"] = "failed"
-            record = self.workspace.record(self.session_id)
+            record = await self.workspace.record(self.session_id)
             if self.rows is not None:
                 record["display_messages"] = self.rows
-                self.workspace.store.write(record)
+                (await self.workspace.store.write(record))
             await self.emit(
                 "error",
                 message="无法保存重规划状态，请检查本地存储"

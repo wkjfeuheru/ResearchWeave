@@ -25,6 +25,12 @@ from researchx.web.storage import WebSessionBackend
 
 
 async def run(profile: str, workspace: Path) -> None:
+    from researchx.storage.database import database_lifespan
+    async with database_lifespan():
+        await _run(profile, workspace)
+
+
+async def _run(profile: str, workspace: Path) -> None:
     if not workspace.is_dir():
         raise ValueError("An existing disposable workspace is required")
     os.environ["RESEARCHX_DATA_DIR"] = mkdtemp(prefix="oh-research-smoke-data-")
@@ -34,7 +40,7 @@ async def run(profile: str, workspace: Path) -> None:
         encoding="utf-8",
     )
     backend = WebSessionBackend(str(workspace))
-    session = backend.create(profile)
+    session = (await backend.create(profile))
     bundle = None
     calls: list[str] = []
     errors: list[str] = []
@@ -51,7 +57,7 @@ async def run(profile: str, workspace: Path) -> None:
                 "不要重新读取文件。答案带已有证据标记，保留虚构资料和未核验限制。",
             ]
         ):
-            record = backend.load_by_id(workspace, session["session_id"])
+            record = (await backend.load_by_id(workspace, session["session_id"]))
             bundle = await build_runtime(
                 cwd=str(workspace),
                 active_profile=profile,
@@ -90,7 +96,7 @@ async def run(profile: str, workspace: Path) -> None:
                         raise RuntimeError("Provider returned an error event")
                     elif isinstance(event, AssistantTurnComplete) and not event.message.tool_uses:
                         replies.append(event.message.text)
-            memory = bundle.engine.tool_metadata["research_store"].load()
+            memory = await bundle.engine.tool_metadata["research_store"].load()
             assert memory.current_context_id and memory.research_state.current_plan_id
             assert memory.evidence_pool and memory.reasoning_chain and memory.conclusions
             assert "research_memory" in turn_tools
@@ -102,7 +108,7 @@ async def run(profile: str, workspace: Path) -> None:
             assert progress["completed"] == progress["total"] == 2
             assert "来源：" in replies[-1] and "research-report.txt" in replies[-1]
             assert all(claim.status != "verified" for claim in memory.conclusions.values())
-            backend.save_snapshot(
+            (await backend.save_snapshot(
                 cwd=workspace,
                 session_id=session["session_id"],
                 model=bundle.engine.model,
@@ -110,7 +116,7 @@ async def run(profile: str, workspace: Path) -> None:
                 messages=bundle.engine.messages,
                 usage=bundle.engine.total_usage,
                 tool_metadata=bundle.engine.tool_metadata,
-            )
+            ))
             print(
                 json.dumps(
                     {
