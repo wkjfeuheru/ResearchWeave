@@ -31,6 +31,7 @@ class FileWriteTool(BaseTool[FileWriteToolInput]):
 
     name = "write_file"
     contract = {
+        "parallelism": "resources",
         "name": "write_file",
         "source": "builtin",
         "effect": "local_write",

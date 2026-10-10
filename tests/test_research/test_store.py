@@ -610,6 +610,14 @@ async def test_revision_history_cycle_and_missing_plan_are_corruption(store):
         (await store.load())
 
 
+async def test_prompt_snapshot_rejects_foreign_session_view(store):
+    memory = await store.load()
+    foreign = memory.model_copy(update={"session_id": memory.session_id + "_other"})
+    with pytest.raises(ResearchError, match="another session"):
+        await store.prompt_snapshot(memory=foreign)
+    assert (await store.load()).model_dump() == memory.model_dump()
+
+
 async def test_prompt_snapshot_separates_memory_from_plan_and_selects_whole_records(store):
     (await plan(store))
     ev = (await evidence(store, text="完整证据记录" * 2000))

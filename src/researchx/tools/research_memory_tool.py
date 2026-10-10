@@ -153,3 +153,13 @@ class ResearchMemoryTool(BaseTool[ResearchMemoryInput]):
     def is_read_only(self, arguments: ResearchMemoryInput) -> bool:
         # Session bookkeeping is authorized by the research runtime; it cannot write arbitrary files.
         return True
+
+    def execution_contract(self, arguments: ResearchMemoryInput | None = None) -> object:
+        if arguments is not None and arguments.operation.action == "read":
+            return {
+                **self.contract,
+                "effect": "read_only",
+                "resources_write": (),
+                "resources_read": ("research.control",),
+            }
+        return self.contract

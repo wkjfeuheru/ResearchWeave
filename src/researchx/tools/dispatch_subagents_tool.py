@@ -77,6 +77,21 @@ class ReadOnlyResearchMemoryTool(BaseTool[ReadOnlyMemoryInput]):
     name = "research_memory"
     description = "读取获授权的研究证据、论证和来源快照。不能执行任何修改。"
     input_model = ReadOnlyMemoryInput
+    validation_error_code = "subagent_authority_denied"
+    contract = {
+        "name": "research_memory",
+        "source": "builtin",
+        "effect": "read_only",
+        "resources_read": ("research.control",),
+        "parallelism": "resources",
+    }
+
+    def validation_error_message(self, error: Exception) -> str:
+        return (
+            '子代理的 research_memory 仅接受 {"operation":{"action":"read"}}。'
+            "禁止 update_task、修改计划或写入权威状态。不要重试该修改；"
+            "将进展和待办写到自己的候选文件，并调用 submit_subagent_result。"
+        )
 
     def __init__(self, store: ResearchStore) -> None:
         self.store = store
@@ -131,7 +146,11 @@ class SubmitCandidateTool(BaseTool[CandidateSubmission]):
                 or (project.execution_epoch, project.objective_revision, project.plan_revision)
                 != self.baseline
             ):
-                raise ResearchError("Parent research scope changed; this candidate is revoked")
+                return ToolResult(
+                    output="主代理已修改研究范围，本子任务已撤销。停止执行，保留候选文件供审查。",
+                    is_error=True,
+                    error_code="parent_scope_changed",
+                )
             for key in arguments.evidence_refs:
                 evidence = current.evidence_pool.get(key)
                 if (
@@ -171,6 +190,7 @@ SUBAGENT_PROMPT = """你是一个受约束的研究子代理，负责完成一�
 只能在自己的输出目录写入或编辑；不要修改主代理的 MEMORY.md、计划、任务或证据。
 不能执行 Shell、调用 planner/replanner、递归派发或修改权威状态。
 读取 research_memory 检查已有证据 ID 和来源链；绝不编造 ID。
+research_memory 只接受 operation.action=read；不能调用 update_task。被拒绝后不要换 ID 重试。
 新收集的信息只能作为候选发现，并在摘要或文件中写明来源位置和核验缺口。
 结束前调用 submit_subagent_result，提交简洁摘要、已有 evidence_refs 和真实的相对 output_paths。
 """

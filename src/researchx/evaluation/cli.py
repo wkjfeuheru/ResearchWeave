@@ -121,6 +121,11 @@ def run(
     rules_only: bool = typer.Option(False),
     context_window_tokens: int | None = typer.Option(None, min=1024),
     judge_context_window_tokens: int | None = typer.Option(None, min=1024),
+    max_model_calls: int | None = typer.Option(
+        None, min=1, help="覆盖每条任务的模型调用上限（即轮次），用于长任务"
+    ),
+    timeout_seconds: int | None = typer.Option(None, min=1, help="覆盖每条任务的超时秒数"),
+    total_tokens: int | None = typer.Option(None, min=1, help="覆盖每条任务的 token 预算"),
     resume: Path | None = typer.Option(None),
 ) -> None:
     from researchx.evaluation.runner import ExperimentRunner
@@ -128,6 +133,16 @@ def run(
 
     if not judge_profile and not rules_only:
         raise typer.BadParameter("请指定 --judge-profile，或显式使用 --rules-only 保留语义项未判定")
+    # 预算覆盖只在执行期生效，不改动冻结数据集，因此 dataset_version 与归档重评分不受影响。
+    budget_overrides = {
+        key: value
+        for key, value in (
+            ("model_calls", max_model_calls),
+            ("timeout_seconds", timeout_seconds),
+            ("total_tokens", total_tokens),
+        )
+        if value is not None
+    }
     checked = validate_dataset(dataset)
     if not checked["valid"]:
         raise typer.BadParameter("数据集校验失败，请运行 oh eval validate")
@@ -153,6 +168,7 @@ def run(
             judge_profile=judge_profile if not rules_only else None,
             context_window_tokens=context_window_tokens,
             judge_context_window_tokens=judge_context_window_tokens,
+            budget_overrides=budget_overrides or None,
         )
         from researchx.evaluation.report import read_results
         from researchx.storage.filesystem import atomic_write_text
@@ -169,6 +185,7 @@ def run(
             "repetitions": repetitions,
             "context_window_tokens": context_window_tokens,
             "judge_context_window_tokens": judge_context_window_tokens,
+            "budget_overrides": budget_overrides,
         }
         if resume:
             existing = json.loads(manifest_path.read_text())
@@ -232,7 +249,7 @@ def score(
     dataset: Path | None = typer.Option(None),
     judge_context_window_tokens: int | None = typer.Option(None, min=1024),
 ) -> None:
-    from researchx.evaluation.judge import judge_case, JudgeOutputError
+    from researchx.evaluation.judge import judge_with_retry, JudgeOutputError
     from researchx.evaluation.report import read_results, write_report
     from researchx.evaluation.runner import resolve_profile, write_artifact
     from researchx.evaluation.scoring import score_case
@@ -270,14 +287,14 @@ def score(
                 try:
                     client = _resolve_api_client_from_settings(settings)
                     judgment = await asyncio.wait_for(
-                        judge_case(
+                        judge_with_retry(
                             cases[artifact.case_id],
                             artifact,
                             client,
                             settings.model,
                             context_window_tokens=settings.context_window_tokens,
                         ),
-                        timeout=300,
+                        timeout=900,
                     )
                     artifact.judge_results = judgment.model_dump()
                     artifact.scores = score_case(cases[artifact.case_id], artifact, judgment)

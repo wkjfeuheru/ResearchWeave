@@ -8,10 +8,43 @@ from researchx.api.client import ApiMessageCompleteEvent
 from researchx.api.usage import UsageSnapshot
 from researchx.config import Settings
 from researchx.engine.messages import ConversationMessage, TextBlock, ToolUseBlock
-from researchx.evaluation.dataset import load_cases, DEFAULT_DATASET
+from researchx.evaluation.dataset import load_cases, DEFAULT_DATASET, dataset_version
 from researchx.evaluation.report import read_results
 from researchx.evaluation.runner import ExperimentRunner
 from researchx.evaluation.models import Turn
+
+
+@pytest.mark.asyncio
+async def test_budget_override_grants_turns_without_changing_dataset_version(
+    tmp_path, monkeypatch
+):
+    """长任务可用执行期预算覆盖拿到更多轮次，且不破坏归档数据的可重评分性。"""
+    from researchx.evaluation import runner
+
+    settings = Settings()
+    settings.context_window_tokens = 200000
+    monkeypatch.setattr(runner, "resolve_profile", lambda _: settings)
+    monkeypatch.setattr(
+        Settings, "resolve_auth", lambda _: SimpleNamespace(value="test-private-key")
+    )
+    cases = load_cases()
+    frozen_version = dataset_version(cases)
+    frozen_budget = cases[0].budget.model_calls
+    experiment = ExperimentRunner(
+        cases,
+        DEFAULT_DATASET,
+        tmp_path,
+        profile="claude-api",
+        client_factory=lambda _: Provider(),
+        budget_overrides={"model_calls": frozen_budget + 20},
+    )
+    assert experiment.version == frozen_version
+    artifact = await experiment.run_case(cases[0])
+    assert artifact.dataset_version == frozen_version
+    assert artifact.provenance["budget_overrides"] == {"model_calls": frozen_budget + 20}
+    assert artifact.provenance["budget"]["model_calls"] == frozen_budget + 20
+    # 冻结用例对象本身不被改写，避免影响同批其他执行与重评分。
+    assert cases[0].budget.model_calls == frozen_budget
 
 
 class Provider:

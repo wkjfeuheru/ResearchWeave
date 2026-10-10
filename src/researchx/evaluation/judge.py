@@ -7,8 +7,10 @@ from researchx.api.client import SupportsStreamingMessages
 import json
 import re
 import time
+import asyncio
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field, ValidationError
 
@@ -17,7 +19,13 @@ from researchx.engine.messages import ConversationMessage
 from researchx.evaluation.models import Record
 from researchx.evaluation.observer import fingerprint
 
-JUDGE_VERSION = "research-judge-1.4.0"
+JUDGE_VERSION = "research-judge-1.5.0"
+
+# 报文预算：轨迹与逐行副本是主要膨胀源，必须压制，否则裁判报文可达 20 万 token
+# 并触发供应商限流（语义指标会退化为未判定）。
+TRAJECTORY_LIMIT = 60
+TRAJECTORY_FIELD_CHARS = 400
+FAILURE_CHARS = 400
 
 
 class JudgeOutputError(ValueError):
@@ -88,7 +96,7 @@ JUDGE_PROMPT = """你是独立投研 Agent 评估员。只评价可观测结果�
 每项 requirement 用原 id，quote 必须逐字摘自 evaluated_text；数值 observed_value 必须来自该 quote，
 不能把金标数字当作模型输出。填写实际使用的单位、币种、期间、口径。缺失数字 observed_value=null。
 quote 使用短的连续原文片段，通常不超过120字符；不拼接句子、不改写、不用省略号替代中间文字。
-优先填写answer_line和answer_end_line，对应evaluated_lines的实际行号，程序会从原文提取quote。
+优先填写answer_line和answer_end_line，对应evaluated_numbered每行前缀的行号，程序会从原文提取quote。
 ClaimReview也优先用answer_line定位被评估陈述，不用改写后的text代替原始quote。
 允许等价工具路径；技能加载不是脚本执行。冲突须检查双方口径，未解决不能输出确定结论。
 将 evaluated_text 所有实质性陈述拆分为原子项，覆盖完整正文。标题、套话、来源列表不算事实。
@@ -101,7 +109,8 @@ sources 中来源 ID 是程序登记值；只能使用实际存在的 ID。citat
 任务标注的附件ID不是运行来源ID；source_ids必须使用sources对象实际键，不能使用附件名或金标ID。
 并以 citation_map 解析，不能自行指定指向其他来源。quote 引用原文片段，说明为什么支持或不支持。
 CitationReview.quote 必须来自 sources 中该 source_id 的原文，不能从回答、任务金标或证据摘要复制。
-来源以lines给出。优先填写source_line和source_end_line，程序会提取该来源的连续原文quote。
+来源以 sources[key].numbered 给出，每行前缀为行号。优先填写source_line和source_end_line，程序会提取该来源的连续原文quote。
+轨迹为压缩后的工具调用序列（name/status/input/失败摘要）；缺少完整参数或输出不影响对执行顺序的判断。
 引用目标不存在时，source_id=null、supported=false、quote为空，仍记录该引用关联。
 没有事实的空答不要制造 claims，claims_complete 仅在检查完完整正文时为 true。
 只输出符合给定 JSON Schema 的 JSON，不使用 Markdown 代码围栏，不输出思维过程。
@@ -170,6 +179,48 @@ def citation_map(artifact: RunArtifact) -> dict[str, str]:
     return result
 
 
+def numbered_block(text: str) -> str:
+    """Render text as '行号|内容' lines.
+
+    与逐行 JSON 对象数组信息完全等价，但没有每行重复的 {"number":..,"text":..} 结构，
+    报文体积可降到约三分之一，避免裁判调用被限流。
+    """
+    return "\n".join(f"{index}|{line}" for index, line in enumerate(text.splitlines(), 1))
+
+
+def trim_trajectory(artifact: RunArtifact, *, limit: int = TRAJECTORY_LIMIT) -> list[dict[str, Any]]:
+    """Compact tool trajectory: keep order-relevant identity, bound every free-text field.
+
+    Path semantics depend on which tools ran and in what order (and on failures), not on the
+    full text of every argument/output. Oversized fields are truncated; a middle section is
+    dropped only when the run exceeds `limit`, keeping head and tail so ordering stays visible.
+    """
+
+    def bound(value: Any) -> Any:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return text if len(text) <= TRAJECTORY_FIELD_CHARS else text[:TRAJECTORY_FIELD_CHARS] + "…"
+
+    rows: list[dict[str, Any]] = []
+    for observation in artifact.observations:
+        if observation.kind != "tool":
+            continue
+        row: dict[str, Any] = {"name": observation.name, "status": observation.status}
+        if observation.input:
+            row["input"] = bound(observation.input)
+        if observation.status in {"error", "denied", "cancelled"}:
+            row["failure"] = (observation.output or "")[:FAILURE_CHARS]
+        rows.append(row)
+    if len(rows) <= limit:
+        return rows
+    head = limit // 2
+    omitted = len(rows) - limit
+    return (
+        rows[:head]
+        + [{"note": f"省略中间 {omitted} 次调用；首尾保留以判断顺序"}]
+        + rows[-(limit - head) :]
+    )
+
+
 async def judge_case(
     case: EvalCase,
     artifact: RunArtifact,
@@ -219,26 +270,17 @@ async def judge_case(
         "allowed_observation_ids": observed_ids,
         "task": task,
         "evaluated_text": text,
-        "evaluated_lines": [
-            {"number": index + 1, "text": line} for index, line in enumerate(text.splitlines())
-        ],
+        # 行号以紧凑的“行号|内容”给出，替代逐行 JSON 对象副本（信息等价、体积大幅缩小）。
+        "evaluated_numbered": numbered_block(text),
         "citation_map": citation_map(artifact),
         "sources": {
             key: {
                 "metadata": artifact.research_state.get("sources", {}).get(key),
-                "lines": [
-                    {"number": index + 1, "text": line}
-                    for index, line in enumerate(content.splitlines())
-                ],
+                "numbered": numbered_block(content),
             }
             for key, content in artifact.sources.items()
         },
-        "trajectory": [
-            o.model_dump(exclude={"usage", "output"})
-            | {"failure": o.output if o.status in {"error", "denied", "cancelled"} else None}
-            for o in artifact.observations
-            if o.kind == "tool"
-        ],
+        "trajectory": trim_trajectory(artifact),
         "artifact_contents": artifact.artifacts,
         "evidence": artifact.research_state.get("evidence_pool", {}),
         "conclusions": artifact.research_state.get("conclusions", {}),
@@ -294,6 +336,46 @@ async def judge_case(
         artifact.provenance["judge_elapsed_ms"] = (time.monotonic() - started) * 1000
 
     raise JudgeOutputError("Judge did not produce a validated result")
+
+
+# 限流/瞬时不可用/传输失败可重试；内容性问题（裁判输出不合规）不重试。
+RETRYABLE_JUDGE_FAILURES = frozenset({"rate_limit", "unavailable", "transport"})
+
+
+async def judge_with_retry(
+    case: EvalCase,
+    artifact: RunArtifact,
+    client: SupportsStreamingMessages,
+    model: str,
+    *,
+    context_window_tokens: int | None = None,
+    max_attempts: int = 4,
+    rate_limit_floor_seconds: float = 30.0,
+) -> JudgeResult:
+    """Call the judge with backoff so a transient limit does not turn metrics into unjudged.
+
+    judge_case itself already retries once on an invalid JSON structure; here we retry the
+    whole call only for transport/rate-limit style failures, reusing the provider retry policy.
+    Rate limits are usually per-minute quotas, so the wait has a floor for those.
+    """
+    from researchx.api.retry import classify_error, retry_delay
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await judge_case(
+                case, artifact, client, model, context_window_tokens=context_window_tokens
+            )
+        except Exception as exc:
+            if isinstance(exc, JudgeOutputError) or attempt == max_attempts:
+                raise
+            reason = classify_error(exc)
+            if reason not in RETRYABLE_JUDGE_FAILURES:
+                raise
+            delay = retry_delay(attempt - 1, exc)
+            if reason == "rate_limit":
+                delay = max(delay, rate_limit_floor_seconds)
+            await asyncio.sleep(delay)
+    raise JudgeOutputError("Judge retry loop exited without a result")
 
 
 def exact_quote(quote: str, original: str) -> str:

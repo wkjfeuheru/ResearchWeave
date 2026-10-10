@@ -428,6 +428,7 @@ async def run_query(
         return
 
     turn_count = 0
+    child_rejections: dict[tuple[str, str], int] = {}
     while context.max_turns is None or turn_count < context.max_turns:
         turn_count += 1
         # Context transformations are staged. A rejected request/compaction must
@@ -938,6 +939,23 @@ async def run_query(
             tool_results = [ordered_results[index] for index in range(len(tool_calls))]
 
         messages.append(ConversationMessage(role="user", content=[block for block in tool_results]))
+        if metadata.get("subagent_child"):
+            from researchx.state.errors import ResearchError
+
+            for call, result in zip(tool_calls, tool_results):
+                code = result.result_metadata.get("error_code")
+                if code == "parent_scope_changed":
+                    raise ResearchError("Parent research scope changed; child execution revoked")
+                if code == "subagent_authority_denied":
+                    # Count by authority/tool, not call ID: changing IDs or task
+                    # arguments cannot reset the bound. First denial is feedback;
+                    # a second denial terminates this child with paired history.
+                    key = (call.name, code)
+                    child_rejections[key] = child_rejections.get(key, 0) + 1
+                    if child_rejections[key] >= 2:
+                        raise ResearchError(
+                            "Subagent repeatedly attempted to modify authoritative research state"
+                        )
 
     if context.max_turns is not None:
         runtime = (context.tool_metadata or {}).get("research_runtime")

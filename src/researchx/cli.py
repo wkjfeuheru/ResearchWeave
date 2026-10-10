@@ -12,6 +12,7 @@ from typing import Optional
 import typer
 
 from researchx.evaluation.cli import app as eval_app
+from researchx.services.execution.cli import app as operations_app
 
 __version__ = "0.1.9"
 
@@ -47,6 +48,7 @@ app.add_typer(auth_app)
 app.add_typer(provider_app)
 app.add_typer(config_app)
 app.add_typer(eval_app)
+app.add_typer(operations_app)
 
 
 @app.command("web")

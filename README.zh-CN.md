@@ -1,10 +1,8 @@
 # ResearchX 投研工作台
 
-> **PostgreSQL cutover / 数据库切换**：启动前必须配置 `RESEARCHX_DATABASE_URL` 并执行 `uv run python -m researchx.storage.migrate`。旧版用户先备份和显式导入；不再读取 JSON/SQLite 业务状态。见 [部署、Schema、历史导入与恢复](docs/POSTGRESQL.md)。测试使用独立 `RESEARCHX_TEST_DATABASE_URL`。
-
 ResearchX 是本地运行的投研 Web 产品。每个对话独立保存任务上下文、研究状态、证据池和可审计的论证摘要；资料保存时间戳、不可变快照及稳定 ID，历史回答保留当时引用的版本。
 
-[English](README.md) · [Web 工作区](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界) · [清理与验收报告](docs/research-product-cleanup.md)
+[English](README.md) · [Web 工作区](docs/web-workspace.md) · [清理与验收报告](docs/research-product-cleanup.md)
 
 ## 安装与启动
 
@@ -18,11 +16,7 @@ rx web
 
 打开启动命令显示的本地网址。服务检查本地主机和浏览器来源；凭据由后端保存，浏览器输出会脱敏。
 
-Web 工作台通过 FastAPI SSE 推送事件，通过 HTTP POST 提交命令。断连会停止当前执行并保存部分输出；重开会话恢复快照，不自动重发消息。参见 [SSE 与命令接口契约](docs/DIRECTORY_MIGRATION.md#工作区与-web-边界)。
-
-开发者可查看[目录职责与完整迁移映射](docs/DIRECTORY_MIGRATION.md)。通用文件资源位于
-`workspace/`，Web 会话协调留在 `web/`；文档解析入口为
-`python -m researchx.workspace.documents`。本次目录整理保留现有 FastAPI SSE 与 HTTP 命令协议。
+Web 工作台通过 FastAPI SSE 推送事件，通过 HTTP POST 提交命令。断连会停止当前执行并保存部分输出；重开会话恢复快照，不自动重发消息。参见 [SSE 与命令接口契约](docs/sse-transport.md)。
 
 源码安装需要 Node.js 20 或更新版本来构建前端：
 
@@ -35,13 +29,12 @@ cd ../..
 uv run rx web
 ```
 
-`rx`、`oh`、`openh` 使用相同管理入口。PowerShell 请用 `openh web` 或 `oh.exe web`，避免内置 `oh` 别名。
 
 ## 研究与恢复
 
 核心架构已有通过真实 Agent Loop 的确定性集成测试；参见 [E2E-01 至 E2E-16 执行报告与覆盖率](docs/testing/agent-core-e2e-report.md)及[剩余问题与验证限制](docs/testing/agent-core-risks.md)。
 
-报告项目强制使用 SRT 0.0.79 或配置的 Docker 后端，不可用时拒绝宿主 Shell 执行。[安装、脚本导出与崩溃恢复说明](docs/SANDBOX_EXECUTION.md)列出兼容变化；`uv run python tools/check_types.py` 严格检查全部生产 Python，包含 bundled 脚本。
+报告项目强制使用 SRT 0.0.79 或配置的 Docker 后端，不可用时拒绝宿主 Shell 执行。[安装、脚本导出与崩溃恢复说明](docs/SANDBOX_EXECUTION.md)列出兼容变化；`uv run python scripts/check_types.py` 严格检查全部生产 Python，包含 bundled 脚本。
 
 复杂研究先展示简短任务概要，再自动执行；简单问答无需强制计划。核心工具提供文件读写、搜索、网页检索、金融 MCP、Shell 计算与图片读取。财务分析、估值、图表和报告导出由后续 Skills 复用这些能力。修改文件和执行 Shell 继续遵守权限及沙箱检查。
 
@@ -94,7 +87,7 @@ oh config set research_memory.enabled false
 
 ```bash
 uv run pytest -q
-uv run ruff check src tests tools evals hatch_build.py
+uv run ruff check src tests scripts
 cd frontend/web
 npm run build
 npx playwright install chromium

@@ -67,7 +67,7 @@ class ToolContract(BaseModel):
 
 
 def resolve_contract(tool: BaseTool[Any], arguments: BaseModel | None = None) -> ToolContract:
-    declared = getattr(tool, "contract", None)
+    declared = tool.execution_contract(arguments)
     schema = tool.input_model.model_json_schema()
     if declared is not None:
         contract = ToolContract.model_validate(declared)

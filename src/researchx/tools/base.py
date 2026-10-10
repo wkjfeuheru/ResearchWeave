@@ -198,6 +198,10 @@ class BaseTool(ABC, Generic[InputT]):
     description: str
     input_model: type[InputT]
 
+    def execution_contract(self, arguments: InputT | None = None) -> Any:
+        """Explicit invocation metadata; defaults to the tool's static declaration."""
+        return getattr(self, "contract", None)
+
     @abstractmethod
     async def execute(self, arguments: InputT, context: ToolExecutionContext) -> ToolResult:
         """Execute the tool."""

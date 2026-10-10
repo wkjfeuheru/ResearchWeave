@@ -115,11 +115,90 @@ def missing_data_case():
 
 def test_correct_number_with_wrong_citation_cannot_pass():
     case = load_cases()[0]
-    artifact = run()
-    result = values(score_case(case, artifact, judgment(case, cited_source="wrong")))
+    artifact = run("毛利率为40%[1]。净利率21%[1]。")
+    artifact.sources["src1"] += "净利润21，净利率21%。"
+    reviewed = judgment(case, cited_source="wrong")
+    margin = next(r for r in reviewed.requirements if r.id == "net_margin")
+    margin.observed_value, margin.quote = "21", "净利率21%[1]。"
+    result = values(score_case(case, artifact, reviewed))
     assert result["citation_correctness"] == 0
     assert result["task_success"] == 0
     assert result["requirement_numeric"] == 1
+    assert result["requirement_coverage"] == 1
+
+
+def test_task_completion_is_independent_of_incomplete_citation_coverage():
+    case = load_cases()[0]
+    reviewed = judgment(case)
+    next(r for r in reviewed.requirements if r.id == "net_margin").observed_value = "21"
+    next(r for r in reviewed.requirements if r.id == "net_margin").quote = "净利率21%[1]。"
+    reviewed.claims.append(
+        ClaimReview(
+            text="净利率21%",
+            quote="净利率21%[1]。",
+            kind="fact",
+            support="supported",
+            requires_citation=True,
+            source_ids=["src1"],
+            explanation="净利润21，营业收入100",
+            citations=[
+                CitationReview(
+                    marker="[1]",
+                    source_id="src1",
+                    supported=True,
+                    quote="净利率21%",
+                    explanation="核对资料",
+                )
+            ],
+        )
+    )
+    reviewed.claims.append(
+        ClaimReview(
+            text="营业收入100",
+            quote="营业收入100。",
+            kind="fact",
+            support="supported",
+            requires_citation=True,
+            source_ids=["src1"],
+            citations=[],
+            explanation="资料支持，但正文漏标",
+        )
+    )
+    artifact = run("毛利率为40%[1]。净利率21%[1]。营业收入100。")
+    artifact.sources["src1"] += "净利润21，净利率21%。"
+    artifact.observations = [
+        Observation(
+            id="skill",
+            name="skill",
+            kind="tool",
+            started_at=timestamp(),
+            status="ok",
+            input={"name": "financial-statement-analysis"},
+        ),
+        Observation(
+            id="analysis",
+            name="bash",
+            kind="tool",
+            started_at=timestamp(),
+            status="ok",
+            input={"command": "python analyze_statements.py"},
+        ),
+    ]
+    result = values(score_case(case, artifact, reviewed))
+    assert result["requirement_coverage"] == 1
+    assert result["path_correct"] == 1
+    assert result["citation_coverage"] == 2 / 3
+    assert result["citation_correctness"] == 1
+    assert result["task_success"] == 1
+    reviewed.critical_errors = ["关键计算存在错误"]
+    assert values(score_case(case, artifact, reviewed))["task_success"] == 0
+
+
+def test_missing_required_delivery_still_fails_despite_correct_citations():
+    case = load_cases()[0]
+    reviewed = judgment(case)
+    reviewed.requirements[0].score = 1
+    assert values(score_case(case, run(), reviewed))["task_success"] == 0
 
 
 def test_existing_id_does_not_prove_source_support():

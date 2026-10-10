@@ -71,6 +71,25 @@ async def test_real_python_executes_and_cannot_read_gold_or_open_network(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_failed_sandbox_script_is_a_recoverable_failure_not_an_uncertain_side_effect(tmp_path):
+    """A non-zero sandbox run must not be recorded as an uncertain write-["*"] operation.
+
+    Regression: the default contract effect is "unknown"; a failing script then becomes
+    "uncertain", and because serial parallelism declares write ["*"], every later tool in
+    the session is blocked forever ("Unresolved side effects block this resource").
+    """
+    from researchx.tools.contracts import resolve_contract
+
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    tool = RestrictedPythonTool(BashTool(), workspace, [])
+    assert resolve_contract(tool).effect == "local_write"
+    context = ToolExecutionContext(workspace)
+    result = await tool.execute(BashToolInput(command="python -c 'raise SystemExit(2)'"), context)
+    assert result.is_error and result.no_effect is None
+
+
+@pytest.mark.asyncio
 async def test_fault_occurrence_can_recover_without_registering_error_as_source(tmp_path):
     case = load_cases()[0]
     (tmp_path / "materials").mkdir()

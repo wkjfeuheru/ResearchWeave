@@ -60,18 +60,23 @@ class OperationStore:
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:
         async with self.database.transaction() as db:
-            await db.execute(
-                insert(s.workspaces)
-                .values(
-                    workspace_id=self.workspace, canonical_path=self.cwd, updated_at=time.time()
-                )
-                .on_conflict_do_nothing()
-            )
-            await db.execute(
-                select(s.workspaces.c.workspace_id)
+            lock = (
+                select(s.workspaces.c.canonical_path)
                 .where(s.workspaces.c.workspace_id == self.workspace)
                 .with_for_update()
             )
+            path = await db.scalar(lock)
+            if path is None:
+                await db.execute(
+                    insert(s.workspaces)
+                    .values(
+                        workspace_id=self.workspace, canonical_path=self.cwd, updated_at=time.time()
+                    )
+                    .on_conflict_do_nothing()
+                )
+                path = await db.scalar(lock)
+            if path != self.cwd:
+                raise ValueError("Workspace identity conflict")
             yield db
 
     def _where(self, operation: str) -> Any:
@@ -79,16 +84,11 @@ class OperationStore:
             s.tool_operations.c.operation_id == operation
         )
 
-    async def _row(self, db: AsyncSession, operation: str) -> dict[str, Any]:
-        row = (
-            (
-                await db.execute(
-                    select(s.tool_operations).where(self._where(operation)).with_for_update()
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
+    async def _row(self, db: AsyncSession, operation: str, *, lock: bool = True) -> dict[str, Any]:
+        query = select(s.tool_operations).where(self._where(operation))
+        if lock:
+            query = query.with_for_update()
+        row = (await db.execute(query)).mappings().one_or_none()
         if row is None:
             raise ValueError("Unknown operation in this workspace")
         return dict(row)
@@ -200,8 +200,11 @@ class OperationStore:
             return dict(row)
 
     async def unresolved_conflicts(self, operation: str) -> list[str]:
-        async with self.transaction() as db:
-            row = await self._row(db, operation)
+        # This is an optimistic diagnostic read. claim() rechecks all conflicts
+        # under the workspace lock before any effect can begin; no write/row lock
+        # is needed for this frequently empty preflight check.
+        async with self.database.transaction() as db:
+            row = await self._row(db, operation, lock=False)
             others = (
                 await db.execute(
                     select(s.tool_operations).where(
@@ -214,6 +217,88 @@ class OperationStore:
             return [
                 other["operation_id"] for other in others if _operation_conflicts(row, dict(other))
             ]
+
+    async def list_unresolved(self, *, session: str | None = None) -> list[dict[str, Any]]:
+        """Read diagnostic receipts without claiming any resources or changing owners."""
+        async with self.database.transaction() as db:
+            query = select(s.tool_operations).where(
+                s.tool_operations.c.workspace_id == self.workspace,
+                s.tool_operations.c.status.in_(["uncertain", "partial"]),
+            )
+            if session is not None:
+                query = query.where(s.tool_operations.c.session_id == session)
+            return [dict(row) for row in (await db.execute(query)).mappings()]
+
+    async def reconcile(
+        self,
+        operation: str,
+        *,
+        session: str,
+        outcome: str,
+        evidence: str,
+        result_ref: str | None = None,
+    ) -> None:
+        """Trusted host resolution; never called automatically by the Agent.
+
+        No-effect verification releases resource reservations but does not retry.
+        Confirmed success requires a matching, hash-verified successful receipt.
+        """
+        if outcome not in {"no_effect", "succeeded"} or not evidence.strip():
+            raise ValueError("Explicit outcome and reconciliation evidence are required")
+        if outcome == "no_effect" and result_ref is not None:
+            raise ValueError("No-effect resolution cannot publish a success receipt")
+        if outcome == "succeeded":
+            if not result_ref:
+                raise ValueError("Confirmed success requires a verified result receipt")
+            from researchx.storage.content import read_object
+            from researchx.engine.messages import ToolResultBlock
+
+            receipt = ToolResultBlock.model_validate_json(
+                await read_object(self.database, self.workspace, result_ref)
+            )
+            if (
+                receipt.is_error
+                or receipt.result_metadata.get("status") != "success"
+                or receipt.result_metadata.get("operation_id") != operation
+            ):
+                raise ValueError("Successful receipt must match the operation")
+        async with self.transaction() as db:
+            row = await self._row(db, operation)
+            if row["session_id"] != session:
+                raise ValueError("Operation belongs to another session")
+            if row["status"] not in {"uncertain", "partial"}:
+                raise ValueError("Only unresolved operations may be reconciled")
+            if outcome == "succeeded" and receipt.tool_use_id != row["call_id"]:
+                raise ValueError("Successful receipt must match the tool call")
+            status = "failed" if outcome == "no_effect" else "succeeded"
+            await db.execute(
+                update(s.tool_operations)
+                .where(self._where(operation))
+                .values(
+                    status=status,
+                    reconciliation=json.dumps(
+                        {
+                            "outcome": outcome,
+                            "evidence": evidence.strip(),
+                            "verified_at": time.time(),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    error_code="verified_no_effect" if outcome == "no_effect" else None,
+                    result_ref=result_ref or row["result_ref"],
+                    lease_until=None,
+                    updated=time.time(),
+                )
+            )
+            await db.execute(
+                update(s.tool_attempts)
+                .where(
+                    s.tool_attempts.c.operation_id == operation,
+                    s.tool_attempts.c.status.in_(["uncertain", "partial"]),
+                )
+                .values(status=status, updated=time.time())
+            )
+            await self._step(db, row, status)
 
     async def _attempt(self, db: AsyncSession, row: dict[str, Any]) -> str:
         attempt, stamp = uuid4().hex, time.time()
@@ -561,6 +646,13 @@ def _conflicts(a: dict[str, list[str]], b: dict[str, list[str]]) -> bool:
 
 
 def _operation_conflicts(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    # Unresolved writes prohibit overlapping mutations, not diagnostics. A PRE
+    # effect changes the ledger effect to mixed and therefore cannot use this.
+    if (a["status"] in {"uncertain", "partial"} and b["effect"] == "read_only") or (
+        b["status"] in {"uncertain", "partial"} and a["effect"] == "read_only"
+    ):
+        return False
+
     # Research control mutates a session's relational records, not another session's
     # files. Previously each ResearchStore had its own ledger; sharing a database
     # must not turn one interrupted research session into a workspace-wide outage.

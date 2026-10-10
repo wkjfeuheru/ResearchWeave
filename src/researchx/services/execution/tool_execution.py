@@ -47,7 +47,8 @@ async def _execute_impl(
 
     store = (context.tool_metadata or {}).get("research_store")
     runtime = (context.tool_metadata or {}).get("research_runtime")
-    project_mode = store is not None and (await store.load()).project is not None
+    initial_memory = await store.load() if store is not None else None
+    project_mode = initial_memory is not None and initial_memory.project is not None
     if project_mode:
         assert store is not None
         if runtime is None:
@@ -76,12 +77,15 @@ async def _execute_impl(
     try:
         parsed_input = tool.input_model.model_validate(tool_input)
     except Exception as exc:
-        log.warning("invalid input for %s: %s", tool_name, exc)
+        log.warning("invalid input for %s: %s", tool_name, tool.validation_error_message(exc))
         return ToolResultBlock(
             tool_use_id=tool_use_id,
             content=tool.validation_error_message(exc),
             is_error=True,
-            result_metadata={"status": "failed", "error_code": "invalid_arguments"},
+            result_metadata={
+                "status": "failed",
+                "error_code": getattr(tool, "validation_error_code", "invalid_arguments"),
+            },
         )
 
     service.contract = resolve_contract(tool, parsed_input)
@@ -98,8 +102,10 @@ async def _execute_impl(
     # directory-scoped roots such as `glob`/`grep`.
     tool_cwd = context.cwd
     if project_mode:
-        assert runtime is not None and store is not None
-        tool_cwd = runtime._workspace_path(runtime.repository._project((await store.load())))
+        assert runtime is not None and store is not None and initial_memory is not None
+        # No admission await has occurred since this read. Keep one view for
+        # initial validation/path resolution; post-approval checks still reload.
+        tool_cwd = runtime._workspace_path(runtime.repository._project(initial_memory))
     _file_path = _resolve_permission_file_path(tool_cwd, tool_input, parsed_input)
     if _file_path and (project_mode or (context.tool_metadata or {}).get("subagent_child")):
         boundary = ToolExecutionContext(
@@ -458,7 +464,7 @@ async def _execute_impl(
 
 
 class ToolExecutionService:
-    """One invocation adapter; state survives instances through the SQLite ledger."""
+    """One invocation adapter; state survives instances through the PostgreSQL ledger."""
 
     def __init__(self, *, claim_wait_seconds: float = 30.0) -> None:
         if not math.isfinite(claim_wait_seconds) or not 0 <= claim_wait_seconds <= 300:
@@ -584,10 +590,11 @@ class ToolExecutionService:
         # Unknown resources serialize. Explicit file resources participate in read/write conflicts.
         def resources(items: tuple[str, ...]) -> list[str]:
             return [
-                str((Path(cwd) / getattr(arguments, "path")).resolve())
-                if item == "path" and hasattr(arguments, "path")
+                str((Path(cwd) / getattr(arguments, item)).resolve())
+                if item in {"path", "image_path"} and getattr(arguments, item, None)
                 else item
                 for item in items
+                if item != "image_path" or getattr(arguments, item, None)
             ]
 
         declared = {
@@ -595,6 +602,14 @@ class ToolExecutionService:
             "write": resources(self.contract.resources_write),
         }
         if self.contract.parallelism == "serial":
+            declared = {"read": [], "write": ["*"]}
+        effect_hook = bool(
+            context.hook_executor
+            and context.hook_executor.has_effects(HookEvent.PRE_TOOL_USE, tool.name)
+        )
+        if effect_hook:
+            # Hooks have no narrower resource declaration. A file tool's path
+            # cannot stand in for arbitrary PRE command/HTTP/agent side effects.
             declared = {"read": [], "write": ["*"]}
         # Orchestration must not hold its children's resource lock while awaiting them.
         if metadata.get("subagent_child"):
@@ -614,10 +629,7 @@ class ToolExecutionService:
             tool=tool.name,
             version=self.contract.version,
             digest=digest,
-            effect="mixed"
-            if context.hook_executor
-            and context.hook_executor.has_effects(HookEvent.PRE_TOOL_USE, tool.name)
-            else self.contract.effect,
+            effect="mixed" if effect_hook else self.contract.effect,
             resources=declared,
         )
         operation_id = self.operation["operation_id"]
@@ -634,27 +646,36 @@ class ToolExecutionService:
                 return ToolResultBlock(
                     tool_use_id=call,
                     is_error=True,
-                    content=f"操作 {operation_id} 当前状态为 {current['status']}；需要核对或明确恢复，不能重复执行该副作用。",
+                    content=f"操作 {operation_id} 当前状态为 {current['status']}；需要核对或明确恢复，不能重复执行该副作用。"
+                    "请用户使用 rx operations list 和 rx operations resolve 核验。",
                     result_metadata={
                         "status": current["status"],
                         "error_code": "recovery_required",
                         "operation_id": operation_id,
+                        "workspace": self.ledger.cwd,
+                        "session_id": session,
                     },
                 )
             conflicts = await self.ledger.unresolved_conflicts(operation_id)
             if conflicts:
-                if current["status"] == "prepared":
-                    (
-                        await self.ledger.settle(
-                            operation_id, "blocked", error_code="reconciliation_required"
-                        )
-                    )
+                # A transient resource denial must not poison this call identity:
+                # keep it prepared so the same call can proceed after verification.
                 self.settled = True
                 return ToolResultBlock(
                     tool_use_id=call,
                     is_error=True,
-                    content="Unresolved side effects block this resource: " + ", ".join(conflicts),
-                    result_metadata={"status": "blocked", "error_code": "reconciliation_required"},
+                    content="未决副作用阻止本次写操作："
+                    + ", ".join(conflicts)
+                    + "。只读诊断仍可使用。请用户运行 rx operations list --cwd 工作区，"
+                    "核对外部状态后使用 rx operations resolve；不要换调用 ID 重放写操作。",
+                    result_metadata={
+                        "status": "blocked",
+                        "error_code": "reconciliation_required",
+                        "operation_id": operation_id,
+                        "conflicting_operations": conflicts,
+                        "workspace": self.ledger.cwd,
+                        "session_id": session,
+                    },
                 )
             attempt = await self.ledger.claim(operation_id, self.owner)
             if attempt:

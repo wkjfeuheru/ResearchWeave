@@ -64,7 +64,9 @@ class ImageToTextTool(BaseTool[ImageToTextToolInput]):
         "source": "builtin",
         "effect": "model_call",
         "required_capabilities": ("model.call", "filesystem.read"),
-        "resources_write": ("*",),
+        "resources_read": ("image_path",),
+        "resources_write": ("model:image_to_text",),
+        "parallelism": "resources",
     }
     description = (
         "使用支持视觉的模型将图像转换为详细的文字描述。"

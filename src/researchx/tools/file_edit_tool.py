@@ -26,6 +26,7 @@ class FileEditTool(BaseTool[FileEditToolInput]):
 
     name = "edit_file"
     contract = {
+        "parallelism": "resources",
         "name": "edit_file",
         "source": "builtin",
         "effect": "local_write",

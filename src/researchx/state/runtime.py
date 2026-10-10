@@ -192,15 +192,19 @@ class ResearchAgentRuntime:
     async def load_workspace_memory(self, project_id: str, *, max_chars: int | None = None) -> str:
         try:
             async with self.workspace_file_lock(project_id, "MEMORY.md") as path:
-                if not path.is_file():
-                    raise ResearchError(f"Workspace memory is missing: {path}")
-                with path.open(encoding="utf-8", errors="strict") as stream:
-                    content = (stream.read()) if max_chars is None else (stream.read(max_chars))
-                if "\0" in content:
-                    raise ResearchError("Workspace memory contains binary data")
-                return content
+                return self._read_workspace_memory_file(path, max_chars)
         except (OSError, UnicodeError) as exc:
             raise ResearchError(f"Cannot load workspace MEMORY.md: {exc}") from exc
+
+    @staticmethod
+    def _read_workspace_memory_file(path: Path, max_chars: int | None) -> str:
+        if not path.is_file():
+            raise ResearchError(f"Workspace memory is missing: {path}")
+        with path.open(encoding="utf-8", errors="strict") as stream:
+            content = stream.read() if max_chars is None else stream.read(max_chars)
+        if "\0" in content:
+            raise ResearchError("Workspace memory contains binary data")
+        return content
 
     @staticmethod
     def strip_workspace_context(text: str) -> str:
@@ -208,9 +212,15 @@ class ResearchAgentRuntime:
 
     async def build_research_context(self, project_id: str) -> str:
         memory = await self.repository.load_project(project_id)
-        workspace = await self.resolve_workspace(project_id)
         limit = self.memory_auto_inject_max_chars
-        content = await self.load_workspace_memory(project_id, max_chars=limit + 1)
+        try:
+            async with self.workspace_file_lock(project_id, "MEMORY.md") as path:
+                # The lock already resolves and revalidates the DB binding.
+                # Its verified path gives the workspace without another load.
+                workspace = path.parent
+                content = self._read_workspace_memory_file(path, limit + 1)
+        except (OSError, UnicodeError) as exc:
+            raise ResearchError(f"Cannot load workspace MEMORY.md: {exc}") from exc
         packet = {
             "project_id": project_id,
             "current_task_id": memory.research_state.current_task_id,

@@ -51,6 +51,8 @@ Each report project now binds an isolated directory with `MEMORY.md`, `artifacts
 
 `dispatch_subagents` delegates 1–16 independent assignments with bounded parallelism, separate histories and private output directories under `subagents/`. Children return candidates for main-agent review and cannot edit main `MEMORY.md` or authoritative task state. The research registry excludes `notebook_edit`, `config`, `mcp_auth`, `image_generation` and `sleep`; host configuration services remain available. The general registry compatibility argument uses the same retained research tools.
 
+Unresolved effects block overlapping writes while read-only diagnostics remain available. Use `rx operations list --cwd ORIGINAL_WORKSPACE --session SESSION_ID` and, after independently verifying or compensating the effect, `rx operations resolve OPERATION_ID --cwd ORIGINAL_WORKSPACE --session SESSION_ID --outcome no_effect --evidence "verification record"`. This records the operator's decision without replaying a tool. Confirmed success requires a matching verified result receipt. See the [Chinese recovery instructions](README.zh-CN.md) for receipt fields and safety rules. Children stop after repeated attempts to modify authoritative state or a revoked parent scope. Evaluation reports task completion separately from citation coverage, retaining checks for required delivery, critical errors and invalid citations.
+
 ## Models, credentials and extensions
 
 Existing Anthropic/OpenAI compatible APIs and Codex, Claude and Copilot subscription authentication are retained. Add API configurations in the Web model page or use the CLI. Subscription profiles can be selected and tested in Web; their authentication is managed by CLI:

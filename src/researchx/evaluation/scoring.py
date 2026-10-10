@@ -535,11 +535,7 @@ def score_case(
             ]
         )
         if success == 1 and (
-            judge.critical_errors
-            or unsupported
-            or text.count("[来源不可核验]")
-            or correct < total_citations
-            or covered < len(expected_citation)
+            judge.critical_errors or text.count("[来源不可核验]") or correct < total_citations
         ):
             success = 0
     scores.append(
@@ -548,6 +544,7 @@ def score_case(
             value=success,
             source="combined",
             status="unjudged" if success is None else "scored",
+            explanation="必需需求完成且无关键错误；引用覆盖与非关键事实支持度单独计分",
         )
     )
     return scores

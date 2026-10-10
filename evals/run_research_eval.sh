@@ -2,7 +2,9 @@
 # 投研 Agent 自动化评测流程：数据集校验 -> 运行 agent + 独立裁判 -> 生成报告（可选与基线对比）。
 #
 # 关键约束：被测模型与裁判模型必须不同，否则 ExperimentRunner 拒绝启动。
-# 默认：被测 deepseek（profile web-da8cda1a018e），裁判 qwen。
+# 默认：被测 deepseek（profile web-da8cda1a018e），裁判 gemini（需先配置 GEMINI_API_KEY）。
+# 裁判选择说明：真实快照类任务的裁判报文约 20 万 token（含原文/轨迹/产物），
+# 需 1M 级上下文；qwen-plus(131072) 与 copilot(~128k) 均不足以承载，故用 gemini。
 #
 # 用法：
 #   MODE=smoke          evals/run_research_eval.sh   # 17 条指标专项子集，低成本冒烟
@@ -20,10 +22,16 @@ OUTPUT="${OUTPUT:-$ROOT/.researchx/evaluations}"
 MODE="${MODE:-smoke}"
 REPETITIONS="${REPETITIONS:-1}"
 AGENT_PROFILE="${AGENT_PROFILE:-web-da8cda1a018e}"
-JUDGE_PROFILE="${JUDGE_PROFILE:-qwen}"
-# qwen 等部分 profile 未配置 context_window_tokens，且模型不在 MODEL_WINDOWS 中，
-# 裁判会在首次调用前抛 ContextBudgetError；显式给出窗口（qwen-plus 支持 131072）。
-JUDGE_CONTEXT_WINDOW_TOKENS="${JUDGE_CONTEXT_WINDOW_TOKENS:-131072}"
+JUDGE_PROFILE="${JUDGE_PROFILE:-gemini}"
+# gemini/qwen 等 profile 未配置 context_window_tokens，且模型不在 MODEL_WINDOWS 中，
+# 裁判会在首次调用前抛 ContextBudgetError；必须显式给出窗口。
+# 真实快照类任务的裁判报文约 20 万 token，131072 不足；gemini-2.5 支持 1M，故默认 1,000,000。
+JUDGE_CONTEXT_WINDOW_TOKENS="${JUDGE_CONTEXT_WINDOW_TOKENS:-1000000}"
+# 长任务预算覆盖：留空则用数据集的冻结预算（basic/intermediate/complex = 40/64/96 轮、
+# 3M/10M/24M token）。只在执行期生效，不改动冻结数据集，dataset_version 与归档重评分不受影响。
+# 注意：提高轮次必须同步提高 token 上限，否则会改撞 "Token 消耗达到评测预算"。
+MAX_MODEL_CALLS="${MAX_MODEL_CALLS:-}"
+MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-}"
 
 # 优先使用仓库内虚拟环境，避免依赖全局 PATH。
 if [[ -z "${OH:-}" ]]; then
@@ -61,7 +69,14 @@ esac
 echo "== 1/3 数据集静态校验：$DATASET =="
 "$OH" eval validate --dataset "$DATASET"
 
-echo "== 2/3 运行评测：MODE=$MODE 被测=$AGENT_PROFILE 裁判=$JUDGE_PROFILE 重复=$REPETITIONS =="
+echo "== 2/3 运行评测：MODE=$MODE 被测=$AGENT_PROFILE 裁判=$JUDGE_PROFILE 重复=$REPETITIONS 轮次上限=${MAX_MODEL_CALLS:-数据集冻结} =="
+budget_args=()
+if [[ -n "$MAX_MODEL_CALLS" ]]; then
+  budget_args+=(--max-model-calls "$MAX_MODEL_CALLS")
+fi
+if [[ -n "$MAX_TOTAL_TOKENS" ]]; then
+  budget_args+=(--total-tokens "$MAX_TOTAL_TOKENS")
+fi
 "$OH" eval run \
   --profile "$AGENT_PROFILE" \
   --judge-profile "$JUDGE_PROFILE" \
@@ -69,6 +84,7 @@ echo "== 2/3 运行评测：MODE=$MODE 被测=$AGENT_PROFILE 裁判=$JUDGE_PROFI
   --dataset "$DATASET" \
   --output "$OUTPUT" \
   --repetitions "$REPETITIONS" \
+  "${budget_args[@]}" \
   "${select_args[@]}"
 
 # 定位本次实验目录：run 会新建 research-<uuid>，取 OUTPUT 下最新目录。

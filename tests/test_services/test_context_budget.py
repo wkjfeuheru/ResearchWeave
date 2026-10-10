@@ -132,6 +132,22 @@ def test_unicode_and_tokenizer_counting():
     )
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "ascii\n\t\x00\x7f",
+        "\x80é中文",
+        "😀𝄞e\u0301",
+        "abc中😀" * 8192,
+    ],
+)
+def test_native_fallback_preserves_conservative_unicode_budget(text):
+    ascii_count = sum(ord(char) < 128 for char in text)
+    expected = (ascii_count + 2) // 3 + len(text.encode("utf-8")) - ascii_count
+    assert estimate_tokens(text, "unknown-model") == expected
+
+
 def test_complete_provider_input_is_counted_and_frozen():
     client = OpenAICompatibleClient(api_key="unused")
     messages = [
@@ -222,7 +238,7 @@ def tool_history():
 async def test_microcompact_preserves_original_metadata_and_readable_artifacts():
     messages = tool_history()
     original = [m.model_dump() for m in messages]
-    candidate, saved = (await microcompact_messages(messages))
+    candidate, saved = await microcompact_messages(messages)
     assert saved > 0
     block = candidate[1].content[0]
     assert block.is_error and block.tool_use_id == "t0"
@@ -1021,7 +1037,7 @@ async def test_new_snapshot_manifest_round_trip_does_not_change_provider_input()
     message = Message.from_user_text("actual user").model_copy(
         update={"runtime_context": snapshot.text, "runtime_context_manifest": snapshot.manifest}
     )
-    path = (await save_context_snapshot([message]))
+    path = await save_context_snapshot([message])
     restored = Message.model_validate(json.loads(path.read_text())["messages"][0])
     assert restored.runtime_context_manifest == message.runtime_context_manifest
     assert restored.to_api_param() == message.to_api_param()
@@ -1087,7 +1103,7 @@ async def test_runtime_rules_stay_s_when_permission_mode_changes(tmp_path):
         settings=settings,
         tool_metadata={"permission_mode": "plan"},
     )
-    snapshot = (await engine._current_runtime_snapshot())
+    snapshot = await engine._current_runtime_snapshot()
     s = "".join(
         snapshot.text[span.start : span.end]
         for span in snapshot.manifest

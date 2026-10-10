@@ -1096,11 +1096,21 @@ class ResearchStore(ConflictStoreMixin):
         return self._prompt((await self.load()), budget, model=model)
 
     async def prompt_snapshot(
-        self, budget: int = 6000, *, model: str = "", memory_budget: int | None = None
+        self,
+        budget: int = 6000,
+        *,
+        model: str = "",
+        memory_budget: int | None = None,
+        memory: ResearchMemory | None = None,
     ) -> ContextSnapshot:
         from researchx.services.context.sources import tagged_snapshot
 
-        text = self._prompt((await self.load()), budget, model=model, memory_budget=memory_budget)
+        # A context composer may share its just-loaded view within this one
+        # request. No persisted state or snapshot is cached between requests.
+        current = memory if memory is not None else await self.load()
+        if current.session_id != self.session_id:
+            raise ResearchError("Memory snapshot belongs to another session")
+        text = self._prompt(current, budget, model=model, memory_budget=memory_budget)
         return tagged_snapshot(text, "research_store")
 
     def _prompt(

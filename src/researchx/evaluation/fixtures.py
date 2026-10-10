@@ -166,6 +166,18 @@ class WorkspaceTool(BaseTool[InputT]):
 class RestrictedPythonTool(WorkspaceTool[BashToolInput]):
     """No shell is launched in fixed evaluations: only validated deterministic Python."""
 
+    # 评测沙箱内的确定性 Python 只写任务工作区（每个用例的临时目录），不存在需要外部核对的
+    # 远程副作用。默认契约的 effect="unknown" 会让脚本非 0 退出的操作被记为 uncertain
+    # 副作用操作；其 write=["*"] 资源随后与本会话所有操作冲突且永不恢复，整个任务被锁死。
+    # 声明为 local_write 后，失败会被如实记为 failed，会话仍可继续。
+    contract = {
+        "name": "bash",
+        "source": "builtin",
+        "effect": "local_write",
+        "required_capabilities": ("shell.execute",),
+        "resources_write": ("*",),
+    }
+
     def __init__(
         self,
         original: BaseTool[BashToolInput],
@@ -402,21 +414,30 @@ def configure_tools(
                     return document_text(parse_document(path))
                 return path.read_text(encoding="utf-8")
 
-        registry.register(
-            McpToolAdapter(
-                ReplayManager(),
-                McpToolInfo(
-                    server_name="fixture",
-                    name="get_company_data",
-                    description="读取本任务冻结资料；uri取自本轮提供的原始定位。",
-                    input_schema={
-                        "type": "object",
-                        "properties": {"uri": {"type": "string"}},
-                        "required": ["uri"],
-                    },
-                ),
-            )
+        adapter = McpToolAdapter(
+            ReplayManager(),
+            McpToolInfo(
+                server_name="fixture",
+                name="get_company_data",
+                description="读取本任务冻结资料；uri取自本轮提供的原始定位。",
+                input_schema={
+                    "type": "object",
+                    "properties": {"uri": {"type": "string"}},
+                    "required": ["uri"],
+                },
+            ),
         )
+        # 该 fixture 只回放本地冻结资料，是只读操作，不是远程写。MCP 默认契约把 effect
+        # 标为 external_write，会让一次“未登记此资料”的拒绝被记为 uncertain 副作用操作，
+        # 其 write ["*"] 随后永久阻塞本会话所有工具。声明为 read_only 后失败如实记为 failed。
+        adapter.contract = {
+            "name": adapter.name,
+            "source": "mcp",
+            "effect": "read_only",
+            "required_capabilities": ("mcp.call",),
+            "resources_write": (),
+        }
+        registry.register(adapter)
     for original in registry.list_tools():
         if original.name in {"config", "mcp_auth"}:
             registry.unregister(original.name)

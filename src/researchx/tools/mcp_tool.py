@@ -32,7 +32,8 @@ class McpToolAdapter(BaseTool[BaseModel]):
             "source": "mcp",
             "effect": "external_write",
             "required_capabilities": ("mcp.call",),
-            "resources_write": ("*",),
+            "resources_write": (f"mcp:{tool_info.server_name}",),
+            "parallelism": "resources",
         }
         self.description = tool_info.description or f"MCP 工具 {tool_info.name}"
         self.input_model = _input_model_from_schema(self.name, tool_info.input_schema)

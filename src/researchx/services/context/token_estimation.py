@@ -39,7 +39,10 @@ def estimate_tokens(text: str, model: str = "") -> int:
     encoding = _encoding(model)
     if encoding is not None:
         return len(encoding.encode(text, disallowed_special=()))
-    ascii_count = sum(ord(char) < 128 for char in text)
+    # Native encoding counts the same ASCII characters without a Python callback
+    # per character on every growing-history budget check. The conservative
+    # formula and its Unicode/error semantics remain unchanged.
+    ascii_count = len(text.encode("ascii", errors="ignore"))
     return (ascii_count + 2) // 3 + len(text.encode("utf-8")) - ascii_count
 
 

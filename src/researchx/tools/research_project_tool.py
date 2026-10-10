@@ -114,6 +114,16 @@ class ResearchProjectTool(BaseTool[ResearchProjectInput]):
         # Like research_memory, writes are confined to the session's internal records/files.
         return True
 
+    def execution_contract(self, arguments: ResearchProjectInput | None = None) -> object:
+        if arguments is not None and arguments.operation.action == "read":
+            return {
+                **self.contract,
+                "effect": "read_only",
+                "resources_write": (),
+                "resources_read": ("research.control",),
+            }
+        return self.contract
+
     async def execute(
         self, arguments: ResearchProjectInput, context: ToolExecutionContext
     ) -> ToolResult:

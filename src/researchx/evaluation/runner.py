@@ -27,7 +27,7 @@ from researchx.engine.stream_events import (
 from researchx.evaluation.dataset import asset_path, directory_version
 from researchx.evaluation.artifacts import read_deliverable
 from researchx.evaluation.fixtures import configure_tools
-from researchx.evaluation.judge import judge_case, JudgeOutputError
+from researchx.evaluation.judge import judge_with_retry, JudgeOutputError
 from researchx.evaluation.models import RunArtifact
 from researchx.evaluation.observer import RecordingObserver, fingerprint, timestamp
 from researchx.evaluation.scoring import score_case
@@ -101,11 +101,15 @@ class ExperimentRunner:
         client_factory: Callable[[Settings], SupportsStreamingMessages] | None = None,
         context_window_tokens: int | None = None,
         judge_context_window_tokens: int | None = None,
+        budget_overrides: dict[str, int] | None = None,
     ) -> None:
         self.cases = {case.id: case for case in cases}
         self.directory, self.output = Path(directory), Path(output).resolve()
         self.output.mkdir(parents=True, exist_ok=True)
         self.profile, self.judge_profile = profile, judge_profile
+        # 长任务预算覆盖：只在执行期生效，不参与 dataset_version 计算，
+        # 因此不会让已归档结果失去可重评分性（见 _case_with_budget）。
+        self.budget_overrides = dict(budget_overrides or {})
         self.agent_settings = resolve_profile(profile)
         self.judge_settings = resolve_profile(judge_profile) if judge_profile else None
         if self.judge_settings:
@@ -144,6 +148,24 @@ class ExperimentRunner:
         self.observer_factory = observer_factory or RecordingObserver
         self.client_factory = client_factory or _resolve_api_client_from_settings
 
+    def _case_with_budget(self, case: EvalCase) -> EvalCase:
+        """Apply execution-time budget overrides without touching dataset_version.
+
+        model_calls is the turn ceiling for both the engine and the observer, so a
+        genuinely long task can be granted more turns without regenerating the frozen
+        dataset (which would change dataset_version and orphan archived results).
+        """
+        if not self.budget_overrides:
+            return case
+        budget = case.budget.model_copy(
+            update={
+                key: value
+                for key, value in self.budget_overrides.items()
+                if key in Budget.model_fields
+            }
+        )
+        return case.model_copy(update={"budget": budget})
+
     async def run_case(
         self, case: EvalCase, *, repetition: int = 1, run_name: str | None = None
     ) -> RunArtifact:
@@ -155,6 +177,7 @@ class ExperimentRunner:
     async def _run_case(
         self, case: EvalCase, *, repetition: int = 1, run_name: str | None = None
     ) -> RunArtifact:
+        case = self._case_with_budget(case)
         run_id = run_name or uuid4().hex
         workspace = self.output / "workspaces" / f"{case.id}-r{repetition}-{uuid4().hex[:8]}"
         workspace.mkdir(parents=True)
@@ -215,6 +238,9 @@ class ExperimentRunner:
                     "context_window_tokens": settings.context_window_tokens,
                     "timeout": settings.timeout,
                 },
+                # 便于区分“冻结预算”与“本次执行实际预算”。
+                "budget": case.budget.model_dump(),
+                "budget_overrides": dict(self.budget_overrides),
                 "disabled_plugins": case.disabled_plugins,
                 "permission_policy_hash": fingerprint(settings.permission.model_dump()),
             },
@@ -482,7 +508,7 @@ class ExperimentRunner:
                 judge_client = self.client_factory(self.judge_settings)
                 judgment = await asyncio.wait_for(
                     (
-                        judge_case(
+                        judge_with_retry(
                             case,
                             artifact,
                             judge_client,
@@ -490,7 +516,8 @@ class ExperimentRunner:
                             context_window_tokens=self.judge_settings.context_window_tokens,
                         )
                     ),
-                    timeout=300,
+                    # 覆盖整个重试循环：大报文裁判单次可跑数分钟，限流退避还需要额外余量。
+                    timeout=900,
                 )
                 artifact.judge_results = judgment.model_dump()
                 artifact.scores = score_case(case, artifact, judgment)

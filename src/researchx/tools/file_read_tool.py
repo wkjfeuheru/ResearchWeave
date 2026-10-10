@@ -25,6 +25,7 @@ class FileReadTool(BaseTool[FileReadToolInput]):
 
     name = "read_file"
     contract = {
+        "parallelism": "resources",
         "name": "read_file",
         "source": "builtin",
         "effect": "read_only",

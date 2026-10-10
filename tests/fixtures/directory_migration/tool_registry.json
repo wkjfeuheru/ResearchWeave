@@ -422,7 +422,7 @@
         "name": "edit_file",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.write"
         ],
@@ -811,14 +811,16 @@
         "name": "image_to_text",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.read",
           "model.call"
         ],
-        "resources_read": [],
+        "resources_read": [
+          "image_path"
+        ],
         "resources_write": [
-          "*"
+          "model:image_to_text"
         ],
         "result_semantics": "Errors after possible writes are uncertain unless absence of effects is proven.",
         "result_statuses": [
@@ -924,13 +926,13 @@
         "name": "mcp__snapshot__example",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "mcp.call"
         ],
         "resources_read": [],
         "resources_write": [
-          "*"
+          "mcp:snapshot"
         ],
         "result_semantics": "Errors after possible writes are uncertain unless absence of effects is proven.",
         "result_statuses": [
@@ -1094,7 +1096,7 @@
         "name": "read_file",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.read"
         ],
@@ -5159,7 +5161,7 @@
         "name": "write_file",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.write"
         ],
@@ -5607,7 +5609,7 @@
         "name": "edit_file",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.write"
         ],
@@ -5996,14 +5998,16 @@
         "name": "image_to_text",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.read",
           "model.call"
         ],
-        "resources_read": [],
+        "resources_read": [
+          "image_path"
+        ],
         "resources_write": [
-          "*"
+          "model:image_to_text"
         ],
         "result_semantics": "Errors after possible writes are uncertain unless absence of effects is proven.",
         "result_statuses": [
@@ -6109,13 +6113,13 @@
         "name": "mcp__snapshot__example",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "mcp.call"
         ],
         "resources_read": [],
         "resources_write": [
-          "*"
+          "mcp:snapshot"
         ],
         "result_semantics": "Errors after possible writes are uncertain unless absence of effects is proven.",
         "result_statuses": [
@@ -6279,7 +6283,7 @@
         "name": "read_file",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.read"
         ],
@@ -10344,7 +10348,7 @@
         "name": "write_file",
         "observability": "digest_only",
         "output_schema": null,
-        "parallelism": "serial",
+        "parallelism": "resources",
         "required_capabilities": [
           "filesystem.write"
         ],

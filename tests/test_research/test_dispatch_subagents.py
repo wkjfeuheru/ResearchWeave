@@ -170,6 +170,95 @@ def assignments(*keys):
     ]
 
 
+async def test_repeated_authority_violation_stops_child_before_budget_or_timeout(project):
+    class ViolatingModel(ChildModel):
+        async def stream_message(self, request):
+            self.requests.append(request)
+            call = len(self.requests)
+            yield ApiMessageCompleteEvent(
+                message=ConversationMessage(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(
+                            id=f"different-id-{call}",
+                            name="research_memory",
+                            input={
+                                "operation": {
+                                    "action": "update_task",
+                                    "task_id": f"task-{call}",
+                                    "status": "completed",
+                                }
+                            },
+                        )
+                    ],
+                ),
+                usage=UsageSnapshot(input_tokens=5, output_tokens=3),
+            )
+
+    model = ViolatingModel()
+    ctx, usage = await context(project, model, subagent_max_calls=20)
+    before = (await project.store.load()).model_dump()
+    result = await dispatch_subagents(assignments("one"), ctx)
+    assert len(model.requests) == 2 and len(usage) == 2
+    assert result.results[0].status == "failed"
+    assert "repeatedly attempted" in " ".join(result.results[0].errors)
+    assert (await project.store.load()).model_dump() == before
+    first_feedback = latest_result(model.requests[1])
+    assert first_feedback.result_metadata["error_code"] == "subagent_authority_denied"
+    assert "submit_subagent_result" in first_feedback.content
+    rows = await ConversationRecords(current_database(), project.store.cwd).list(channel="subagent")
+    saved = await ConversationRecords(current_database(), project.store.cwd).load(
+        rows[0]["session_id"]
+    )
+    results = [
+        block
+        for message in saved["messages"]
+        for block in message["content"]
+        if block["type"] == "tool_result"
+    ]
+    assert len(results) == 2 and {block["tool_use_id"] for block in results} == {
+        "different-id-1",
+        "different-id-2",
+    }
+
+
+async def test_one_authority_denial_can_be_repaired_by_candidate_submission(project):
+    model = ChildModel(
+        initial={
+            "one": (
+                "research_memory",
+                {
+                    "operation": {
+                        "action": "update_task",
+                        "task_id": "research",
+                        "status": "completed",
+                    }
+                },
+            )
+        }
+    )
+    ctx, _ = await context(project, model)
+    result = await dispatch_subagents(assignments("one"), ctx)
+    assert result.results[0].status == "completed" and len(model.requests) == 2
+
+
+async def test_revoked_candidate_stops_child_without_resubmission_loop(project):
+    class ChangingScope(ChildModel):
+        async def stream_message(self, request):
+            if self.requests:
+                await project.submit_feedback("P", "修改目标")
+            async for event in super().stream_message(request):
+                yield event
+
+    model = ChangingScope()
+    ctx, _ = await context(project, model, subagent_max_calls=20)
+    result = await dispatch_subagents(assignments("one"), ctx)
+    assert len(model.requests) == 2
+    assert result.results[0].status == "failed"
+    assert "child execution revoked" in " ".join(result.results[0].errors)
+    assert (await project.store.load()).project.objective_revision == 2
+
+
 async def test_single_child_returns_real_paths_and_does_not_mutate_parent(project):
     model = ChildModel()
     ctx, usage = (await context(project, model))
